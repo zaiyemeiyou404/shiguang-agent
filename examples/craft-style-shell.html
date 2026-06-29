@@ -1,0 +1,931 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>拾光 Agent · Craft 风格页面</title>
+  <style>
+    :root {
+      --bg: #0c0d10;
+      --bg-elev: #12141a;
+      --bg-panel: rgba(20, 22, 29, 0.86);
+      --bg-soft: rgba(255,255,255,0.05);
+      --bg-hover: rgba(255,255,255,0.08);
+      --border: rgba(255,255,255,0.08);
+      --border-strong: rgba(255,255,255,0.14);
+      --text: #f4f7fb;
+      --text-soft: rgba(244, 247, 251, 0.72);
+      --text-dim: rgba(244, 247, 251, 0.48);
+      --accent: #8c7dff;
+      --accent-soft: rgba(140, 125, 255, 0.18);
+      --success: #57d3a6;
+      --warning: #f8c662;
+      --danger: #ff7b8b;
+      --shadow: 0 24px 80px rgba(0,0,0,0.45);
+      --radius-xl: 26px;
+      --radius-lg: 18px;
+      --radius-md: 14px;
+      --radius-sm: 10px;
+      --sidebar-w: 300px;
+      --detail-w: 360px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      background:
+        radial-gradient(circle at top left, rgba(111, 76, 255, 0.18), transparent 30%),
+        radial-gradient(circle at top right, rgba(52, 132, 255, 0.14), transparent 24%),
+        radial-gradient(circle at bottom center, rgba(12, 170, 142, 0.08), transparent 25%),
+        linear-gradient(180deg, #08090c 0%, #0b0d12 35%, #0b0c10 100%);
+      color: var(--text);
+      overflow: hidden;
+    }
+
+    .shell {
+      position: relative;
+      height: 100vh;
+      padding: 20px;
+    }
+
+    .noise,
+    .grid,
+    .ambient {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    .grid {
+      background-image:
+        linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+      background-size: 48px 48px;
+      mask-image: radial-gradient(circle at center, black 48%, transparent 88%);
+      opacity: 0.45;
+    }
+
+    .noise {
+      background-image: radial-gradient(rgba(255,255,255,.04) 0.7px, transparent 0.7px);
+      background-size: 16px 16px;
+      opacity: .18;
+      mix-blend-mode: soft-light;
+    }
+
+    .ambient::before,
+    .ambient::after {
+      content: "";
+      position: absolute;
+      border-radius: 999px;
+      filter: blur(80px);
+      opacity: .6;
+    }
+
+    .ambient::before {
+      width: 320px;
+      height: 320px;
+      left: 10%;
+      top: -30px;
+      background: rgba(131, 90, 255, 0.24);
+    }
+
+    .ambient::after {
+      width: 260px;
+      height: 260px;
+      right: 9%;
+      bottom: 2%;
+      background: rgba(43, 164, 255, 0.18);
+    }
+
+    .app {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: var(--sidebar-w) minmax(0, 1fr) var(--detail-w);
+      gap: 16px;
+      height: 100%;
+    }
+
+    .panel {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(26px);
+      -webkit-backdrop-filter: blur(26px);
+      border-radius: var(--radius-xl);
+      min-height: 0;
+    }
+
+    .sidebar,
+    .detail,
+    .main {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .sidebar { padding: 18px; gap: 14px; }
+    .detail { padding: 18px; gap: 14px; }
+    .main { padding: 14px; gap: 14px; }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 2px;
+    }
+
+    .brand-badge {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-mark {
+      width: 42px;
+      height: 42px;
+      border-radius: 14px;
+      background: linear-gradient(135deg, rgba(159,145,255,0.92), rgba(78,189,255,0.92));
+      box-shadow: 0 10px 26px rgba(110, 90, 255, 0.35);
+      display: grid;
+      place-items: center;
+      font-weight: 700;
+      color: white;
+      letter-spacing: .04em;
+    }
+
+    .brand h1 {
+      font-size: 17px;
+      margin: 0;
+      line-height: 1.1;
+      font-weight: 650;
+    }
+
+    .brand p {
+      margin: 4px 0 0;
+      color: var(--text-dim);
+      font-size: 12px;
+    }
+
+    .icon-btn,
+    .chip,
+    .tool-btn,
+    .composer-action,
+    .send-btn {
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.04);
+      color: var(--text-soft);
+      border-radius: 12px;
+      transition: .18s ease;
+    }
+
+    .icon-btn {
+      width: 38px;
+      height: 38px;
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+      font-size: 18px;
+    }
+
+    .icon-btn:hover,
+    .chip:hover,
+    .tool-btn:hover,
+    .composer-action:hover,
+    .send-btn:hover,
+    .session-card:hover,
+    .source-card:hover,
+    .event-card:hover {
+      background: var(--bg-hover);
+      border-color: var(--border-strong);
+      transform: translateY(-1px);
+    }
+
+    .workspace-card,
+    .search-card,
+    .session-card,
+    .event-card,
+    .composer,
+    .source-card,
+    .detail-block,
+    .mini-stat {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      background: rgba(255,255,255,0.03);
+    }
+
+    .workspace-card {
+      padding: 14px;
+      background: linear-gradient(180deg, rgba(140,125,255,0.17), rgba(255,255,255,0.03));
+    }
+
+    .section-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .section-title h2,
+    .section-title h3 {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-soft);
+      letter-spacing: .02em;
+    }
+
+    .tiny {
+      font-size: 12px;
+      color: var(--text-dim);
+    }
+
+    .workspace-name {
+      font-size: 16px;
+      font-weight: 650;
+      margin: 10px 0 6px;
+    }
+
+    .workspace-meta {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 10px;
+      font-size: 12px;
+    }
+
+    .chip.accent {
+      color: #d5ceff;
+      background: var(--accent-soft);
+      border-color: rgba(140, 125, 255, 0.28);
+    }
+
+    .search-card {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      color: var(--text-dim);
+    }
+
+    .search-card input {
+      flex: 1;
+      background: transparent;
+      border: 0;
+      color: var(--text);
+      outline: none;
+      font-size: 14px;
+    }
+
+    .session-list,
+    .source-list,
+    .event-list,
+    .detail-scroll,
+    .chat-scroll {
+      overflow: auto;
+      min-height: 0;
+      padding-right: 2px;
+    }
+
+    .session-list,
+    .source-list,
+    .event-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .session-card {
+      padding: 14px;
+      cursor: pointer;
+      transition: .18s ease;
+    }
+
+    .session-card.active {
+      background: linear-gradient(180deg, rgba(140,125,255,0.18), rgba(255,255,255,0.05));
+      border-color: rgba(140,125,255,0.28);
+      box-shadow: inset 0 0 0 1px rgba(140,125,255,0.08);
+    }
+
+    .session-top,
+    .message-meta,
+    .detail-row,
+    .source-head,
+    .toolbar,
+    .titlebar,
+    .composer-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .session-name,
+    .detail-key {
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .pill {
+      padding: 4px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      border: 1px solid transparent;
+      white-space: nowrap;
+    }
+
+    .pill.progress { color: #f6d48a; background: rgba(248,198,98,0.12); border-color: rgba(248,198,98,0.18); }
+    .pill.safe { color: #c7f0e1; background: rgba(87,211,166,0.12); border-color: rgba(87,211,166,0.18); }
+    .pill.auto { color: #d8d2ff; background: rgba(140,125,255,0.16); border-color: rgba(140,125,255,0.24); }
+    .pill.todo { color: var(--text-soft); background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.08); }
+
+    .session-preview,
+    .muted,
+    .message p,
+    .detail-value,
+    .source-card p {
+      color: var(--text-soft);
+      font-size: 13px;
+      line-height: 1.55;
+      margin: 0;
+    }
+
+    .meta-line {
+      display: flex;
+      gap: 10px;
+      margin-top: 10px;
+      color: var(--text-dim);
+      font-size: 12px;
+      flex-wrap: wrap;
+    }
+
+    .titlebar {
+      padding: 4px 8px 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+
+    .title-group h2 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 650;
+    }
+
+    .title-group p {
+      margin: 4px 0 0;
+      font-size: 12px;
+      color: var(--text-dim);
+    }
+
+    .toolbar { gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+
+    .tool-btn {
+      padding: 9px 12px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .tool-btn.primary {
+      background: linear-gradient(135deg, rgba(140,125,255,0.9), rgba(94,166,255,0.92));
+      color: white;
+      border-color: transparent;
+      box-shadow: 0 10px 24px rgba(92, 108, 255, 0.24);
+    }
+
+    .tool-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      padding: 0 8px;
+    }
+
+    .mini-stat-row {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      padding: 0 8px;
+    }
+
+    .mini-stat {
+      padding: 12px 14px;
+      background: rgba(255,255,255,0.025);
+    }
+
+    .mini-stat strong {
+      display: block;
+      font-size: 18px;
+      margin-top: 6px;
+    }
+
+    .chat-scroll {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      padding: 2px 8px 2px;
+    }
+
+    .message {
+      max-width: 76%;
+      padding: 14px 16px;
+      border-radius: 20px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.03);
+      align-self: flex-start;
+    }
+
+    .message.user {
+      margin-left: auto;
+      background: rgba(140,125,255,0.13);
+      border-color: rgba(140,125,255,0.24);
+    }
+
+    .message.system {
+      max-width: 100%;
+      background: rgba(255,255,255,0.025);
+    }
+
+    .message-meta {
+      margin-bottom: 8px;
+      font-size: 12px;
+      color: var(--text-dim);
+    }
+
+    .message ul {
+      margin: 8px 0 0 18px;
+      padding: 0;
+      color: var(--text-soft);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .event-list { padding: 0 8px; }
+
+    .event-card {
+      padding: 12px 14px;
+      transition: .18s ease;
+    }
+
+    .event-card strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 13px;
+    }
+
+    .composer {
+      margin: 0 8px 4px;
+      padding: 14px;
+      background: rgba(255,255,255,0.025);
+    }
+
+    .composer textarea {
+      width: 100%;
+      min-height: 88px;
+      resize: none;
+      background: transparent;
+      border: 0;
+      color: var(--text);
+      font: inherit;
+      line-height: 1.5;
+      outline: none;
+    }
+
+    .composer-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .composer-action,
+    .send-btn {
+      padding: 10px 12px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .send-btn {
+      background: linear-gradient(135deg, rgba(140,125,255,0.96), rgba(96,167,255,0.94));
+      color: white;
+      border-color: transparent;
+      min-width: 88px;
+      box-shadow: 0 10px 24px rgba(92, 108, 255, 0.24);
+    }
+
+    .source-card,
+    .detail-block {
+      padding: 14px;
+    }
+
+    .source-card {
+      transition: .18s ease;
+      cursor: pointer;
+    }
+
+    .source-card h4,
+    .detail-block h4 {
+      margin: 0 0 8px;
+      font-size: 14px;
+    }
+
+    .detail-scroll {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .detail-row {
+      padding: 8px 10px;
+      border-radius: 12px;
+      background: rgba(255,255,255,0.025);
+      border: 1px solid rgba(255,255,255,0.04);
+    }
+
+    .detail-key {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-dim);
+    }
+
+    .detail-value {
+      text-align: right;
+      font-size: 12px;
+    }
+
+    .progress-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 4px;
+    }
+
+    .progress-item {
+      display: grid;
+      gap: 8px;
+    }
+
+    .progress-bar {
+      height: 7px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.06);
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, rgba(140,125,255,0.95), rgba(88,210,190,0.95));
+    }
+
+    .legend {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .legend span {
+      display: inline-flex;
+      gap: 7px;
+      align-items: center;
+      color: var(--text-dim);
+      font-size: 12px;
+    }
+
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 999px;
+      display: inline-block;
+    }
+
+    .dot.purple { background: #998dff; }
+    .dot.green { background: #57d3a6; }
+    .dot.orange { background: #f8c662; }
+
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(255,255,255,0.1);
+      border-radius: 999px;
+      border: 2px solid transparent;
+      background-clip: padding-box;
+    }
+    ::-webkit-scrollbar-track { background: transparent; }
+
+    @media (max-width: 1280px) {
+      .app { grid-template-columns: 280px minmax(0, 1fr); }
+      .detail { display: none; }
+    }
+
+    @media (max-width: 900px) {
+      body { overflow: auto; }
+      .shell { height: auto; min-height: 100vh; padding: 14px; }
+      .app { grid-template-columns: 1fr; height: auto; }
+      .sidebar { order: 1; }
+      .main { order: 2; }
+      .panel { min-height: auto; }
+      .message { max-width: 92%; }
+      .mini-stat-row { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="ambient"></div>
+    <div class="grid"></div>
+    <div class="noise"></div>
+
+    <div class="app">
+      <aside class="panel sidebar">
+        <div class="brand">
+          <div class="brand-badge">
+            <div class="brand-mark">拾</div>
+            <div>
+              <h1>拾光 Agent</h1>
+              <p>Craft 风格 · Workspace Inbox</p>
+            </div>
+          </div>
+          <button class="icon-btn" type="button">＋</button>
+        </div>
+
+        <section class="workspace-card">
+          <div class="section-title">
+            <h2>当前工作区</h2>
+            <span class="tiny">remote · synced</span>
+          </div>
+          <div class="workspace-name">Shiguang Product Lab</div>
+          <p class="muted">一个偏 Craft 风格的 agent 工作台，强调 session、source、artifact 和持续执行。</p>
+          <div class="workspace-meta" style="margin-top:12px;">
+            <span class="chip accent">● 默认模型 DeepSeek</span>
+            <span class="chip">7 Sources</span>
+            <span class="chip">12 Skills</span>
+          </div>
+        </section>
+
+        <div class="search-card">
+          <span>⌕</span>
+          <input value="搜索会话 / artifact / source" aria-label="搜索" />
+          <span class="tiny">⌘K</span>
+        </div>
+
+        <div class="section-title" style="margin-top:2px;">
+          <h3>Inbox</h3>
+          <span class="tiny">8 sessions</span>
+        </div>
+
+        <div class="session-list">
+          <article class="session-card active">
+            <div class="session-top">
+              <div class="session-name">Craft 风格前端页面</div>
+              <span class="pill progress">进行中</span>
+            </div>
+            <p class="session-preview">先把桌面软件的主页面形式做出来：左侧 inbox、中间 chat、右侧 detail。</p>
+            <div class="meta-line">
+              <span>刚刚更新</span>
+              <span>3 artifacts</span>
+              <span>Auto</span>
+            </div>
+          </article>
+
+          <article class="session-card">
+            <div class="session-top">
+              <div class="session-name">WebSocket server 设计</div>
+              <span class="pill todo">Todo</span>
+            </div>
+            <p class="session-preview">梳理 headless server、workspace registry 和实时事件流。</p>
+            <div class="meta-line">
+              <span>2小时前</span>
+              <span>notes</span>
+            </div>
+          </article>
+
+          <article class="session-card">
+            <div class="session-top">
+              <div class="session-name">Artifacts & Diff 面板</div>
+              <span class="pill safe">Review</span>
+            </div>
+            <p class="session-preview">在单个 turn 下呈现 tool call、输出文件、diff 摘要和可点击结果。</p>
+            <div class="meta-line">
+              <span>昨天</span>
+              <span>5 turns</span>
+            </div>
+          </article>
+
+          <article class="session-card">
+            <div class="session-top">
+              <div class="session-name">Source 接入规划</div>
+              <span class="pill auto">Auto</span>
+            </div>
+            <p class="session-preview">统一 MCP / REST / 文件系统 source 管理视图。</p>
+            <div class="meta-line">
+              <span>昨天</span>
+              <span>docs + tasks</span>
+            </div>
+          </article>
+        </div>
+      </aside>
+
+      <main class="panel main">
+        <header class="titlebar">
+          <div class="title-group">
+            <h2>Craft 风格前端页面</h2>
+            <p>Desktop-like shell · session first · artifacts visible · source centric</p>
+          </div>
+          <div class="toolbar">
+            <button class="tool-btn" type="button">Explore</button>
+            <button class="tool-btn" type="button">Ask to Edit</button>
+            <button class="tool-btn primary" type="button">Auto</button>
+            <button class="tool-btn" type="button">Share</button>
+          </div>
+        </header>
+
+        <div class="tool-row">
+          <button class="tool-btn" type="button">＋ New chat</button>
+          <button class="tool-btn" type="button">Artifacts</button>
+          <button class="tool-btn" type="button">Sources</button>
+          <button class="tool-btn" type="button">Skills</button>
+          <button class="tool-btn" type="button">Timeline</button>
+        </div>
+
+        <div class="mini-stat-row">
+          <div class="mini-stat">
+            <span class="tiny">Running tools</span>
+            <strong>03</strong>
+          </div>
+          <div class="mini-stat">
+            <span class="tiny">Context window</span>
+            <strong>48k</strong>
+          </div>
+          <div class="mini-stat">
+            <span class="tiny">Artifacts</span>
+            <strong>12 files</strong>
+          </div>
+        </div>
+
+        <section class="chat-scroll">
+          <article class="message user">
+            <div class="message-meta">
+              <span>你</span>
+              <span>11:45</span>
+            </div>
+            <p>我就要 Craft 那种软件页面形式，先把页面外壳写出来。</p>
+          </article>
+
+          <article class="message">
+            <div class="message-meta">
+              <span>拾光 Agent</span>
+              <span>11:46</span>
+            </div>
+            <p>可以，先上一个可落地的桌面工作台壳子：</p>
+            <ul>
+              <li>左侧：workspace + inbox sessions</li>
+              <li>中间：chat / tool stream / composer</li>
+              <li>右侧：sources、artifacts、run detail</li>
+            </ul>
+          </article>
+
+          <article class="message system">
+            <div class="message-meta">
+              <span>实时事件</span>
+              <span>11:47</span>
+            </div>
+            <p>Open design note attached · 生成了 `craft-style-shell.html` · 可以继续拆成 React 组件。</p>
+          </article>
+
+          <article class="event-card">
+            <strong>Recent turn activity</strong>
+            <div class="event-list" style="padding:10px 0 0; gap:8px;">
+              <div class="event-card" style="padding:10px 12px; background:rgba(255,255,255,0.02);">
+                <div class="message-meta" style="margin-bottom:6px;">
+                  <span>tool · read</span>
+                  <span>apps/electron/src/renderer/App.tsx</span>
+                </div>
+                <p class="muted">确认 Craft 的 webui 只是薄壳，真正的主页面在 renderer。</p>
+              </div>
+              <div class="event-card" style="padding:10px 12px; background:rgba(255,255,255,0.02);">
+                <div class="message-meta" style="margin-bottom:6px;">
+                  <span>tool · write</span>
+                  <span>examples/craft-style-shell.html</span>
+                </div>
+                <p class="muted">输出单文件原型，先固定视觉语言，再决定是否拆成 apps/webui。</p>
+              </div>
+            </div>
+          </article>
+        </section>
+
+        <section class="composer">
+          <textarea>下一步可以继续把这个页面拆成 React 组件：Sidebar / ChatPane / DetailPane / Composer。</textarea>
+          <div class="composer-footer">
+            <div class="composer-actions">
+              <button class="composer-action" type="button">📎 Add file</button>
+              <button class="composer-action" type="button">@ Source</button>
+              <button class="composer-action" type="button"># Skill</button>
+            </div>
+            <button class="send-btn" type="button">Send ↗</button>
+          </div>
+        </section>
+      </main>
+
+      <aside class="panel detail">
+        <div class="section-title">
+          <h3>Session Detail</h3>
+          <span class="tiny">workspace scoped</span>
+        </div>
+
+        <div class="detail-scroll">
+          <section class="detail-block">
+            <h4>Run Snapshot</h4>
+            <div class="detail-grid">
+              <div class="detail-row"><span class="detail-key">Model</span><span class="detail-value">DeepSeek</span></div>
+              <div class="detail-row"><span class="detail-key">Mode</span><span class="detail-value">Auto</span></div>
+              <div class="detail-row"><span class="detail-key">Latency</span><span class="detail-value">1.2s</span></div>
+              <div class="detail-row"><span class="detail-key">Tokens</span><span class="detail-value">14.8k</span></div>
+            </div>
+          </section>
+
+          <section class="detail-block">
+            <div class="section-title" style="margin-bottom: 8px;">
+              <h4 style="margin:0;">Progress</h4>
+              <span class="tiny">phase 1 / 3</span>
+            </div>
+            <div class="progress-list">
+              <div class="progress-item">
+                <div class="detail-row">
+                  <span class="detail-key">页面壳子</span>
+                  <span class="detail-value">100%</span>
+                </div>
+                <div class="progress-bar"><div class="progress-fill" style="width:100%"></div></div>
+              </div>
+              <div class="progress-item">
+                <div class="detail-row">
+                  <span class="detail-key">React 组件化</span>
+                  <span class="detail-value">20%</span>
+                </div>
+                <div class="progress-bar"><div class="progress-fill" style="width:20%"></div></div>
+              </div>
+              <div class="progress-item">
+                <div class="detail-row">
+                  <span class="detail-key">实时数据接入</span>
+                  <span class="detail-value">0%</span>
+                </div>
+                <div class="progress-bar"><div class="progress-fill" style="width:0%"></div></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="detail-block">
+            <div class="section-title" style="margin-bottom: 8px;">
+              <h4 style="margin:0;">Sources</h4>
+              <span class="tiny">connected</span>
+            </div>
+            <div class="source-list">
+              <article class="source-card">
+                <div class="source-head">
+                  <h4>GitHub Repo</h4>
+                  <span class="pill safe">Live</span>
+                </div>
+                <p>接代码库、PR、issue、artifact 输出。</p>
+              </article>
+
+              <article class="source-card">
+                <div class="source-head">
+                  <h4>MCP Tools</h4>
+                  <span class="pill auto">7 tools</span>
+                </div>
+                <p>Browser / File / Shell / Search 等统一在 workspace 下挂载。</p>
+              </article>
+
+              <article class="source-card">
+                <div class="source-head">
+                  <h4>Memory + Skills</h4>
+                  <span class="pill progress">Indexed</span>
+                </div>
+                <p>长期记忆和 procedural skill 在这里作为一等信息入口展示。</p>
+              </article>
+            </div>
+          </section>
+
+          <section class="detail-block">
+            <h4>Legend</h4>
+            <div class="legend">
+              <span><i class="dot purple"></i>Active session</span>
+              <span><i class="dot green"></i>Connected source</span>
+              <span><i class="dot orange"></i>Needs review</span>
+            </div>
+          </section>
+        </div>
+      </aside>
+    </div>
+  </div>
+</body>
+</html>

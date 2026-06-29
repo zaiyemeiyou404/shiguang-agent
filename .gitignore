@@ -7,6 +7,11 @@ build/
 coverage/
 *.tsbuildinfo
 
+# Desktop app build
+desktop-build/
+release/
+ui/dist/
+
 # Logs
 logs/
 *.log

@@ -4,3 +4,6 @@ export * from "./runtime/index.js";
 export * from "./plugins/index.js";
 export * from "./state/index.js";
 export * from "./kernel/index.js";
+export * from "./brain/index.js";
+export * from "./tools/index.js";
+export * from "./app/index.js";
