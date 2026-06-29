@@ -61,11 +61,11 @@ tsconfig.ui.json        # TypeScript config for ui/src (type-check only; Vite ha
 
 | Script | What it does |
 |---|---|
-| `npm run desktop:dev` | Start Vite dev server + Electron together (concurrently) |
+| `npm run desktop:dev` | Build core library + Electron main process, then start Vite dev server + Electron together (concurrently) |
 | `npm run desktop:vite` | Vite dev server on port 5173 |
-| `npm run desktop:electron` | Launch Electron pointing at dev server (ELECTRON_DEV=true) |
-| `npm run desktop:build` | Compile Electron main process + build UI with Vite |
-| `npm run desktop:typecheck` | Type-check both electron/ and ui/ without emitting |
+| `npm run desktop:electron` | Launch Electron pointing at dev server (ELECTRON_DEV set automatically) |
+| `npm run desktop:build` | Build core library, compile Electron main process, then build UI with Vite |
+| `npm run desktop:typecheck` | Build core library (for type declarations), then type-check both electron/ and ui/ without emitting |
 | `npm run desktop:package` | Build + package for Linux as an unpacked directory (no Wine required) |
 | `npm run desktop:package:linux` | Build + package for Linux as a full distributable (AppImage/deb/etc.) |
 | `npm run desktop:package:win` | Build + package for Windows (nsis/x64) via electron-builder |
