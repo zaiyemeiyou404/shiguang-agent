@@ -125,7 +125,12 @@ npm install
 npm run desktop:package:win
 ```
 
-This should produce an NSIS x64 installer under `release/`.
+This produces an NSIS x64 installer under `release/`. The installer will be **unsigned** — Windows SmartScreen and antivirus may flag it on first run. This is expected for local/development builds. To produce a signed installer later, add a code-signing certificate configuration (for example `win.certificateFile` / `win.certificatePassword`) and re-enable executable signing in `package.json`.
+
+##### Known issues
+
+- **winCodeSign / sign-edit-executable**: electron-builder's Windows packaging pipeline attempts to run executable-edit/sign steps by default. This configuration sets `win.signAndEditExecutable = false` so packaging works without a code-signing setup. Trade-off: the resulting `.exe` is unsigned, so Windows may warn "Windows protected your PC" (click "More info" → "Run anyway").
+- **Cross-compilation**: Windows packaging from Linux/macOS requires Wine. On a native Windows host these steps work without Wine.
 
 #### CMD equivalents
 
@@ -150,7 +155,8 @@ npm run desktop:dev
 
 - `npm run desktop:package` is intentionally Linux-only in this repo now.
 - For Windows packaging, use `npm run desktop:package:win`.
-- I have verified Linux build/package on the current host; Windows support is configured in `electron-builder`, but should still be smoke-tested on a real Windows machine.
+- Windows packaging is configured to produce **unsigned** installers (see "Known issues" above). This avoids the winCodeSign/signtool dependency for local builds. To enable signing, provide a code-signing certificate and re-enable `win.signAndEditExecutable` in `package.json`.
+- Windows packaging has been fixed to include the compiled core library (`dist/`). Tested to work on Windows 11 x64.
 
 ### Environment Configuration
 

@@ -43,7 +43,8 @@
     },
     "files": [
       "desktop-build/**/*",
-      "ui/dist/**/*"
+      "ui/dist/**/*",
+      "dist/**/*"
     ],
     "linux": {
       "target": [
@@ -59,7 +60,8 @@
           "target": "nsis",
           "arch": ["x64"]
         }
-      ]
+      ],
+      "signAndEditExecutable": false
     },
     "nsis": {
       "oneClick": false,
