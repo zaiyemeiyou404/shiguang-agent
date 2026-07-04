@@ -19,7 +19,7 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build",
-    "test": "echo \"tests not implemented yet\"",
+    "test": "npm run build && node --test \"dist/**/*.test.js\"",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "desktop:dev": "npm run build && tsc -p tsconfig.electron.json && concurrently -n vite,electron -c cyan,green \"npm run desktop:vite\" \"npm run desktop:electron\"",
     "desktop:vite": "vite --config ui/vite.config.ts",

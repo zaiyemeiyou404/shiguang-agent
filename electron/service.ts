@@ -5,6 +5,7 @@ import { Agent } from "../dist/app/agent.js";
 import { InMemoryEventSink } from "../dist/runtime/event-sink.js";
 import { InMemoryRunStore } from "../dist/state/run-store.js";
 import { createReadTextFileTool } from "../dist/tools/builtins/read-text-file.js";
+import { createRunValidationTool } from "../dist/tools/builtins/run-validation.js";
 import { createSearchWorkspaceTool } from "../dist/tools/builtins/search-workspace.js";
 import { createPlanner } from "./planner-factory.js";
 import { resolve, normalize } from "node:path";
@@ -80,6 +81,7 @@ export class DesktopService {
     const tools = [
       createReadTextFileTool(workspaceRoot),
       createSearchWorkspaceTool(workspaceRoot),
+      createRunValidationTool(workspaceRoot),
     ];
     const agent = new Agent({ eventSink: sink, runStore, planner, tools });
 

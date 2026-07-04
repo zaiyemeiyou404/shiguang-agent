@@ -77,6 +77,14 @@ export class RulePlanner implements Planner {
       };
     }
 
+    const validationMode = input.history.length === 0 ? inferValidationMode(msg) : null;
+    if (validationMode && input.availableTools.some((tool) => tool.name === "run_validation")) {
+      return {
+        action: { kind: "tool_call", toolName: "run_validation", toolInput: { mode: validationMode } },
+        reasoning: `User requested validation mode: ${validationMode}`,
+      };
+    }
+
     if (lastResult && lastResult.action.kind === "tool_call" && lastResult.ok) {
       return {
         action: {
@@ -105,4 +113,15 @@ export class RulePlanner implements Planner {
       reasoning: "No tool requested, providing a simple response.",
     };
   }
+}
+
+function inferValidationMode(message: string): "typecheck" | "test" | "build" | "all" | null {
+  const text = message.toLowerCase();
+
+  if (text.includes("typecheck")) return "typecheck";
+  if (text.includes("run tests") || /\btests?\b/.test(text)) return "test";
+  if (/\bbuild\b/.test(text)) return "build";
+  if (text.includes("validate") || text.includes("validation")) return "all";
+
+  return null;
 }
