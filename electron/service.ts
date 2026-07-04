@@ -19,6 +19,7 @@ import { createWriteTextFileTool } from "../dist/tools/builtins/write-text-file.
 import { createRunValidationTool } from "../dist/tools/builtins/run-validation.js";
 import { createSearchWorkspaceTool } from "../dist/tools/builtins/search-workspace.js";
 import { createPlanner } from "./planner-factory.js";
+import { loadDesktopConfig } from "./config.js";
 import { join, resolve, normalize } from "node:path";
 
 let seqCounter = 0;
@@ -124,8 +125,9 @@ export class DesktopService {
 
     const sink = new RepositoryEventSink(this.runEventRepository);
 
-    const { planner, label } = createPlanner();
-    const workspaceRoot = resolve(normalize(process.env.SHIGUANG_WORKSPACE_ROOT ?? process.cwd()));
+    const desktopConfig = loadDesktopConfig();
+    const { planner, label } = createPlanner(desktopConfig.llm);
+    const workspaceRoot = resolve(normalize(desktopConfig.workspaceRoot));
     const tools = [
       createReadTextFileTool(workspaceRoot),
       createWriteTextFileTool(workspaceRoot),
@@ -368,7 +370,21 @@ export class DesktopService {
     salience: number;
     confidence: number;
   }): Promise<void> {
-    if (!shouldPersistRunMemory(input.summary, input.content)) return;
+    if (!shouldPersistRunMemory(input.kind, input.summary, input.content)) return;
+
+    const duplicate = await this.findDuplicateRunMemory(input);
+    if (duplicate) {
+      await this.memoryRepository.update(duplicate.id, {
+        kind: input.kind,
+        summary: input.summary,
+        content: input.content,
+        salience: Math.max(duplicate.salience, input.salience),
+        sourceType: "run",
+        sourceId: input.runId,
+        confidence: Math.max(duplicate.confidence, input.confidence),
+      });
+      return;
+    }
 
     const now = new Date();
     await this.memoryService.save({
@@ -387,9 +403,20 @@ export class DesktopService {
       updatedAt: now,
     });
   }
+
+  private async findDuplicateRunMemory(input: {
+    workspaceRoot: string;
+    kind: Memory["kind"];
+    summary: string;
+    content: string;
+  }): Promise<Memory | null> {
+    const existing = await this.memoryRepository.listByWorkspace(input.workspaceRoot, 100);
+    const targetFingerprint = memoryFingerprint(input.kind, input.summary, input.content);
+    return existing.find((memory) => memoryFingerprint(memory.kind, memory.summary, memory.content) === targetFingerprint) ?? null;
+  }
 }
 
-function shouldPersistRunMemory(summary: string, content: string): boolean {
+function shouldPersistRunMemory(kind: Memory["kind"], summary: string, content: string): boolean {
   const normalizedSummary = summary.replace(/\s+/g, " ").trim();
   const normalizedContent = content.replace(/\s+/g, " ").trim();
   if (normalizedSummary.length < 12) return false;
@@ -397,7 +424,31 @@ function shouldPersistRunMemory(summary: string, content: string): boolean {
   if (/^\[planner:[^\]]+\]\s+\d+ step\(s\)\s+—\s+(Completed|Done)\.?$/i.test(normalizedSummary)) {
     return false;
   }
+  if (kind === "decision" && !isHighValueFailure(normalizedContent)) {
+    return false;
+  }
   return true;
+}
+
+function isHighValueFailure(content: string): boolean {
+  if (content.length < 80) return false;
+  if (/(^|\s)failure reason:\s*(unknown error|aborted|cancelled|interrupted|failed)\.?$/i.test(content)) {
+    return false;
+  }
+  return /(validation|test|assert|typecheck|type check|eslint|lint|compile|compiler|syntax|import|module|cannot find|not found|timeout|permission|exception|traceback|stack trace|ts\d+)/i.test(content);
+}
+
+function memoryFingerprint(kind: Memory["kind"], summary: string, content: string): string {
+  return [kind, normalizeMemoryText(summary), normalizeMemoryText(content)].join("|");
+}
+
+function normalizeMemoryText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/\b(?:run|task|mem)_\d+_\d+\b/g, "<id>")
+    .replace(/\d{4}-\d{2}-\d{2}t\d{2}:\d{2}:\d{2}(?:\.\d+)?z/g, "<timestamp>")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function buildCompletedMemoryContent(input: {

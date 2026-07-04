@@ -344,6 +344,55 @@ npm run desktop:dev
 
 ### Environment Configuration
 
+The desktop app now supports **two configuration modes**:
+
+1. **JSON config file** (recommended for desktop use)
+2. **Environment variables** (override the file at runtime)
+
+#### Config file location
+
+- Default: Electron `userData` directory + `shiguang.config.json`
+- Windows typically looks like: `%APPDATA%/shiguang-agent/shiguang.config.json`
+- macOS typically looks like: `~/Library/Application Support/shiguang-agent/shiguang.config.json`
+- Linux typically looks like: `~/.config/shiguang-agent/shiguang.config.json`
+- Override path: `SHIGUANG_CONFIG_PATH=/absolute/path/to/shiguang.config.json`
+
+Example file: `examples/shiguang.config.example.json`
+
+Example:
+
+```json
+{
+  "workspaceRoot": "/absolute/path/to/your/project",
+  "llm": {
+    "provider": "deepseek",
+    "model": "deepseek-chat",
+    "maxTokens": 2048
+  },
+  "providers": {
+    "deepseek": {
+      "baseURL": "https://api.deepseek.com/v1",
+      "apiKeyEnv": "DEEPSEEK_API_KEY",
+      "model": "deepseek-chat"
+    },
+    "openrouter": {
+      "baseURL": "https://openrouter.ai/api/v1",
+      "apiKeyEnv": "OPENROUTER_API_KEY",
+      "model": "deepseek/deepseek-chat"
+    },
+    "local-ollama-proxy": {
+      "baseURL": "http://127.0.0.1:11434/v1",
+      "apiKey": "ollama",
+      "model": "qwen2.5-coder:14b"
+    }
+  }
+}
+```
+
+This is intentionally **Hermes-like**: keep a provider registry, then switch `llm.provider` instead of rewriting the whole runtime every time.
+
+#### Environment variables
+
 The desktop app reads these environment variables at runtime:
 
 | Variable | Default | Description |
@@ -351,9 +400,12 @@ The desktop app reads these environment variables at runtime:
 | `SHIGUANG_LLM_BASE_URL` | `https://api.openai.com/v1` | Base URL for OpenAI-compatible chat completions endpoint |
 | `SHIGUANG_LLM_API_KEY` | *(none)* | API key for the LLM provider. If not set, the app falls back to `RulePlanner` (no LLM required) |
 | `SHIGUANG_LLM_MODEL` | `gpt-4o-mini` | Model name to use (e.g. `deepseek-chat`, `gpt-4o`) |
+| `SHIGUANG_LLM_PROVIDER` | `openai-compatible` | Provider key inside `providers` from the JSON config |
+| `SHIGUANG_LLM_MAX_TOKENS` | `2048` | Max completion tokens for the planner call |
 | `SHIGUANG_WORKSPACE_ROOT` | `process.cwd()` | Root directory for `read_text_file` and `search_workspace` tools; all paths are constrained under this root |
+| `SHIGUANG_CONFIG_PATH` | *(none)* | Absolute path to a custom JSON config file |
 
-Set them before launching the desktop app:
+Environment variables override the file. Set them before launching the desktop app:
 ```bash
 export SHIGUANG_LLM_API_KEY="sk-..."
 export SHIGUANG_LLM_MODEL="deepseek-chat"
@@ -362,7 +414,40 @@ export SHIGUANG_WORKSPACE_ROOT="/path/to/project"
 npm run desktop:dev
 ```
 
-If `SHIGUANG_LLM_API_KEY` is not set, the app runs entirely locally using the built-in `RulePlanner` with the echo, `read_text_file`, and `search_workspace` tools. No credentials are required. No network calls are made.
+If `SHIGUANG_LLM_API_KEY` is not set and the selected provider also cannot resolve an API key (for example via `apiKeyEnv`), the app runs entirely locally using the built-in `RulePlanner` with the echo, `read_text_file`, and `search_workspace` tools. No credentials are required. No network calls are made.
+
+#### Adding more Hermes-style choices
+
+Hermes supports many providers because it separates:
+
+- provider identity
+- base URL
+- API key source
+- model name
+
+Shiguang now follows the same minimal pattern for **OpenAI-compatible** backends. To add another provider, add one more entry under `providers`, then switch `llm.provider`.
+
+Example:
+
+```json
+{
+  "providers": {
+    "together": {
+      "baseURL": "https://api.together.xyz/v1",
+      "apiKeyEnv": "TOGETHER_API_KEY",
+      "model": "deepseek-ai/DeepSeek-V3"
+    }
+  },
+  "llm": {
+    "provider": "together"
+  }
+}
+```
+
+Current limitation: the planner currently speaks the **OpenAI-compatible chat completions** protocol only. So Hermes-style providers that expose different native APIs (for example non-OpenAI Anthropic direct protocol) still need either:
+
+1. an OpenAI-compatible proxy/base URL, or
+2. a new planner/model adapter in code.
 
 ## Design
 
