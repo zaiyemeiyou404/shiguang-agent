@@ -1,5 +1,6 @@
-import type { BrainInput, BrainDecision, ActionResult } from "./types.js";
-import type { ToolDescriptor } from "../tools/types.js";
+import type { BrainInput, BrainDecision, ActionResult, WorkingMemorySnapshot } from "./types.js";
+import type { ToolDescriptor, ValidationModeHint } from "../tools/types.js";
+import { renderPrompt, type RenderedPrompt } from "../context/render.js";
 
 export interface Planner {
   decide(input: BrainInput): Promise<BrainDecision>;
@@ -10,6 +11,7 @@ export interface LlmPlannerModelRequest {
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
   availableTools: ToolDescriptor[];
   history: ActionResult[];
+  workingMemory?: WorkingMemorySnapshot;
 }
 
 export interface LlmPlannerModelResponse {
@@ -25,44 +27,46 @@ export class LlmPlanner implements Planner {
   constructor(private model: LlmPlannerModel) {}
 
   async decide(input: BrainInput): Promise<BrainDecision> {
+    const lastResult = input.history.length > 0 ? input.history[input.history.length - 1] ?? null : null;
+    const automaticValidationMode = inferAutomaticValidationMode(lastResult, input.availableTools);
+    if (automaticValidationMode) {
+      return {
+        action: { kind: "tool_call", toolName: "run_validation", toolInput: { mode: automaticValidationMode } },
+        reasoning: `Successful workspace mutation detected; running validation mode: ${automaticValidationMode}`,
+      };
+    }
+
     const request = this.buildRequest(input);
     const response = await this.model.generateDecision(request);
     return { action: response.action, reasoning: response.reasoning };
   }
 
   private buildRequest(input: BrainInput): LlmPlannerModelRequest {
-    const messages: LlmPlannerModelRequest["messages"] = [];
-    let systemPrompt: string | undefined;
+    const prompt: RenderedPrompt = renderPrompt(input.context, input.priorTurns);
 
-    for (const item of input.context.items) {
-      if (item.kind === "system_instruction") {
-        messages.push({ role: "system", content: item.content });
-      } else if (item.kind === "user_turn") {
-        messages.push({ role: "user", content: item.content });
-      }
-    }
-
-    const sysItems = input.context.items.filter((i) => i.kind === "system_instruction");
-    if (sysItems.length > 0) {
-      systemPrompt = sysItems.map((i) => i.content).join("\n");
-    }
-
-    return { systemPrompt, messages, availableTools: input.availableTools, history: input.history };
+    return {
+      systemPrompt: prompt.system || undefined,
+      messages: prompt.messages,
+      availableTools: input.availableTools,
+      history: input.history,
+      workingMemory: input.workingMemory,
+    };
   }
 }
 
 export class RulePlanner implements Planner {
   async decide(input: BrainInput): Promise<BrainDecision> {
-    const items = input.context.items;
-    const userItem = items.find((i) => i.kind === "user_turn");
+    const prompt: RenderedPrompt = renderPrompt(input.context, input.priorTurns);
+    const userItem = input.context.volatile.find(i => i.kind === "user_turn");
+    const msg = userItem?.content ?? prompt.messages.find(m => m.role === "user")?.content ?? "";
 
-    if (!userItem) {
+    if (!msg) {
       return {
         action: { kind: "respond", content: "No user input found." },
+        reasoning: "Context did not include a user turn.",
       };
     }
 
-    const msg = userItem.content;
     const echoPrefix = "use echo";
 
     const lastResult = input.history.length > 0
@@ -82,6 +86,14 @@ export class RulePlanner implements Planner {
       return {
         action: { kind: "tool_call", toolName: "run_validation", toolInput: { mode: validationMode } },
         reasoning: `User requested validation mode: ${validationMode}`,
+      };
+    }
+
+    const automaticValidationMode = inferAutomaticValidationMode(lastResult ?? null, input.availableTools);
+    if (automaticValidationMode) {
+      return {
+        action: { kind: "tool_call", toolName: "run_validation", toolInput: { mode: automaticValidationMode } },
+        reasoning: `Successful workspace mutation detected; running validation mode: ${automaticValidationMode}`,
       };
     }
 
@@ -124,4 +136,18 @@ function inferValidationMode(message: string): "typecheck" | "test" | "build" | 
   if (text.includes("validate") || text.includes("validation")) return "all";
 
   return null;
+}
+
+function inferAutomaticValidationMode(
+  lastResult: ActionResult | null,
+  availableTools: ToolDescriptor[],
+): ValidationModeHint | null {
+  if (!lastResult || !lastResult.ok) return null;
+  if (lastResult.action.kind !== "tool_call") return null;
+  if (!availableTools.some((tool) => tool.name === "run_validation")) return null;
+  if (lastResult.metadata?.category !== "tool_observation") return null;
+  if (lastResult.metadata.toolName === "run_validation") return null;
+  if (lastResult.metadata.workspaceMutation !== true) return null;
+
+  return lastResult.metadata.validationMode ?? "all";
 }

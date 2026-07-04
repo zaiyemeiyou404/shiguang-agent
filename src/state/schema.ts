@@ -85,7 +85,12 @@ CREATE TABLE IF NOT EXISTS artifacts (
 CREATE TABLE IF NOT EXISTS memories (
   id TEXT PRIMARY KEY,
   scope TEXT NOT NULL DEFAULT 'global',
+  workspace_scope TEXT,
+  kind TEXT NOT NULL DEFAULT 'observation',
+  summary TEXT NOT NULL DEFAULT '',
   content TEXT NOT NULL,
+  salience REAL NOT NULL DEFAULT 0.0,
+  last_accessed_at TEXT,
   source_type TEXT NOT NULL,
   source_id TEXT NOT NULL,
   confidence REAL NOT NULL DEFAULT 1.0,

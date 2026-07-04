@@ -3,7 +3,6 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Agent } from "../dist/app/agent.js";
 import { InMemoryEventSink } from "../dist/runtime/event-sink.js";
-import { InMemoryRunStore } from "../dist/state/run-store.js";
 import { RulePlanner } from "../dist/brain/planner.js";
 import { createReadTextFileTool } from "../dist/tools/builtins/read-text-file.js";
 import { createSearchWorkspaceTool } from "../dist/tools/builtins/search-workspace.js";
@@ -48,8 +47,7 @@ function loadStoreData(): { sessions: unknown[]; runs: unknown[]; events: unknow
   // --- Test 2: Agent execution path (default echo tool) ---
   console.log("\n[Test 2] Agent execution with default tools...");
   const sink = new InMemoryEventSink();
-  const runStore = new InMemoryRunStore();
-  const agent = new Agent({ eventSink: sink, runStore });
+  const agent = new Agent({ eventSink: sink });
 
   const output = await agent.run({
     runId: "run_agent_test",
@@ -168,10 +166,8 @@ function loadStoreData(): { sessions: unknown[]; runs: unknown[]; events: unknow
   // --- Test 12: Agent with custom tools and RulePlanner ---
   console.log("\n[Test 12] Agent with custom tools (echo + read_text_file + search_workspace)...");
   const customSink = new InMemoryEventSink();
-  const customRunStore = new InMemoryRunStore();
   const customAgent = new Agent({
     eventSink: customSink,
-    runStore: customRunStore,
     planner: new RulePlanner(),
     tools: [createReadTextFileTool(wsDir), createSearchWorkspaceTool(wsDir)],
   });

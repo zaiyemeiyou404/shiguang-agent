@@ -8,12 +8,15 @@ type ScriptMode = Exclude<ValidationMode, "all">;
 
 const SCRIPT_ORDER: ScriptMode[] = ["typecheck", "test", "build"];
 const SUPPORTED_MODES = new Set<ValidationMode>(["typecheck", "test", "build", "all"]);
+const OUTPUT_SNIPPET_LIMIT = 4000;
 
 export interface ValidationCommandResult {
   name: string;
   command: string;
   ok: boolean;
   exitCode: number;
+  stdout?: string;
+  stderr?: string;
 }
 
 export interface ValidationOutput {
@@ -66,21 +69,44 @@ function assertScriptsAvailable(scripts: Record<string, string>, names: ScriptMo
   }
 }
 
-function runCommand(workspaceRoot: string, command: string, args: string[]): Promise<{ ok: boolean; exitCode: number }> {
+function trimOutput(text: string): string {
+  return text.length <= OUTPUT_SNIPPET_LIMIT
+    ? text
+    : `${text.slice(0, OUTPUT_SNIPPET_LIMIT)}\n...[truncated]`;
+}
+
+function runCommand(
+  workspaceRoot: string,
+  command: string,
+  args: string[],
+): Promise<{ ok: boolean; exitCode: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd: workspaceRoot,
       shell: false,
       windowsHide: true,
-      stdio: "ignore",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr?.on("data", (chunk) => {
+      stderr += chunk.toString();
     });
     child.on("error", (error) => {
       void error;
-      resolve({ ok: false, exitCode: 1 });
+      resolve({ ok: false, exitCode: 1, stdout: trimOutput(stdout), stderr: trimOutput(stderr) });
     });
     child.on("close", (code) => {
       const exitCode = code ?? 1;
-      resolve({ ok: exitCode === 0, exitCode });
+      resolve({
+        ok: exitCode === 0,
+        exitCode,
+        stdout: trimOutput(stdout),
+        stderr: trimOutput(stderr),
+      });
     });
   });
 }
@@ -103,6 +129,8 @@ async function runScript(workspaceRoot: string, name: ScriptMode, script: string
     command: `npm run ${name}`,
     ok: result.ok,
     exitCode: result.exitCode,
+    ...(result.stdout ? { stdout: result.stdout } : {}),
+    ...(result.stderr ? { stderr: result.stderr } : {}),
   };
 }
 

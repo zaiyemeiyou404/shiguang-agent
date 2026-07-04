@@ -1,14 +1,23 @@
 import { DesktopStore } from "./store.js";
-import { BrowserWindow } from "electron";
+import { app, BrowserWindow } from "electron";
 import type { DesktopSession, DesktopRun, DesktopEvent, DesktopSessionDetail } from "./types.js";
 import { Agent } from "../dist/app/agent.js";
-import { InMemoryEventSink } from "../dist/runtime/event-sink.js";
-import { InMemoryRunStore } from "../dist/state/run-store.js";
+import { RepositoryEventSink } from "../dist/runtime/event-sink.js";
+import type { Approval, Artifact, Run, RunEvent, Session, Task } from "../dist/core/types.js";
+import { openStateDatabase } from "../dist/state/sqlite.js";
+import { SqliteApprovalRepository } from "../dist/state/sqlite-approval-repository.js";
+import { SqliteArtifactRepository } from "../dist/state/sqlite-artifact-repository.js";
+import { SqliteRunEventRepository } from "../dist/state/sqlite-run-event-repository.js";
+import { SqliteRunRepository } from "../dist/state/sqlite-run-repository.js";
+import { SqliteSessionRepository } from "../dist/state/sqlite-session-repository.js";
+import { SqliteTaskRepository } from "../dist/state/sqlite-task-repository.js";
+import { SqliteTurnRepository } from "../dist/state/sqlite-turn-repository.js";
 import { createReadTextFileTool } from "../dist/tools/builtins/read-text-file.js";
+import { createWriteTextFileTool } from "../dist/tools/builtins/write-text-file.js";
 import { createRunValidationTool } from "../dist/tools/builtins/run-validation.js";
 import { createSearchWorkspaceTool } from "../dist/tools/builtins/search-workspace.js";
 import { createPlanner } from "./planner-factory.js";
-import { resolve, normalize } from "node:path";
+import { join, resolve, normalize } from "node:path";
 
 let seqCounter = 0;
 function nextId(prefix: string): string {
@@ -18,9 +27,24 @@ function nextId(prefix: string): string {
 export class DesktopService {
   private store: DesktopStore;
   private windows: Set<BrowserWindow> = new Set();
+  private sessionRepository: SqliteSessionRepository;
+  private taskRepository: SqliteTaskRepository;
+  private runRepository: SqliteRunRepository;
+  private runEventRepository: SqliteRunEventRepository;
+  private turnRepository: SqliteTurnRepository;
+  private approvalRepository: SqliteApprovalRepository;
+  private artifactRepository: SqliteArtifactRepository;
 
   constructor(store: DesktopStore) {
     this.store = store;
+    const db = openStateDatabase(join(app.getPath("userData"), "shiguang-state.sqlite"));
+    this.sessionRepository = new SqliteSessionRepository(db);
+    this.taskRepository = new SqliteTaskRepository(db);
+    this.runRepository = new SqliteRunRepository(db);
+    this.runEventRepository = new SqliteRunEventRepository(db);
+    this.turnRepository = new SqliteTurnRepository(db);
+    this.approvalRepository = new SqliteApprovalRepository(db);
+    this.artifactRepository = new SqliteArtifactRepository(db);
   }
 
   addWindow(win: BrowserWindow): void {
@@ -32,7 +56,7 @@ export class DesktopService {
     return this.store.listSessions();
   }
 
-  createSession(title?: string): DesktopSession {
+  async createSession(title?: string): Promise<DesktopSession> {
     const now = new Date().toISOString();
     const session: DesktopSession = {
       id: nextId("sess"),
@@ -42,88 +66,114 @@ export class DesktopService {
       updatedAt: now,
       summary: null,
     };
-    return this.store.createSession(session);
+    const stored = this.store.createSession(session);
+    await this.sessionRepository.create(desktopSessionToCore(stored));
+    return stored;
   }
 
-  getSessionDetail(sessionId: string): DesktopSessionDetail {
+  async getSessionDetail(sessionId: string): Promise<DesktopSessionDetail> {
     const session = this.store.getSession(sessionId);
     if (!session) {
       throw new Error(`Session not found: ${sessionId}`);
     }
-    const runs = this.store.listRunsBySession(sessionId);
+    await this.ensureSqliteSession(session);
+    const runs = (await this.runRepository.listBySession(sessionId)).map(coreRunToDesktop);
     return { session, runs };
   }
 
   async sendUserMessage(sessionId: string, message: string): Promise<DesktopRun> {
     let session = this.store.getSession(sessionId);
     if (!session) {
-      session = this.createSession("Auto-created session");
+      session = await this.createSession("Auto-created session");
       sessionId = session.id;
     }
+    await this.ensureSqliteSession(session);
 
     const runId = nextId("run");
-    const run: DesktopRun = {
+    const now = new Date();
+    const task: Task = {
+      id: `task_${runId}`,
+      sessionId,
+      parentTaskId: null,
+      title: message.slice(0, 80) || "User message",
+      description: null,
+      status: "in_progress",
+      priority: 0,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const run: Run = {
       id: runId,
       sessionId,
+      taskId: task.id,
       status: "pending",
       reason: null,
       startedAt: null,
       endedAt: null,
+      model: null,
       summary: null,
     };
-    this.store.createRun(run);
+    await this.taskRepository.create(task);
+    await this.runRepository.create(run);
 
-    const sink = new InMemoryEventSink();
-    const runStore = new InMemoryRunStore();
+    const sink = new RepositoryEventSink(this.runEventRepository);
 
     const { planner, label } = createPlanner();
     const workspaceRoot = resolve(normalize(process.env.SHIGUANG_WORKSPACE_ROOT ?? process.cwd()));
     const tools = [
       createReadTextFileTool(workspaceRoot),
+      createWriteTextFileTool(workspaceRoot),
       createSearchWorkspaceTool(workspaceRoot),
       createRunValidationTool(workspaceRoot),
     ];
-    const agent = new Agent({ eventSink: sink, runStore, planner, tools });
+    const agent = new Agent({
+      eventSink: sink,
+      planner,
+      tools,
+      turnRepository: this.turnRepository,
+      workspaceRoot,
+    });
 
     (async () => {
-      this.store.updateRun(runId, { status: "running", startedAt: new Date().toISOString() });
+      await this.runRepository.update(runId, {
+        status: "running",
+        startedAt: new Date(),
+        model: label,
+      });
 
-      const userEvent: DesktopEvent = {
-        id: nextId("evt"),
-        runId,
-        seq: 0,
-        kind: "message",
-        payload: { role: "user", content: message },
-        createdAt: new Date().toISOString(),
-      };
-      this.store.createEvent(userEvent);
-      this.broadcastEvent(userEvent);
+      const userEvent = await sink.record(runId, "message", { role: "user", content: message });
+      this.broadcastEvent(coreEventToDesktop(userEvent));
 
       try {
+        const recentRuns = (await this.runRepository.listBySession(sessionId))
+          .filter((recentRun) => recentRun.id !== runId);
+        const linkedArtifacts = await this.loadLinkedArtifacts(sessionId, task.id);
+        const pendingApprovals = await this.approvalRepository.listBySession(sessionId);
+        const approvalContinuity = pendingApprovals.length > 0
+          ? formatPendingApprovals(pendingApprovals)
+          : undefined;
+        const combinedInstructions = [approvalContinuity].filter(Boolean).join("\n\n");
         const output = await agent.run({
-        runId,
-        userMessage: message,
-        contextInput: {
-          task: { id: `task_${runId}`, sessionId, parentTaskId: null, title: message.slice(0, 80), description: null, status: "in_progress", priority: 0, createdAt: new Date(), updatedAt: new Date() },
-          recentRuns: [],
-          linkedArtifacts: [],
-          memories: [],
-        },
-      });
+          runId,
+          userMessage: message,
+          contextInput: {
+            task,
+            recentRuns,
+            linkedArtifacts,
+            memories: [],
+            workspaceRoot,
+            systemInstructions: combinedInstructions || undefined,
+          },
+        });
         const storedEvents = await sink.list(runId);
 
         for (const evt of storedEvents) {
-          const desktopEvent: DesktopEvent = {
-            id: evt.id,
-            runId: evt.runId,
-            seq: evt.seq,
-            kind: evt.kind,
-            payload: evt.payload,
-            createdAt: evt.createdAt instanceof Date ? evt.createdAt.toISOString() : String(evt.createdAt),
-          };
-          this.store.createEvent(desktopEvent);
-          this.broadcastEvent(desktopEvent);
+          if (evt.id !== userEvent.id) {
+            this.broadcastEvent(coreEventToDesktop(evt));
+          }
         }
+
+        await this.persistApprovalsFromEvents(runId, storedEvents);
 
         const lastResult = output.state.lastResult;
         const stepsSummary = `${output.state.steps} step(s)`;
@@ -132,36 +182,83 @@ export class DesktopService {
           ? (typeof lastResult.output === "string" ? lastResult.output.slice(0, 120) : JSON.stringify(lastResult.output).slice(0, 120))
           : "Completed";
         const summary = `[${plannerLabel}] ${stepsSummary} — ${contentBrief}`;
-        this.store.updateRun(runId, { status: "completed", endedAt: new Date().toISOString(), summary });
+        await this.runRepository.update(runId, {
+          status: "completed",
+          endedAt: new Date(),
+          summary,
+        });
+        await this.taskRepository.update(task.id, {
+          status: "completed",
+          updatedAt: new Date(),
+        });
+        await this.artifactRepository.create({
+          id: `artifact_${runId}_summary`,
+          sessionId,
+          taskId: task.id,
+          runId,
+          kind: "run-summary",
+          uri: `shiguang://runs/${runId}/summary`,
+          title: summary,
+          metadata: {
+            summary,
+            planner: label,
+            steps: output.state.steps,
+          },
+          createdAt: new Date(),
+        });
       } catch (err: unknown) {
         const reason = err instanceof Error ? err.message : String(err);
-        this.store.updateRun(runId, { status: "failed", endedAt: new Date().toISOString(), reason });
+        await this.runRepository.update(runId, {
+          status: "failed",
+          endedAt: new Date(),
+          reason,
+        });
+        await this.taskRepository.update(task.id, {
+          status: "failed",
+          updatedAt: new Date(),
+        });
 
-        const errorEvent: DesktopEvent = {
-          id: nextId("evt"),
-          runId,
-          seq: 9999,
-          kind: "error",
-          payload: { message: reason },
-          createdAt: new Date().toISOString(),
-        };
-        this.store.createEvent(errorEvent);
-        this.broadcastEvent(errorEvent);
+        const errorEvent = await sink.record(runId, "error", { message: reason });
+        this.broadcastEvent(coreEventToDesktop(errorEvent));
       }
 
-      const sessionRuns = this.store.listRunsBySession(sessionId);
+      const sessionRuns = await this.runRepository.listBySession(sessionId);
       const completedCount = sessionRuns.filter((r) => r.status === "completed").length;
+      const updatedAt = new Date();
+      const summary = `${sessionRuns.length} run(s), ${completedCount} completed`;
+      this.store.updateSession(sessionId, {
+        updatedAt: updatedAt.toISOString(),
+        summary,
+      });
+      await this.sessionRepository.update(sessionId, {
+        updatedAt,
+        summary,
+      });
+    })().catch((err: unknown) => {
+      const reason = err instanceof Error ? err.message : String(err);
+      void this.runRepository.update(runId, {
+        status: "failed",
+        endedAt: new Date(),
+        reason,
+      });
+      void this.taskRepository.update(task.id, {
+        status: "failed",
+        updatedAt: new Date(),
+      });
+      void sink.record(runId, "error", { message: reason }).then((event) => {
+        this.broadcastEvent(coreEventToDesktop(event));
+      });
       this.store.updateSession(sessionId, {
         updatedAt: new Date().toISOString(),
-        summary: `${sessionRuns.length} run(s), ${completedCount} completed`,
+        summary: "Last run failed before completion",
       });
-    })();
+    });
 
-    return run;
+    return coreRunToDesktop(run);
   }
 
-  getRunEvents(runId: string): DesktopEvent[] {
-    return this.store.listEventsByRun(runId);
+  async getRunEvents(runId: string): Promise<DesktopEvent[]> {
+    return (await this.runEventRepository.listByRun(runId)).map(coreEventToDesktop);
   }
 
   subscribeRunEvents(runId: string, callback: (event: DesktopEvent) => void): () => void {
@@ -185,4 +282,111 @@ export class DesktopService {
       }
     }
   }
+
+  private async ensureSqliteSession(session: DesktopSession): Promise<void> {
+    const existing = await this.sessionRepository.get(session.id);
+    if (existing) return;
+    await this.sessionRepository.create(desktopSessionToCore(session));
+  }
+
+  private async persistApprovalsFromEvents(runId: string, events: RunEvent[]): Promise<void> {
+    for (const evt of events) {
+      if (evt.kind !== "approval_request" && evt.kind !== "approval_granted" && evt.kind !== "approval_denied") continue;
+      const payload = evt.payload as Record<string, unknown> | undefined;
+      if (!payload || typeof payload !== "object") continue;
+      if (evt.kind === "approval_request") {
+        const approval = makeApproval(runId, payload);
+        if (approval) {
+          await this.approvalRepository.create(approval);
+        }
+      } else {
+        const approvalId = payload.approvalId as string | undefined;
+        if (approvalId) {
+          await this.approvalRepository.update(approvalId, {
+            status: evt.kind === "approval_granted" ? "granted" : "denied",
+            decidedAt: new Date(),
+          });
+        }
+      }
+    }
+  }
+
+  private async loadLinkedArtifacts(sessionId: string, taskId: string): Promise<Artifact[]> {
+    const byId = new Map<string, Artifact>();
+
+    for (const artifact of await this.artifactRepository.listByTask(taskId)) {
+      byId.set(artifact.id, artifact);
+    }
+
+    for (const artifact of await this.artifactRepository.listBySession(sessionId)) {
+      byId.set(artifact.id, artifact);
+    }
+
+    return [...byId.values()];
+  }
+}
+
+function makeApproval(runId: string, payload: Record<string, unknown>): Approval | null {
+  const { approvalId, pluginId, capability, request } = payload;
+  if (typeof approvalId !== "string" && !approvalId) return null;
+  return {
+    id: approvalId as string || `appr_${runId}_${Date.now()}`,
+    runId,
+    pluginId: (pluginId as string) ?? "unknown",
+    capability: (capability as string) ?? "unknown",
+    status: "pending",
+    request: request ?? {},
+    decidedAt: null,
+  };
+}
+
+function formatPendingApprovals(approvals: Approval[]): string {
+  const lines = approvals.map(
+    (a) =>
+      `- approval[${a.id}] run[${a.runId}] plugin[${a.pluginId}] capability[${a.capability}] request: ${summarizeRequest(a.request)}`,
+  );
+  return `Pending approvals from prior runs:\n${lines.join("\n")}`;
+}
+
+function summarizeRequest(request: unknown): string {
+  if (typeof request === "string") return request.slice(0, 200);
+  if (request && typeof request === "object") {
+    const str = JSON.stringify(request);
+    return str.length > 200 ? str.slice(0, 200) + "..." : str;
+  }
+  return String(request).slice(0, 200);
+}
+
+function desktopSessionToCore(session: DesktopSession): Session {
+  return {
+    id: session.id,
+    title: session.title,
+    status: session.status,
+    createdAt: new Date(session.createdAt),
+    updatedAt: new Date(session.updatedAt),
+    summary: session.summary,
+  };
+}
+
+function coreRunToDesktop(run: Run): DesktopRun {
+  return {
+    id: run.id,
+    sessionId: run.sessionId,
+    status: run.status,
+    reason: run.reason,
+    startedAt: run.startedAt?.toISOString() ?? null,
+    endedAt: run.endedAt?.toISOString() ?? null,
+    summary: run.summary,
+  };
+}
+
+function coreEventToDesktop(event: RunEvent): DesktopEvent {
+  return {
+    id: event.id,
+    runId: event.runId,
+    seq: event.seq,
+    kind: event.kind,
+    payload: event.payload,
+    createdAt: event.createdAt.toISOString(),
+  };
 }

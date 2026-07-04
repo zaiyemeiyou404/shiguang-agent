@@ -20,6 +20,8 @@ type ValidationCommandResult = {
   command: string;
   ok: boolean;
   exitCode: number;
+  stdout?: string;
+  stderr?: string;
 };
 
 type ValidationOutput = {
@@ -44,6 +46,10 @@ async function makeWorkspace(scripts: Record<string, string>): Promise<string> {
 
 function recordCommandScript(name: string, exitCode = 0): string {
   return `node -e "require('fs').appendFileSync('commands.log', ${JSON.stringify(`${name}\\n`)}); process.exit(${exitCode})"`;
+}
+
+function noisyCommandScript(name: string, stdout: string, stderr: string, exitCode = 1): string {
+  return `node -e "process.stdout.write(${JSON.stringify(stdout)}); process.stderr.write(${JSON.stringify(stderr)}); require('fs').appendFileSync('commands.log', ${JSON.stringify(`${name}\\n`)}); process.exit(${exitCode})"`;
 }
 
 async function readCommands(workspaceRoot: string): Promise<string[]> {
@@ -105,7 +111,7 @@ test("run_validation stops all mode at the first failing command", async () => {
   const { createRunValidationTool } = await loadRunValidationModule();
   const workspaceRoot = await makeWorkspace({
     typecheck: recordCommandScript("typecheck"),
-    test: recordCommandScript("test", 7),
+    test: noisyCommandScript("test", "stdout: missing semicolon\n", "stderr: src/app.ts:1:1 type error\n", 7),
     build: recordCommandScript("build"),
   });
   const tool = createRunValidationTool(workspaceRoot);
@@ -127,6 +133,8 @@ test("run_validation stops all mode at the first failing command", async () => {
       { name: "test", command: "npm run test", ok: false, exitCode: 7 },
     ],
   );
+  assert.match(result.commands[1]?.stdout ?? "", /missing semicolon/);
+  assert.match(result.commands[1]?.stderr ?? "", /type error/);
   assert.deepEqual(await readCommands(workspaceRoot), ["typecheck", "test"]);
 });
 

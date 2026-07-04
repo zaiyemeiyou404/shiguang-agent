@@ -108,12 +108,19 @@ export interface Artifact {
   createdAt: Date;
 }
 
-export type MemoryScope = "session" | "task" | "global";
+export type MemoryScope = "session" | "task" | "global" | "workspace";
+
+export type MemoryKind = "fact" | "insight" | "preference" | "observation" | "decision";
 
 export interface Memory {
   id: string;
   scope: MemoryScope;
+  workspaceScope: string | null;
+  kind: MemoryKind;
+  summary: string;
   content: string;
+  salience: number;
+  lastAccessedAt: Date | null;
   sourceType: "session" | "task" | "run" | "artifact" | "user";
   sourceId: string;
   confidence: number;
