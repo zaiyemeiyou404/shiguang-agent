@@ -3,10 +3,12 @@ import { app, BrowserWindow } from "electron";
 import type { DesktopSession, DesktopRun, DesktopEvent, DesktopSessionDetail } from "./types.js";
 import { Agent } from "../dist/app/agent.js";
 import { RepositoryEventSink } from "../dist/runtime/event-sink.js";
-import type { Approval, Artifact, Run, RunEvent, Session, Task } from "../dist/core/types.js";
+import type { Approval, Artifact, Memory, Run, RunEvent, Session, Task } from "../dist/core/types.js";
+import { MemoryService } from "../dist/memory/service.js";
 import { openStateDatabase } from "../dist/state/sqlite.js";
 import { SqliteApprovalRepository } from "../dist/state/sqlite-approval-repository.js";
 import { SqliteArtifactRepository } from "../dist/state/sqlite-artifact-repository.js";
+import { SqliteMemoryRepository } from "../dist/state/sqlite-memory-repository.js";
 import { SqliteRunEventRepository } from "../dist/state/sqlite-run-event-repository.js";
 import { SqliteRunRepository } from "../dist/state/sqlite-run-repository.js";
 import { SqliteSessionRepository } from "../dist/state/sqlite-session-repository.js";
@@ -34,6 +36,8 @@ export class DesktopService {
   private turnRepository: SqliteTurnRepository;
   private approvalRepository: SqliteApprovalRepository;
   private artifactRepository: SqliteArtifactRepository;
+  private memoryRepository: SqliteMemoryRepository;
+  private memoryService: MemoryService;
 
   constructor(store: DesktopStore) {
     this.store = store;
@@ -45,6 +49,8 @@ export class DesktopService {
     this.turnRepository = new SqliteTurnRepository(db);
     this.approvalRepository = new SqliteApprovalRepository(db);
     this.artifactRepository = new SqliteArtifactRepository(db);
+    this.memoryRepository = new SqliteMemoryRepository(db);
+    this.memoryService = new MemoryService(this.memoryRepository);
   }
 
   addWindow(win: BrowserWindow): void {
@@ -131,6 +137,7 @@ export class DesktopService {
       planner,
       tools,
       turnRepository: this.turnRepository,
+      memoryService: this.memoryService,
       workspaceRoot,
     });
 
@@ -206,6 +213,22 @@ export class DesktopService {
           },
           createdAt: new Date(),
         });
+        await this.persistRunMemory({
+          runId,
+          task,
+          workspaceRoot,
+          kind: output.state.steps >= 2 ? "insight" : "observation",
+          summary,
+          content: buildCompletedMemoryContent({
+            task,
+            summary,
+            steps: output.state.steps,
+            lastResult,
+            stopReason: output.state.stopReason,
+          }),
+          salience: output.state.steps >= 2 ? 0.72 : 0.58,
+          confidence: 0.82,
+        });
       } catch (err: unknown) {
         const reason = err instanceof Error ? err.message : String(err);
         await this.runRepository.update(runId, {
@@ -220,6 +243,16 @@ export class DesktopService {
 
         const errorEvent = await sink.record(runId, "error", { message: reason });
         this.broadcastEvent(coreEventToDesktop(errorEvent));
+        await this.persistRunMemory({
+          runId,
+          task,
+          workspaceRoot,
+          kind: "decision",
+          summary: `Run failed: ${task.title.slice(0, 80)}`,
+          content: buildFailedMemoryContent({ task, reason }),
+          salience: 0.9,
+          confidence: 0.93,
+        });
       }
 
       const sessionRuns = await this.runRepository.listBySession(sessionId);
@@ -324,6 +357,92 @@ export class DesktopService {
 
     return [...byId.values()];
   }
+
+  private async persistRunMemory(input: {
+    runId: string;
+    task: Task;
+    workspaceRoot: string;
+    kind: Memory["kind"];
+    summary: string;
+    content: string;
+    salience: number;
+    confidence: number;
+  }): Promise<void> {
+    if (!shouldPersistRunMemory(input.summary, input.content)) return;
+
+    const now = new Date();
+    await this.memoryService.save({
+      id: nextId("mem"),
+      scope: "workspace",
+      workspaceScope: input.workspaceRoot,
+      kind: input.kind,
+      summary: input.summary,
+      content: input.content,
+      salience: input.salience,
+      lastAccessedAt: null,
+      sourceType: "run",
+      sourceId: input.runId,
+      confidence: input.confidence,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+}
+
+function shouldPersistRunMemory(summary: string, content: string): boolean {
+  const normalizedSummary = summary.replace(/\s+/g, " ").trim();
+  const normalizedContent = content.replace(/\s+/g, " ").trim();
+  if (normalizedSummary.length < 12) return false;
+  if (normalizedContent.length < 40) return false;
+  if (/^\[planner:[^\]]+\]\s+\d+ step\(s\)\s+—\s+(Completed|Done)\.?$/i.test(normalizedSummary)) {
+    return false;
+  }
+  return true;
+}
+
+function buildCompletedMemoryContent(input: {
+  task: Task;
+  summary: string;
+  steps: number;
+  lastResult: unknown;
+  stopReason: string | null;
+}): string {
+  const parts = [
+    `Task: ${input.task.title}`,
+    "Outcome: completed",
+    `Run summary: ${input.summary}`,
+    `Steps: ${input.steps}`,
+  ];
+
+  if (input.stopReason) {
+    parts.push(`Stop reason: ${input.stopReason}`);
+  }
+
+  const lastResultSummary = summarizeUnknownValue(input.lastResult, 500);
+  if (lastResultSummary) {
+    parts.push(`Last result: ${lastResultSummary}`);
+  }
+
+  return parts.join("\n");
+}
+
+function buildFailedMemoryContent(input: { task: Task; reason: string }): string {
+  return [
+    `Task: ${input.task.title}`,
+    "Outcome: failed",
+    `Failure reason: ${input.reason}`,
+  ].join("\n");
+}
+
+function summarizeUnknownValue(value: unknown, maxLength = 500): string {
+  if (typeof value === "string") {
+    const normalized = value.replace(/\s+/g, " ").trim();
+    return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized;
+  }
+  if (value === null || value === undefined) return "";
+  const serialized = JSON.stringify(value);
+  if (!serialized) return "";
+  return serialized.length > maxLength ? `${serialized.slice(0, maxLength)}...` : serialized;
 }
 
 function makeApproval(runId: string, payload: Record<string, unknown>): Approval | null {
