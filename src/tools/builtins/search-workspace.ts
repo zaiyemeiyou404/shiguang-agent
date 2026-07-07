@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { resolve, normalize, relative, join, extname } from "node:path";
-import type { Tool } from "../types.js";
+import type { Tool, ToolExecutionContext } from "../types.js";
 
 const MAX_RESULTS = 15;
 const MAX_SNIPPET_BYTES = 512;
@@ -48,6 +48,7 @@ function resolveInput(input: unknown): string {
 }
 
 function walkDir(dirPath: string, results: SearchWorkspaceResult[], query: string, workspaceRoot: string, depth: number): number {
+  // 深度和结果数都做硬限制，避免 rule planner 的只读搜索变成整仓库高成本扫描。
   if (depth > 8) return 0;
   let scanned = 0;
 
@@ -87,12 +88,18 @@ function walkDir(dirPath: string, results: SearchWorkspaceResult[], query: strin
           }
         }
       } catch {
-        // skip unreadable files
+        // 某些生成产物/损坏文件可能不可读；搜索工具应跳过而不是整轮失败。
       }
     }
   }
 
   return scanned;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new DOMException("Run cancelled", "AbortError");
+  }
 }
 
 export function createSearchWorkspaceTool(workspaceRoot: string): Tool {
@@ -107,10 +114,14 @@ export function createSearchWorkspaceTool(workspaceRoot: string): Tool {
         },
         required: ["query"],
       },
+      risk: "read",
+      requiresApproval: false,
+      capability: "fs.search",
     },
-    async execute(input: unknown): Promise<SearchWorkspaceOutput> {
+    async execute(input: unknown, context?: ToolExecutionContext): Promise<SearchWorkspaceOutput> {
       const query = resolveInput(input);
       const root = resolve(normalize(workspaceRoot));
+      throwIfAborted(context?.signal);
 
       const results: SearchWorkspaceResult[] = [];
       const filesScanned = walkDir(root, results, query, root, 0);

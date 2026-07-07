@@ -1,13 +1,20 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { ShiguangBridge, DesktopEvent } from "./types.js";
+import type { ShiguangBridge, DesktopEvent, DesktopSettings } from "./types.js";
 
 const bridge: ShiguangBridge = {
   listSessions: () => ipcRenderer.invoke("listSessions"),
+  getSettings: () => ipcRenderer.invoke("getSettings") as Promise<DesktopSettings>,
+  saveSettings: (settings: DesktopSettings) => ipcRenderer.invoke("saveSettings", settings) as Promise<DesktopSettings>,
   createSession: (title?: string) => ipcRenderer.invoke("createSession", title),
   getSessionDetail: (sessionId: string) => ipcRenderer.invoke("getSessionDetail", sessionId),
   sendUserMessage: (req) => ipcRenderer.invoke("sendUserMessage", req),
   getRunEvents: (runId: string) => ipcRenderer.invoke("getRunEvents", runId),
+  listPendingApprovals: (sessionId: string) => ipcRenderer.invoke("listPendingApprovals", sessionId),
+  decideApproval: (req) => ipcRenderer.invoke("decideApproval", req),
+  cancelRun: (req) => ipcRenderer.invoke("cancelRun", req),
+  retryRun: (req) => ipcRenderer.invoke("retryRun", req),
   subscribeRunEvents: (runId: string, callback: (event: DesktopEvent) => void) => {
+    void ipcRenderer.invoke("subscribeRunEvents", runId);
     const handler = (_event: Electron.IpcRendererEvent, data: DesktopEvent) => {
       if (data.runId === runId) {
         callback(data);

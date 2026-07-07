@@ -11,6 +11,9 @@ type WriteTextFileTool = {
       workspaceMutation?: boolean;
       validationMode?: string;
     };
+    risk?: string;
+    requiresApproval?: boolean;
+    capability?: string;
   };
   execute(input: unknown): Promise<unknown>;
 };
@@ -49,6 +52,9 @@ test("write_text_file overwrites a workspace file and marks mutation effects", a
   assert.equal(tool.descriptor.name, "write_text_file");
   assert.equal(tool.descriptor.effects?.workspaceMutation, true);
   assert.equal(tool.descriptor.effects?.validationMode, "all");
+  assert.equal(tool.descriptor.risk, "write");
+  assert.equal(tool.descriptor.requiresApproval, true);
+  assert.equal(tool.descriptor.capability, "fs.write");
 
   const result = await tool.execute({ path: "example.ts", content: "const after = 2;\n" });
 

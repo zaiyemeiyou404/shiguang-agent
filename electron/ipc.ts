@@ -1,10 +1,18 @@
 import { ipcMain, BrowserWindow } from "electron";
 import type { DesktopService } from "./service.js";
-import type { SendMessageRequest } from "./types.js";
+import type { SendMessageRequest, DesktopSettings, ApprovalDecisionRequest, RunActionRequest } from "./types.js";
 
 export function registerIpcHandlers(service: DesktopService): void {
   ipcMain.handle("listSessions", () => {
     return service.listSessions();
+  });
+
+  ipcMain.handle("getSettings", () => {
+    return service.getSettings();
+  });
+
+  ipcMain.handle("saveSettings", (_event, settings: DesktopSettings) => {
+    return service.saveSettings(settings);
   });
 
   ipcMain.handle("createSession", (_event, title?: string) => {
@@ -21,6 +29,22 @@ export function registerIpcHandlers(service: DesktopService): void {
 
   ipcMain.handle("getRunEvents", (_event, runId: string) => {
     return service.getRunEvents(runId);
+  });
+
+  ipcMain.handle("listPendingApprovals", (_event, sessionId: string) => {
+    return service.listPendingApprovals(sessionId);
+  });
+
+  ipcMain.handle("decideApproval", (_event, req: ApprovalDecisionRequest) => {
+    return service.decideApproval(req.approvalId, req.decision);
+  });
+
+  ipcMain.handle("cancelRun", (_event, req: RunActionRequest) => {
+    return service.cancelRun(req.runId);
+  });
+
+  ipcMain.handle("retryRun", (_event, req: RunActionRequest) => {
+    return service.retryRun(req.runId);
   });
 
   ipcMain.handle("subscribeRunEvents", (event, runId: string) => {

@@ -35,7 +35,7 @@ export function useDesktopSessions() {
         setDetail(d);
         if (d.runs.length > 0) {
           const latest = d.runs.reduce((a, b) => ((a.startedAt ?? a.id) > (b.startedAt ?? b.id) ? a : b));
-          if (latest.status === "pending" || latest.status === "running") {
+          if (latest.status === "pending" || latest.status === "running" || latest.status === "needs_approval") {
             setActiveRunId(latest.id);
           } else if (!activeRunId) {
             setActiveRunId(latest.id);

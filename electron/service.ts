@@ -1,6 +1,6 @@
 import { DesktopStore } from "./store.js";
 import { app, BrowserWindow } from "electron";
-import type { DesktopSession, DesktopRun, DesktopEvent, DesktopSessionDetail } from "./types.js";
+import type { DesktopSession, DesktopRun, DesktopEvent, DesktopSessionDetail, DesktopSettings, DesktopApproval } from "./types.js";
 import { Agent } from "../dist/app/agent.js";
 import { RepositoryEventSink } from "../dist/runtime/event-sink.js";
 import type { Approval, Artifact, Memory, Run, RunEvent, Session, Task } from "../dist/core/types.js";
@@ -16,10 +16,17 @@ import { SqliteTaskRepository } from "../dist/state/sqlite-task-repository.js";
 import { SqliteTurnRepository } from "../dist/state/sqlite-turn-repository.js";
 import { createReadTextFileTool } from "../dist/tools/builtins/read-text-file.js";
 import { createWriteTextFileTool } from "../dist/tools/builtins/write-text-file.js";
+import { createPatchTextFileTool } from "../dist/tools/builtins/patch-text-file.js";
+import { createRunTerminalCommandTool } from "../dist/tools/builtins/run-terminal-command.js";
 import { createRunValidationTool } from "../dist/tools/builtins/run-validation.js";
 import { createSearchWorkspaceTool } from "../dist/tools/builtins/search-workspace.js";
+import { createListDirectoryTool } from "../dist/tools/builtins/list-directory.js";
+import { createStatPathTool } from "../dist/tools/builtins/stat-path.js";
+import { createCopyPathTool } from "../dist/tools/builtins/copy-path.js";
+import { createMovePathTool } from "../dist/tools/builtins/move-path.js";
+import { createDeletePathTool } from "../dist/tools/builtins/delete-path.js";
 import { createPlanner } from "./planner-factory.js";
-import { loadDesktopConfig } from "./config.js";
+import { loadDesktopConfig, getDesktopSettings, saveDesktopSettings } from "./config.js";
 import { join, resolve, normalize } from "node:path";
 
 let seqCounter = 0;
@@ -30,6 +37,7 @@ function nextId(prefix: string): string {
 export class DesktopService {
   private store: DesktopStore;
   private windows: Set<BrowserWindow> = new Set();
+  private activeRunControllers: Map<string, AbortController> = new Map();
   private sessionRepository: SqliteSessionRepository;
   private taskRepository: SqliteTaskRepository;
   private runRepository: SqliteRunRepository;
@@ -59,8 +67,17 @@ export class DesktopService {
     win.on("closed", () => this.windows.delete(win));
   }
 
-  listSessions(): DesktopSession[] {
-    return this.store.listSessions();
+  async listSessions(): Promise<DesktopSession[]> {
+    const sessions = this.store.listSessions();
+    return Promise.all(sessions.map((session) => this.decorateSession(session)));
+  }
+
+  getSettings(): DesktopSettings {
+    return getDesktopSettings();
+  }
+
+  saveSettings(settings: DesktopSettings): DesktopSettings {
+    return saveDesktopSettings(settings);
   }
 
   async createSession(title?: string): Promise<DesktopSession> {
@@ -85,7 +102,7 @@ export class DesktopService {
     }
     await this.ensureSqliteSession(session);
     const runs = (await this.runRepository.listBySession(sessionId)).map(coreRunToDesktop);
-    return { session, runs };
+    return { session: await this.decorateSession(session), runs };
   }
 
   async sendUserMessage(sessionId: string, message: string): Promise<DesktopRun> {
@@ -122,16 +139,27 @@ export class DesktopService {
     };
     await this.taskRepository.create(task);
     await this.runRepository.create(run);
+    const controller = new AbortController();
+    this.activeRunControllers.set(runId, controller);
 
-    const sink = new RepositoryEventSink(this.runEventRepository);
+    const sink = new RepositoryEventSink(this.runEventRepository, (event) => {
+      this.broadcastEvent(coreEventToDesktop(event));
+    });
 
     const desktopConfig = loadDesktopConfig();
     const { planner, label } = createPlanner(desktopConfig.llm);
     const workspaceRoot = resolve(normalize(desktopConfig.workspaceRoot));
     const tools = [
+      createListDirectoryTool(workspaceRoot),
+      createStatPathTool(workspaceRoot),
       createReadTextFileTool(workspaceRoot),
-      createWriteTextFileTool(workspaceRoot),
       createSearchWorkspaceTool(workspaceRoot),
+      createWriteTextFileTool(workspaceRoot),
+      createPatchTextFileTool(workspaceRoot),
+      createCopyPathTool(workspaceRoot),
+      createMovePathTool(workspaceRoot),
+      createDeletePathTool(workspaceRoot),
+      createRunTerminalCommandTool(workspaceRoot),
       createRunValidationTool(workspaceRoot),
     ];
     const agent = new Agent({
@@ -144,6 +172,11 @@ export class DesktopService {
     });
 
     (async () => {
+      const currentRunBeforeStart = await this.runRepository.get(runId);
+      if (controller.signal.aborted || currentRunBeforeStart?.status === "cancelled") {
+        return;
+      }
+
       await this.runRepository.update(runId, {
         status: "running",
         startedAt: new Date(),
@@ -165,6 +198,7 @@ export class DesktopService {
         const output = await agent.run({
           runId,
           userMessage: message,
+          signal: controller.signal,
           contextInput: {
             task,
             recentRuns,
@@ -175,14 +209,12 @@ export class DesktopService {
           },
         });
         const storedEvents = await sink.list(runId);
-
-        for (const evt of storedEvents) {
-          if (evt.id !== userEvent.id) {
-            this.broadcastEvent(coreEventToDesktop(evt));
-          }
-        }
-
         await this.persistApprovalsFromEvents(runId, storedEvents);
+
+        const currentRun = await this.runRepository.get(runId);
+        if (currentRun?.status === "cancelled") {
+          return;
+        }
 
         const lastResult = output.state.lastResult;
         const stepsSummary = `${output.state.steps} step(s)`;
@@ -191,13 +223,16 @@ export class DesktopService {
           ? (typeof lastResult.output === "string" ? lastResult.output.slice(0, 120) : JSON.stringify(lastResult.output).slice(0, 120))
           : "Completed";
         const summary = `[${plannerLabel}] ${stepsSummary} — ${contentBrief}`;
+        const runStatus = deriveRunStatus(output.state);
+        const taskStatus = deriveTaskStatus(runStatus);
         await this.runRepository.update(runId, {
-          status: "completed",
+          status: runStatus,
           endedAt: new Date(),
           summary,
+          reason: output.state.lastDecision?.action.reason ?? output.state.stopSummary ?? null,
         });
         await this.taskRepository.update(task.id, {
-          status: "completed",
+          status: taskStatus,
           updatedAt: new Date(),
         });
         await this.artifactRepository.create({
@@ -223,6 +258,7 @@ export class DesktopService {
           summary,
           content: buildCompletedMemoryContent({
             task,
+            runStatus,
             summary,
             steps: output.state.steps,
             lastResult,
@@ -233,6 +269,10 @@ export class DesktopService {
         });
       } catch (err: unknown) {
         const reason = err instanceof Error ? err.message : String(err);
+        const currentRun = await this.runRepository.get(runId);
+        if (currentRun?.status === "cancelled") {
+          return;
+        }
         await this.runRepository.update(runId, {
           status: "failed",
           endedAt: new Date(),
@@ -243,8 +283,7 @@ export class DesktopService {
           updatedAt: new Date(),
         });
 
-        const errorEvent = await sink.record(runId, "error", { message: reason });
-        this.broadcastEvent(coreEventToDesktop(errorEvent));
+        await sink.record(runId, "error", { message: reason });
         await this.persistRunMemory({
           runId,
           task,
@@ -255,6 +294,8 @@ export class DesktopService {
           salience: 0.9,
           confidence: 0.93,
         });
+      } finally {
+        this.activeRunControllers.delete(runId);
       }
 
       const sessionRuns = await this.runRepository.listBySession(sessionId);
@@ -271,21 +312,24 @@ export class DesktopService {
       });
     })().catch((err: unknown) => {
       const reason = err instanceof Error ? err.message : String(err);
-      void this.runRepository.update(runId, {
-        status: "failed",
-        endedAt: new Date(),
-        reason,
-      });
-      void this.taskRepository.update(task.id, {
-        status: "failed",
-        updatedAt: new Date(),
-      });
-      void sink.record(runId, "error", { message: reason }).then((event) => {
-        this.broadcastEvent(coreEventToDesktop(event));
-      });
-      this.store.updateSession(sessionId, {
-        updatedAt: new Date().toISOString(),
-        summary: "Last run failed before completion",
+      void this.runRepository.get(runId).then((currentRun) => {
+        if (currentRun?.status === "cancelled") {
+          return;
+        }
+        void this.runRepository.update(runId, {
+          status: "failed",
+          endedAt: new Date(),
+          reason,
+        });
+        void this.taskRepository.update(task.id, {
+          status: "failed",
+          updatedAt: new Date(),
+        });
+        void sink.record(runId, "error", { message: reason });
+        this.store.updateSession(sessionId, {
+          updatedAt: new Date().toISOString(),
+          summary: "Last run failed before completion",
+        });
       });
     });
 
@@ -296,6 +340,131 @@ export class DesktopService {
     return (await this.runEventRepository.listByRun(runId)).map(coreEventToDesktop);
   }
 
+  async listPendingApprovals(sessionId: string): Promise<DesktopApproval[]> {
+    return (await this.approvalRepository.listBySession(sessionId)).map(coreApprovalToDesktop);
+  }
+
+  async decideApproval(approvalId: string, decision: "granted" | "denied"): Promise<DesktopApproval> {
+    const approval = await this.approvalRepository.get(approvalId);
+    if (!approval) {
+      throw new Error(`Approval not found: ${approvalId}`);
+    }
+
+    const decidedAt = new Date();
+    await this.approvalRepository.update(approvalId, {
+      status: decision,
+      decidedAt,
+    });
+
+    if (decision === "granted") {
+      await this.runRepository.update(approval.runId, {
+        status: "running",
+        endedAt: null,
+        reason: null,
+      });
+      const grantedRun = await this.runRepository.get(approval.runId);
+      if (grantedRun) {
+        await this.taskRepository.update(grantedRun.taskId, {
+          status: "in_progress",
+          updatedAt: decidedAt,
+        });
+      }
+    } else {
+      await this.runRepository.update(approval.runId, {
+        status: "failed",
+        endedAt: decidedAt,
+        reason: `Approval denied for capability: ${approval.capability}`,
+      });
+      const deniedRun = await this.runRepository.get(approval.runId);
+      if (deniedRun) {
+        await this.taskRepository.update(deniedRun.taskId, {
+          status: "failed",
+          updatedAt: decidedAt,
+        });
+      }
+    }
+
+    const sink = new RepositoryEventSink(this.runEventRepository, (event) => {
+      this.broadcastEvent(coreEventToDesktop(event));
+    });
+    const event = await sink.record(
+      approval.runId,
+      decision === "granted" ? "approval_granted" : "approval_denied",
+      {
+        approvalId: approval.id,
+        capability: approval.capability,
+        request: approval.request,
+      },
+    );
+
+    if (decision === "granted") {
+      void this.resumeRunAfterApproval(approval);
+    }
+
+    return coreApprovalToDesktop({
+      ...approval,
+      status: decision,
+      decidedAt,
+    });
+  }
+
+  async cancelRun(runId: string): Promise<DesktopRun> {
+    const run = await this.runRepository.get(runId);
+    if (!run) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+    if (run.status === "completed" || run.status === "failed" || run.status === "cancelled") {
+      return coreRunToDesktop(run);
+    }
+
+    const now = new Date();
+    this.activeRunControllers.get(runId)?.abort();
+    await this.runRepository.update(runId, {
+      status: "cancelled",
+      endedAt: now,
+      reason: "Cancelled by user.",
+    });
+    await this.taskRepository.update(run.taskId, {
+      status: "cancelled",
+      updatedAt: now,
+    });
+
+    const pendingApprovals = await this.approvalRepository.listPending(runId);
+    for (const approval of pendingApprovals) {
+      await this.approvalRepository.update(approval.id, {
+        status: "expired",
+        decidedAt: now,
+      });
+    }
+
+    const sink = new RepositoryEventSink(this.runEventRepository, (event) => {
+      this.broadcastEvent(coreEventToDesktop(event));
+    });
+    await sink.record(runId, "system", {
+      message: run.status === "running" ? "run cancellation requested by user" : "run cancelled by user",
+    });
+
+    await this.refreshSessionSummary(run.sessionId);
+    const updatedRun = await this.runRepository.get(runId);
+    if (!updatedRun) {
+      throw new Error(`Run not found after cancellation: ${runId}`);
+    }
+    return coreRunToDesktop(updatedRun);
+  }
+
+  async retryRun(runId: string): Promise<DesktopRun> {
+    const run = await this.runRepository.get(runId);
+    if (!run) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+    const task = await this.taskRepository.get(run.taskId);
+    if (!task) {
+      throw new Error(`Task not found for run: ${runId}`);
+    }
+    const userMessage = await this.loadLatestUserMessage(run.sessionId, task);
+    return this.sendUserMessage(run.sessionId, userMessage);
+  }
+
   subscribeRunEvents(runId: string, callback: (event: DesktopEvent) => void): () => void {
     const handler = (_event: unknown, data: DesktopEvent) => {
       if (data.runId === runId) {
@@ -303,7 +472,7 @@ export class DesktopService {
       }
     };
 
-    for (const win of this.windows) {
+    for (const win of Array.from(this.windows)) {
       win.webContents.on("ipc-message", handler as unknown as (...args: unknown[]) => void);
     }
 
@@ -311,11 +480,236 @@ export class DesktopService {
   }
 
   private broadcastEvent(event: DesktopEvent): void {
-    for (const win of this.windows) {
+    for (const win of Array.from(this.windows)) {
       if (!win.isDestroyed()) {
         win.webContents.send("run-event", event);
       }
     }
+  }
+
+  private async decorateSession(session: DesktopSession): Promise<DesktopSession> {
+    const runs = (await this.runRepository.listBySession(session.id)).map(coreRunToDesktop);
+    const latestRun = runs[0] ?? null;
+    const pendingApprovals = await this.approvalRepository.listBySession(session.id);
+    const latestRunEvents = latestRun ? await this.runEventRepository.listByRun(latestRun.id) : [];
+
+    return {
+      ...session,
+      attention: {
+        latestRunStatus: latestRun?.status ?? null,
+        hasRunningRun: runs.some((run) => run.status === "pending" || run.status === "running"),
+        hasPendingApproval: pendingApprovals.length > 0,
+        pendingApprovalCount: pendingApprovals.length,
+        hasFailedRun: latestRun?.status === "failed",
+        hasContextCompaction: latestRunEvents.some((event) => event.kind === "context_compacted"),
+      },
+    };
+  }
+
+  private createAgentRuntime(sink: RepositoryEventSink): {
+    agent: Agent;
+    label: string;
+    workspaceRoot: string;
+  } {
+    const desktopConfig = loadDesktopConfig();
+    const { planner, label } = createPlanner(desktopConfig.llm);
+    const workspaceRoot = resolve(normalize(desktopConfig.workspaceRoot));
+    const tools = [
+      createListDirectoryTool(workspaceRoot),
+      createStatPathTool(workspaceRoot),
+      createReadTextFileTool(workspaceRoot),
+      createSearchWorkspaceTool(workspaceRoot),
+      createWriteTextFileTool(workspaceRoot),
+      createPatchTextFileTool(workspaceRoot),
+      createCopyPathTool(workspaceRoot),
+      createMovePathTool(workspaceRoot),
+      createDeletePathTool(workspaceRoot),
+      createRunTerminalCommandTool(workspaceRoot),
+      createRunValidationTool(workspaceRoot),
+    ];
+    const agent = new Agent({
+      eventSink: sink,
+      planner,
+      tools,
+      turnRepository: this.turnRepository,
+      memoryService: this.memoryService,
+      workspaceRoot,
+    });
+
+    return { agent, label, workspaceRoot };
+  }
+
+  private async loadLatestUserMessage(sessionId: string, task: Task): Promise<string> {
+    const turns = await this.turnRepository.listBySession(sessionId, 50);
+    for (let i = turns.length - 1; i >= 0; i--) {
+      if (turns[i]?.role === "user" && turns[i]?.content.trim()) {
+        return turns[i]!.content;
+      }
+    }
+    return task.description?.trim() || task.title;
+  }
+
+  private async resumeRunAfterApproval(approval: Approval): Promise<void> {
+    const run = await this.runRepository.get(approval.runId);
+    if (!run) return;
+    const task = await this.taskRepository.get(run.taskId);
+    if (!task) return;
+
+    const approvedAction = extractApprovedToolAction(approval);
+    if (!approvedAction) {
+      const reason = `Approval ${approval.id} is missing a resumable tool request.`;
+      await this.runRepository.update(run.id, {
+        status: "failed",
+        endedAt: new Date(),
+        reason,
+      });
+      await this.taskRepository.update(task.id, {
+        status: "failed",
+        updatedAt: new Date(),
+      });
+      return;
+    }
+
+    const sink = new RepositoryEventSink(this.runEventRepository, (event) => {
+      this.broadcastEvent(coreEventToDesktop(event));
+    });
+    const { agent, label, workspaceRoot } = this.createAgentRuntime(sink);
+    const userMessage = await this.loadLatestUserMessage(run.sessionId, task);
+    const controller = new AbortController();
+    this.activeRunControllers.set(run.id, controller);
+
+    try {
+      const recentRuns = (await this.runRepository.listBySession(run.sessionId))
+        .filter((recentRun) => recentRun.id !== run.id);
+      const linkedArtifacts = await this.loadLinkedArtifacts(run.sessionId, task.id);
+      const pendingApprovals = await this.approvalRepository.listBySession(run.sessionId);
+      const approvalContinuity = pendingApprovals.length > 0
+        ? formatPendingApprovals(pendingApprovals)
+        : undefined;
+      const combinedInstructions = [approvalContinuity].filter(Boolean).join("\n\n");
+
+      const output = await agent.resumeAfterApproval({
+        runId: run.id,
+        userMessage,
+        signal: controller.signal,
+        approvedAction,
+        contextInput: {
+          task,
+          recentRuns,
+          linkedArtifacts,
+          memories: [],
+          workspaceRoot,
+          systemInstructions: combinedInstructions || undefined,
+        },
+      });
+
+      const storedEvents = await sink.list(run.id);
+      await this.persistApprovalsFromEvents(run.id, storedEvents);
+
+      const currentRun = await this.runRepository.get(run.id);
+      if (currentRun?.status === "cancelled") {
+        return;
+      }
+
+      const lastResult = output.state.lastResult;
+      const stepsSummary = `${output.state.steps} step(s)`;
+      const plannerLabel = `planner:${label}`;
+      const contentBrief = lastResult
+        ? (typeof lastResult.output === "string" ? lastResult.output.slice(0, 120) : JSON.stringify(lastResult.output).slice(0, 120))
+        : "Completed";
+      const summary = `[${plannerLabel}] ${stepsSummary} — ${contentBrief}`;
+      const runStatus = deriveRunStatus(output.state);
+      const taskStatus = deriveTaskStatus(runStatus);
+      await this.runRepository.update(run.id, {
+        status: runStatus,
+        endedAt: new Date(),
+        summary,
+        reason: output.state.lastDecision?.action.reason ?? output.state.stopSummary ?? null,
+      });
+      await this.taskRepository.update(task.id, {
+        status: taskStatus,
+        updatedAt: new Date(),
+      });
+      await this.artifactRepository.create({
+        id: `artifact_${run.id}_summary_resume_${Date.now()}`,
+        sessionId: run.sessionId,
+        taskId: task.id,
+        runId: run.id,
+        kind: "run-summary",
+        uri: `shiguang://runs/${run.id}/summary/resume`,
+        title: summary,
+        metadata: {
+          summary,
+          planner: label,
+          steps: output.state.steps,
+          resumedFromApproval: approval.id,
+        },
+        createdAt: new Date(),
+      });
+      await this.persistRunMemory({
+        runId: run.id,
+        task,
+        workspaceRoot,
+        kind: output.state.steps >= 2 ? "insight" : "observation",
+        summary,
+        content: buildCompletedMemoryContent({
+          task,
+          runStatus,
+          summary,
+          steps: output.state.steps,
+          lastResult,
+          stopReason: output.state.stopReason,
+        }),
+        salience: output.state.steps >= 2 ? 0.72 : 0.58,
+        confidence: 0.82,
+      });
+    } catch (err: unknown) {
+      const reason = err instanceof Error ? err.message : String(err);
+      const currentRun = await this.runRepository.get(run.id);
+      if (currentRun?.status === "cancelled") {
+        return;
+      }
+      await this.runRepository.update(run.id, {
+        status: "failed",
+        endedAt: new Date(),
+        reason,
+      });
+      await this.taskRepository.update(task.id, {
+        status: "failed",
+        updatedAt: new Date(),
+      });
+
+      await sink.record(run.id, "error", { message: reason });
+      await this.persistRunMemory({
+        runId: run.id,
+        task,
+        workspaceRoot,
+        kind: "decision",
+        summary: `Run failed: ${task.title.slice(0, 80)}`,
+        content: buildFailedMemoryContent({ task, reason }),
+        salience: 0.9,
+        confidence: 0.93,
+      });
+    } finally {
+      this.activeRunControllers.delete(run.id);
+    }
+
+    await this.refreshSessionSummary(run.sessionId);
+  }
+
+  private async refreshSessionSummary(sessionId: string): Promise<void> {
+    const sessionRuns = await this.runRepository.listBySession(sessionId);
+    const completedCount = sessionRuns.filter((r) => r.status === "completed").length;
+    const updatedAt = new Date();
+    const summary = `${sessionRuns.length} run(s), ${completedCount} completed`;
+    this.store.updateSession(sessionId, {
+      updatedAt: updatedAt.toISOString(),
+      summary,
+    });
+    await this.sessionRepository.update(sessionId, {
+      updatedAt,
+      summary,
+    });
   }
 
   private async ensureSqliteSession(session: DesktopSession): Promise<void> {
@@ -357,7 +751,7 @@ export class DesktopService {
       byId.set(artifact.id, artifact);
     }
 
-    return [...byId.values()];
+    return Array.from(byId.values());
   }
 
   private async persistRunMemory(input: {
@@ -453,6 +847,7 @@ function normalizeMemoryText(value: string): string {
 
 function buildCompletedMemoryContent(input: {
   task: Task;
+  runStatus: Run["status"];
   summary: string;
   steps: number;
   lastResult: unknown;
@@ -460,7 +855,7 @@ function buildCompletedMemoryContent(input: {
 }): string {
   const parts = [
     `Task: ${input.task.title}`,
-    "Outcome: completed",
+    `Outcome: ${input.runStatus}`,
     `Run summary: ${input.summary}`,
     `Steps: ${input.steps}`,
   ];
@@ -485,6 +880,22 @@ function buildFailedMemoryContent(input: { task: Task; reason: string }): string
   ].join("\n");
 }
 
+function deriveRunStatus(state: { stopReason: string | null; lastDecision: { action: { kind: string } } | null }): Run["status"] {
+  if (state.lastDecision?.action.kind === "needs_approval" || state.stopReason === "needs_approval") {
+    return "needs_approval";
+  }
+  if (state.lastDecision?.action.kind === "fail" || state.stopReason === "fail" || state.stopReason === "non_retryable_tool_error" || state.stopReason === "repeated_retryable_tool_error") {
+    return "failed";
+  }
+  return "completed";
+}
+
+function deriveTaskStatus(runStatus: Run["status"]): Task["status"] {
+  if (runStatus === "completed") return "completed";
+  if (runStatus === "failed") return "failed";
+  return "in_progress";
+}
+
 function summarizeUnknownValue(value: unknown, maxLength = 500): string {
   if (typeof value === "string") {
     const normalized = value.replace(/\s+/g, " ").trim();
@@ -507,6 +918,21 @@ function makeApproval(runId: string, payload: Record<string, unknown>): Approval
     status: "pending",
     request: request ?? {},
     decidedAt: null,
+  };
+}
+
+function extractApprovedToolAction(approval: Approval): { toolName: string; toolInput?: unknown } | null {
+  const request = approval.request;
+  if (!request || typeof request !== "object") return null;
+
+  const toolName = typeof (request as { toolName?: unknown }).toolName === "string"
+    ? (request as { toolName: string }).toolName
+    : null;
+  if (!toolName) return null;
+
+  return {
+    toolName,
+    toolInput: (request as { toolInput?: unknown }).toolInput,
   };
 }
 
@@ -558,5 +984,17 @@ function coreEventToDesktop(event: RunEvent): DesktopEvent {
     kind: event.kind,
     payload: event.payload,
     createdAt: event.createdAt.toISOString(),
+  };
+}
+
+function coreApprovalToDesktop(approval: Approval): DesktopApproval {
+  return {
+    id: approval.id,
+    runId: approval.runId,
+    pluginId: approval.pluginId,
+    capability: approval.capability,
+    status: approval.status,
+    request: approval.request,
+    decidedAt: approval.decidedAt?.toISOString() ?? null,
   };
 }

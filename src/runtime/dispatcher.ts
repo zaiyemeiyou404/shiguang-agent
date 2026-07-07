@@ -1,6 +1,7 @@
 import type { BrainDecision, ActionResult, ToolErrorKind } from "../brain/types.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import type { EventSink } from "./event-sink.js";
+import type { ToolExecutionContext } from "../tools/types.js";
 
 function summarize(value: unknown, maxLength = 500): string {
   const raw = typeof value === "string" ? value : JSON.stringify(value);
@@ -39,8 +40,15 @@ function classifyToolError(err: unknown, message: string): { kind: ToolErrorKind
 
   return {
     kind,
+    // 这里把“是否值得 loop 再试一次”的判断前置为 metadata，后续 evaluator 直接消费。
     retryable: kind === "timeout" || kind === "unavailable" || kind === "rate_limited",
   };
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new DOMException("Run cancelled", "AbortError");
+  }
 }
 
 export class ActionDispatcher {
@@ -49,8 +57,9 @@ export class ActionDispatcher {
     private eventSink?: EventSink,
   ) {}
 
-  async dispatch(decision: BrainDecision, runId?: string): Promise<ActionResult> {
+  async dispatch(decision: BrainDecision, runId?: string, context?: ToolExecutionContext): Promise<ActionResult> {
     const { action } = decision;
+    throwIfAborted(context?.signal);
 
     if (this.eventSink && runId) {
       await this.eventSink.record(runId, "thinking", { reasoning: decision.reasoning });
@@ -74,6 +83,7 @@ export class ActionDispatcher {
         };
       }
       case "tool_call": {
+        // dispatcher 是 action -> side effect 的唯一落点：记录事件、找工具、执行、包装结果。
         if (!action.toolName) {
           return {
             action,
@@ -111,7 +121,7 @@ export class ActionDispatcher {
           };
         }
         try {
-          const output = await tool.execute(action.toolInput);
+          const output = await tool.execute(action.toolInput, context);
           if (this.eventSink && runId) {
             await this.eventSink.record(runId, "tool_result", {
               tool: action.toolName,
@@ -128,6 +138,7 @@ export class ActionDispatcher {
               retryable: false,
               toolName: action.toolName,
               ...(tool.descriptor.effects?.workspaceMutation
+                // workspaceMutation 会驱动 loop/planner 在下一步自动进入 validate。
                 ? { workspaceMutation: true }
                 : {}),
               ...(tool.descriptor.effects?.validationMode
@@ -164,6 +175,38 @@ export class ActionDispatcher {
             category: "agent_finish",
             summary: summarize(output),
             retryable: false,
+          },
+        };
+      }
+      case "needs_approval": {
+        // needs_approval 不是普通失败；它要求上层 UI/runtime 暂停并等待人工决策。
+        const approvalId = action.approvalId ?? `appr_${runId ?? "run"}_${Date.now()}`;
+        const capability = action.capability ?? action.toolName ?? "unknown";
+        if (this.eventSink && runId) {
+          await this.eventSink.record(runId, "approval_request", {
+            approvalId,
+            pluginId: "builtin",
+            capability,
+            request: {
+              toolName: action.toolName,
+              toolInput: action.toolInput,
+              reason: action.reason,
+            },
+          });
+        }
+        const reason = action.reason ?? `Approval required for tool: ${action.toolName ?? "unknown"}`;
+        return {
+          action,
+          ok: false,
+          output: null,
+          error: reason,
+          metadata: {
+            category: "runtime_error",
+            summary: reason,
+            retryable: false,
+            toolName: action.toolName,
+            errorType: "ApprovalRequired",
+            errorKind: "permission_denied",
           },
         };
       }

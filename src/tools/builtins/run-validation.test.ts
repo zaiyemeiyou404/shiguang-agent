@@ -7,6 +7,9 @@ import * as assert from "node:assert/strict";
 type RunValidationTool = {
   descriptor: {
     name: string;
+    risk?: string;
+    requiresApproval?: boolean;
+    capability?: string;
   };
   execute(input: unknown): Promise<unknown>;
 };
@@ -90,6 +93,9 @@ test("run_validation runs the typecheck script and reports success", async () =>
   const tool = createRunValidationTool(workspaceRoot);
 
   assert.equal(tool.descriptor.name, "run_validation");
+  assert.equal(tool.descriptor.risk, "execute");
+  assert.equal(tool.descriptor.requiresApproval, false);
+  assert.equal(tool.descriptor.capability, "process.validate");
 
   const result = await tool.execute("typecheck");
 

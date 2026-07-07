@@ -1,4 +1,4 @@
-import type { ContextBundle, RenderedPrompt } from "./types.js";
+import type { ContextBundle, RenderedPrompt, CompressionStats } from "./types.js";
 import { buildContext, trimToBudget, type ContextBuilderInput } from "./builder.js";
 
 export type { ContextBuilderInput };
@@ -20,6 +20,11 @@ export interface ContextServiceOptions {
   llmCompactor?: LlmCompactor;
 }
 
+export interface ContextBuildDiagnostics {
+  compression: CompressionStats;
+  usedLlmCompactor: boolean;
+}
+
 export class ContextService {
   private memoryService?: MemoryService;
   private workspaceRoot?: string;
@@ -35,7 +40,10 @@ export class ContextService {
     this.llmCompactor = opts.llmCompactor;
   }
 
-  async build(input: ContextBuilderInput): Promise<ContextBundle> {
+  async build(input: ContextBuilderInput): Promise<{
+    bundle: ContextBundle;
+    diagnostics: ContextBuildDiagnostics;
+  }> {
     const memories: ContextBuilderInput["memories"] = [...input.memories];
     const enrichedInput: ContextBuilderInput = {
       ...input,
@@ -64,20 +72,39 @@ export class ContextService {
       }
     }
 
-    let bundle = buildContext(enrichedInput);
-    bundle = pruneContextBundle(bundle);
+    const initialBundle = buildContext(enrichedInput);
+    const originalItems = [...initialBundle.stable, ...initialBundle.volatile, ...initialBundle.live];
+
+    let bundle = pruneContextBundle(initialBundle);
+    const prunedItems = [...bundle.stable, ...bundle.volatile, ...bundle.live];
     bundle = compressContextBundle(bundle, this.compressionOptions);
+    const compressedItems = [...bundle.stable, ...bundle.volatile, ...bundle.live];
 
     const pressure = computeCompactionPressure(bundle, this.maxBudget);
+    let usedLlmCompactor = false;
     if (this.llmCompactor && shouldUseLlmCompaction(bundle, this.maxBudget, pressure)) {
       bundle = await this.llmCompactor.compact({
         bundle,
         maxBudget: this.maxBudget,
         pressure,
       });
+      usedLlmCompactor = true;
     }
 
-    return trimToBudget(bundle, this.maxBudget);
+    const finalBundle = trimToBudget(bundle, this.maxBudget);
+    return {
+      bundle: finalBundle,
+      diagnostics: {
+        compression: {
+          originalItemCount: originalItems.length,
+          originalBudget: initialBundle.totalBudget,
+          prunedCount: Math.max(0, originalItems.length - prunedItems.length),
+          compressedCount: Math.max(0, prunedItems.length - compressedItems.length),
+          finalBudget: finalBundle.totalBudget,
+        },
+        usedLlmCompactor,
+      },
+    };
   }
 
   render(bundle: ContextBundle): RenderedPrompt {
@@ -87,9 +114,10 @@ export class ContextService {
   async buildAndRender(input: ContextBuilderInput): Promise<{
     bundle: ContextBundle;
     prompt: RenderedPrompt;
+    diagnostics: ContextBuildDiagnostics;
   }> {
-    const bundle = await this.build(input);
+    const { bundle, diagnostics } = await this.build(input);
     const prompt = this.render(bundle);
-    return { bundle, prompt };
+    return { bundle, prompt, diagnostics };
   }
 }

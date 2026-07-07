@@ -1,10 +1,12 @@
 import { ContextService } from "../context/service.js";
+import type { ContextBuildDiagnostics } from "../context/service.js";
 import type { ContextBuilderInput } from "../context/builder.js";
 import type { Turn } from "../core/types.js";
 import { RulePlanner, type Planner } from "../brain/planner.js";
-import { AllowAllPolicy } from "../brain/policy.js";
+import { ToolMetadataPolicy, type Policy } from "../brain/policy.js";
 import { BasicEvaluator } from "../brain/evaluator.js";
-import { runLoop, type LoopState } from "../brain/loop.js";
+import type { BrainDecision } from "../brain/types.js";
+import { applyActionResultToWorkingMemory, runLoop, type LoopState } from "../brain/loop.js";
 import { ActionDispatcher } from "../runtime/dispatcher.js";
 import { ToolRegistry } from "../tools/registry.js";
 import type { Tool } from "../tools/types.js";
@@ -28,16 +30,28 @@ export interface AgentInput {
   runId: string;
   userMessage: string;
   contextInput: Omit<ContextBuilderInput, "userTurn">;
+  signal?: AbortSignal;
 }
 
 export interface AgentOutput {
   state: LoopState;
 }
 
+export interface AgentApprovalResumeInput {
+  runId: string;
+  userMessage: string;
+  signal?: AbortSignal;
+  approvedAction: {
+    toolName: string;
+    toolInput?: unknown;
+  };
+  contextInput: Omit<ContextBuilderInput, "userTurn">;
+}
+
 export class Agent {
   private toolRegistry: ToolRegistry;
   private planner: Planner;
-  private policy: AllowAllPolicy;
+  private policy: Policy;
   private evaluator: BasicEvaluator;
   private dispatcher: ActionDispatcher;
   private contextService: ContextService;
@@ -52,7 +66,7 @@ export class Agent {
     }
 
     this.planner = options.planner ?? new RulePlanner();
-    this.policy = new AllowAllPolicy();
+    this.policy = new ToolMetadataPolicy(this.toolRegistry.all());
     this.evaluator = new BasicEvaluator();
     this.dispatcher = new ActionDispatcher(this.toolRegistry, options.eventSink);
     this.contextService = new ContextService({
@@ -67,10 +81,11 @@ export class Agent {
     await this.persistCurrentTurns(input, priorTurns);
 
     try {
-      const { bundle } = await this.contextService.buildAndRender({
+      const { bundle, diagnostics } = await this.contextService.buildAndRender({
         userTurn: input.userMessage,
         ...input.contextInput,
       });
+      await this.emitContextCompactionEvent(input.runId, diagnostics);
 
       const brainInput = {
         context: bundle,
@@ -86,11 +101,86 @@ export class Agent {
           planner: this.planner,
           policy: this.policy,
           dispatcher: {
-            dispatch: (decision) => this.dispatcher.dispatch(decision, input.runId),
+            dispatch: (decision, context) => this.dispatcher.dispatch(decision, input.runId, context),
           },
           evaluator: this.evaluator,
         },
+        12,
+        { signal: input.signal },
       );
+
+      await this.persistAssistantTurn(sessionId, summarizeAssistantTurn(state));
+      return { state };
+    } catch (error) {
+      await this.persistAssistantTurn(sessionId, summarizeFailureTurn(error));
+      throw error;
+    }
+  }
+
+  async resumeAfterApproval(input: AgentApprovalResumeInput): Promise<AgentOutput> {
+    const sessionId = input.contextInput.task.sessionId;
+    const priorTurns = await this.loadPriorTurns(sessionId);
+
+    try {
+      const { bundle, diagnostics } = await this.contextService.buildAndRender({
+        userTurn: input.userMessage,
+        ...input.contextInput,
+      });
+      await this.emitContextCompactionEvent(input.runId, diagnostics);
+
+      const approvedDecision: BrainDecision = {
+        action: {
+          kind: "tool_call",
+          toolName: input.approvedAction.toolName,
+          toolInput: input.approvedAction.toolInput,
+        },
+        reasoning: `Resuming approved tool: ${input.approvedAction.toolName}`,
+      };
+
+      const approvedResult = await this.dispatcher.dispatch(approvedDecision, input.runId, { signal: input.signal });
+      const initialHistory = [approvedResult];
+      const initialWorkingMemory = applyActionResultToWorkingMemory(
+        { step: 0, lastActionKind: null },
+        1,
+        approvedResult,
+      );
+      const initialAction = await this.evaluator.evaluate(approvedDecision, approvedResult, initialHistory);
+
+      let state: LoopState;
+      if (initialAction.kind === "stop") {
+        state = {
+          steps: 1,
+          history: initialHistory,
+          workingMemory: initialWorkingMemory,
+          lastDecision: approvedDecision,
+          lastResult: approvedResult,
+          stopReason: initialAction.reason,
+          stopSummary: initialAction.summary ?? null,
+        };
+      } else {
+        const brainInput = {
+          context: bundle,
+          runId: input.runId,
+          priorTurns,
+          history: initialHistory,
+          workingMemory: initialWorkingMemory,
+          availableTools: this.toolRegistry.all(),
+        };
+
+        state = await runLoop(
+          brainInput,
+          {
+            planner: this.planner,
+            policy: this.policy,
+            dispatcher: {
+              dispatch: (decision, context) => this.dispatcher.dispatch(decision, input.runId, context),
+            },
+            evaluator: this.evaluator,
+          },
+          12,
+          { signal: input.signal },
+        );
+      }
 
       await this.persistAssistantTurn(sessionId, summarizeAssistantTurn(state));
       return { state };
@@ -120,6 +210,29 @@ export class Agent {
   private async persistAssistantTurn(sessionId: string, content: string): Promise<void> {
     if (!this.options.turnRepository) return;
     await this.options.turnRepository.create(makeTurn(sessionId, "assistant", content));
+  }
+
+  private async emitContextCompactionEvent(runId: string, diagnostics: ContextBuildDiagnostics): Promise<void> {
+    const { compression, usedLlmCompactor } = diagnostics;
+    const changed = compression.prunedCount > 0
+      || compression.compressedCount > 0
+      || compression.finalBudget < compression.originalBudget;
+    if (!changed || !this.options.eventSink) return;
+
+    const finalItemEstimate = Math.max(
+      0,
+      compression.originalItemCount - compression.prunedCount - compression.compressedCount,
+    );
+    await this.options.eventSink.record(runId, "context_compacted", {
+      message: `Context compacted from ~${compression.originalBudget} to ~${compression.finalBudget} tokens.`,
+      originalItemCount: compression.originalItemCount,
+      prunedCount: compression.prunedCount,
+      compressedCount: compression.compressedCount,
+      finalItemEstimate,
+      originalBudget: compression.originalBudget,
+      finalBudget: compression.finalBudget,
+      usedLlmCompactor,
+    });
   }
 }
 
@@ -152,6 +265,10 @@ function summarizeAssistantTurn(state: LoopState): string {
 
   if (action.kind === "fail") {
     return action.reason ?? "Run failed.";
+  }
+
+  if (action.kind === "needs_approval") {
+    return action.reason ?? `Run needs approval for ${action.toolName ?? "a tool"}.`;
   }
 
   if (state.stopReason) {

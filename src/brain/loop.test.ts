@@ -2,8 +2,10 @@ import { test } from "node:test";
 import * as assert from "node:assert/strict";
 
 import { runLoop } from "./loop.js";
+import { RulePlanner } from "./planner.js";
 import type { BrainDecision, BrainInput, ActionResult } from "./types.js";
 import type { ContextBundle, ContextItem } from "../context/types.js";
+import type { ToolDescriptor } from "../tools/types.js";
 
 function makeContext(message: string): ContextBundle {
   const userTurn: ContextItem = {
@@ -107,6 +109,429 @@ test("runLoop tracks the latest validation failure in working memory", async () 
     suspectColumn: 7,
     suspectErrorCode: "TS2322",
   });
+  assert.deepEqual(state.workingMemory.repairAttempt, {
+    suspectFile: "src/app.ts",
+    validationFailureCount: 1,
+    editAttemptCount: 0,
+    exhausted: false,
+  });
+  assert.equal(state.workingMemory.phase, "edit");
+});
+
+test("runLoop switches repeated validation failures on the same suspect back to investigate", async () => {
+  const decision: BrainDecision = {
+    action: { kind: "tool_call", toolName: "run_validation", toolInput: { mode: "typecheck" } },
+  };
+
+  const result: ActionResult = {
+    action: decision.action,
+    ok: true,
+    output: {
+      ok: false,
+      mode: "typecheck",
+      commands: [
+        {
+          name: "typecheck",
+          command: "npm run typecheck",
+          ok: false,
+          exitCode: 2,
+          stdout: "",
+          stderr: "src/app.ts:1:7 - error TS2322: Type 'string' is not assignable to type 'number'.",
+        },
+      ],
+      summary: "Validation typecheck failed.",
+    },
+    metadata: {
+      category: "tool_observation",
+      summary: "Validation typecheck failed.",
+      retryable: false,
+      toolName: "run_validation",
+    },
+  };
+
+  const state = await runLoop(
+    {
+      context: makeContext("fix the typecheck failure"),
+      runId: "run_repeated_validation_failure",
+      priorTurns: [],
+      history: [],
+      workingMemory: {
+        step: 2,
+        phase: "validate",
+        lastActionKind: "tool_call",
+        lastToolName: "patch_text_file",
+        validationFailure: {
+          mode: "typecheck",
+          failingCommands: ["typecheck"],
+          summary: "Validation typecheck failed.",
+          suspectFile: "src/app.ts",
+          suspectErrorCode: "TS2322",
+        },
+        repairAttempt: {
+          suspectFile: "src/app.ts",
+          validationFailureCount: 1,
+          editAttemptCount: 1,
+          exhausted: false,
+        },
+      },
+      availableTools: [],
+    },
+    {
+      planner: { async decide() { return decision; } },
+      policy: { async check(next) { return next; } },
+      dispatcher: { async dispatch() { return result; } },
+      evaluator: { async evaluate() { return { kind: "stop", reason: "finish" } as const; } },
+    },
+    3,
+  );
+
+  assert.equal(state.workingMemory.phase, "investigate");
+  assert.deepEqual(state.workingMemory.repairAttempt, {
+    suspectFile: "src/app.ts",
+    validationFailureCount: 2,
+    editAttemptCount: 1,
+    exhausted: true,
+  });
+});
+
+test("runLoop advances working memory to validate after a successful file mutation", async () => {
+  const decision: BrainDecision = {
+    action: {
+      kind: "tool_call",
+      toolName: "patch_text_file",
+      toolInput: {
+        path: "src/app.ts",
+        oldString: "const value = 1;",
+        newString: "const value = 1;",
+      },
+    },
+  };
+
+  const result: ActionResult = {
+    action: decision.action,
+    ok: true,
+    output: { path: "src/app.ts", replacements: 1, bytes: 16 },
+    metadata: {
+      category: "tool_observation",
+      summary: "patched src/app.ts",
+      retryable: false,
+      toolName: "patch_text_file",
+      workspaceMutation: true,
+      validationMode: "all",
+    },
+  };
+
+  const state = await runLoop(
+    {
+      context: makeContext("fix the typecheck failure"),
+      runId: "run_mutation_to_validate",
+      priorTurns: [],
+      history: [],
+      workingMemory: {
+        step: 0,
+        phase: "edit",
+        lastActionKind: null,
+      },
+      availableTools: [],
+    },
+    {
+      planner: { async decide() { return decision; } },
+      policy: { async check(next) { return next; } },
+      dispatcher: { async dispatch() { return result; } },
+      evaluator: { async evaluate() { return { kind: "stop", reason: "finish" } as const; } },
+    },
+    1,
+  );
+
+  assert.equal(state.workingMemory.phase, "validate");
+  assert.equal(state.workingMemory.lastToolName, "patch_text_file");
+});
+
+test("runLoop records the last attempted repair strategy and patch signature", async () => {
+  const decision: BrainDecision = {
+    action: {
+      kind: "tool_call",
+      toolName: "patch_text_file",
+      toolInput: {
+        path: "src/app.ts",
+        oldString: "const value: number = \"123\";",
+        newString: "const value: number = 123;",
+      },
+    },
+  };
+
+  const result: ActionResult = {
+    action: decision.action,
+    ok: true,
+    output: { path: "src/app.ts", replacements: 1, bytes: 30 },
+    metadata: {
+      category: "tool_observation",
+      summary: "patched src/app.ts",
+      retryable: false,
+      toolName: "patch_text_file",
+      workspaceMutation: true,
+      validationMode: "all",
+    },
+  };
+
+  const state = await runLoop(
+    {
+      context: makeContext("fix the typecheck failure"),
+      runId: "run_record_repair_signature",
+      priorTurns: [],
+      history: [],
+      workingMemory: {
+        step: 0,
+        phase: "edit",
+        lastActionKind: "tool_call",
+        lastToolName: "run_validation",
+        validationFailure: {
+          mode: "typecheck",
+          failingCommands: ["typecheck"],
+          summary: "Validation typecheck failed.",
+          suspectFile: "src/app.ts",
+          suspectErrorCode: "TS2322",
+        },
+        repairAttempt: {
+          suspectFile: "src/app.ts",
+          validationFailureCount: 1,
+          editAttemptCount: 0,
+          exhausted: false,
+        },
+      },
+      availableTools: [],
+    },
+    {
+      planner: { async decide() { return decision; } },
+      policy: { async check(next) { return next; } },
+      dispatcher: { async dispatch() { return result; } },
+      evaluator: { async evaluate() { return { kind: "stop", reason: "finish" } as const; } },
+    },
+    1,
+  );
+
+  assert.deepEqual(state.workingMemory.repairAttempt, {
+    suspectFile: "src/app.ts",
+    validationFailureCount: 1,
+    editAttemptCount: 1,
+    exhausted: false,
+    lastStrategy: "synthesized TS2322 number-literal fix",
+    lastPatchSignature: JSON.stringify({
+      tool: "patch_text_file",
+      path: "src/app.ts",
+      oldString: "const value: number = \"123\";",
+      newString: "const value: number = 123;",
+    }),
+  });
+});
+
+test("runLoop can go edit to validate to summarize without premature finish", async () => {
+  const availableTools: ToolDescriptor[] = [
+    {
+      name: "patch_text_file",
+      description: "Patches a file",
+      inputSchema: { type: "object" },
+      effects: {
+        workspaceMutation: true,
+        validationMode: "all",
+      },
+    },
+    {
+      name: "run_validation",
+      description: "Runs validation",
+      inputSchema: { type: "object" },
+    },
+  ];
+  const seededRead: ActionResult = {
+    action: { kind: "tool_call", toolName: "read_text_file", toolInput: { path: "src/app.ts" } },
+    ok: true,
+    output: { path: "src/app.ts", content: "const value: number = \"123\";\n" },
+    metadata: {
+      category: "tool_observation",
+      summary: "read src/app.ts",
+      retryable: false,
+      toolName: "read_text_file",
+    },
+  };
+  const actions: string[] = [];
+
+  const state = await runLoop(
+    {
+      context: makeContext("fix the validation failure in src/app.ts"),
+      runId: "run_edit_validate_summarize",
+      priorTurns: [],
+      history: [seededRead],
+      workingMemory: {
+        step: 1,
+        phase: "edit",
+        lastActionKind: "tool_call",
+        lastToolName: "run_validation",
+        validationFailure: {
+          mode: "typecheck",
+          failingCommands: ["typecheck"],
+          summary: "Validation typecheck failed.",
+          stderrSnippet: "src/app.ts:1:7 - error TS2322: Type 'string' is not assignable to type 'number'.",
+          suspectFile: "src/app.ts",
+          suspectLine: 1,
+          suspectErrorCode: "TS2322",
+        },
+      },
+      availableTools,
+    },
+    {
+      planner: new RulePlanner(),
+      policy: { async check(next) { return next; } },
+      dispatcher: {
+        async dispatch(decision): Promise<ActionResult> {
+          const toolName = decision.action.toolName ?? decision.action.kind;
+          actions.push(toolName);
+
+          if (decision.action.toolName === "patch_text_file") {
+            assert.deepEqual(decision.action.toolInput, {
+              path: "src/app.ts",
+              oldString: "const value: number = \"123\";",
+              newString: "const value: number = 123;",
+            });
+            return {
+              action: decision.action,
+              ok: true,
+              output: { path: "src/app.ts", replacements: 1, bytes: 30 },
+              metadata: {
+                category: "tool_observation",
+                summary: "patched src/app.ts",
+                retryable: false,
+                toolName: "patch_text_file",
+                workspaceMutation: true,
+                validationMode: "all",
+              },
+            };
+          }
+
+          if (decision.action.toolName === "run_validation") {
+            return {
+              action: decision.action,
+              ok: true,
+              output: { ok: true, mode: "all", summary: "Validation passed." },
+              metadata: {
+                category: "tool_observation",
+                summary: "Validation passed.",
+                retryable: false,
+                toolName: "run_validation",
+              },
+            };
+          }
+
+          return {
+            action: decision.action,
+            ok: true,
+            output: decision.action.content ?? "",
+            metadata: {
+              category: "assistant_response",
+              summary: decision.action.content ?? "",
+              retryable: false,
+            },
+          };
+        },
+      },
+      evaluator: {
+        async evaluate(_decision, result) {
+          return result?.metadata?.category === "assistant_response"
+            ? { kind: "stop", reason: "finish" } as const
+            : { kind: "continue" } as const;
+        },
+      },
+    },
+    4,
+  );
+
+  assert.deepEqual(actions, ["patch_text_file", "run_validation", "respond"]);
+  assert.equal(state.stopReason, "finish");
+  assert.equal(state.workingMemory.phase, "summarize");
+  assert.equal(state.history.length, 4);
+});
+
+test("runLoop continues from seeded history without replaying the approved tool step", async () => {
+  const seededResult: ActionResult = {
+    action: { kind: "tool_call", toolName: "write_text_file", toolInput: { path: "note.txt", content: "ok" } },
+    ok: true,
+    output: { ok: true },
+    metadata: {
+      category: "tool_observation",
+      summary: "File written.",
+      retryable: false,
+      toolName: "write_text_file",
+    },
+  };
+
+  const followupDecision: BrainDecision = {
+    action: { kind: "respond", content: "done" },
+  };
+
+  let plannerCalls = 0;
+  let dispatcherCalls = 0;
+  let evaluatorCalls = 0;
+
+  const state = await runLoop(
+    {
+      context: makeContext("write note.txt then confirm completion"),
+      runId: "run_seeded_resume",
+      priorTurns: [],
+      history: [seededResult],
+      workingMemory: {
+        step: 1,
+        lastActionKind: "tool_call",
+      },
+      availableTools: [],
+    },
+    {
+      planner: {
+        async decide(input): Promise<BrainDecision> {
+          plannerCalls += 1;
+          assert.equal(input.history.length, 1);
+          assert.equal(input.history[0]?.metadata?.toolName, "write_text_file");
+          return followupDecision;
+        },
+      },
+      policy: {
+        async check(next: BrainDecision): Promise<BrainDecision> {
+          return next;
+        },
+      },
+      dispatcher: {
+        async dispatch(decision): Promise<ActionResult> {
+          dispatcherCalls += 1;
+          assert.deepEqual(decision, followupDecision);
+          return {
+            action: decision.action,
+            ok: true,
+            output: "done",
+            metadata: {
+              category: "assistant_response",
+              summary: "Responded to user.",
+              retryable: false,
+            },
+          };
+        },
+      },
+      evaluator: {
+        async evaluate(_decision, _result, history) {
+          evaluatorCalls += 1;
+          const seenHistory = history ?? [];
+          assert.equal(seenHistory.length, 2);
+          return { kind: "stop", reason: "finish" } as const;
+        },
+      },
+    },
+    2,
+  );
+
+  assert.equal(plannerCalls, 1);
+  assert.equal(dispatcherCalls, 1);
+  assert.equal(evaluatorCalls, 1);
+  assert.equal(state.steps, 2);
+  assert.equal(state.history.length, 2);
+  assert.equal(state.history[0]?.metadata?.toolName, "write_text_file");
+  assert.equal(state.lastResult?.output, "done");
 });
 
 test("runLoop extracts TypeScript paren-format diagnostics from validation output", async () => {

@@ -1,6 +1,6 @@
 import { accessSync, readFileSync, constants } from "node:fs";
 import { resolve, normalize, relative } from "node:path";
-import type { Tool } from "../types.js";
+import type { Tool, ToolExecutionContext } from "../types.js";
 
 const MAX_BYTES = 16_384;
 
@@ -33,6 +33,12 @@ function resolvePath(workspaceRoot: string, userPath: string): string {
   return candidate;
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new DOMException("Run cancelled", "AbortError");
+  }
+}
+
 export function createReadTextFileTool(workspaceRoot: string): Tool {
   return {
     descriptor: {
@@ -45,10 +51,15 @@ export function createReadTextFileTool(workspaceRoot: string): Tool {
         },
         required: ["path"],
       },
+      risk: "read",
+      requiresApproval: false,
+      capability: "fs.read",
     },
-    async execute(input: unknown): Promise<ReadTextFileOutput> {
+    async execute(input: unknown, context?: ToolExecutionContext): Promise<ReadTextFileOutput> {
+      throwIfAborted(context?.signal);
       const rawPath = resolveInput(input);
       const fullPath = resolvePath(workspaceRoot, rawPath);
+      throwIfAborted(context?.signal);
 
       try {
         accessSync(fullPath, constants.R_OK);

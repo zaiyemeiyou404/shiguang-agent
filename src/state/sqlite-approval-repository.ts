@@ -60,6 +60,13 @@ export class SqliteApprovalRepository implements ApprovalRepository {
       );
   }
 
+  async get(id: string): Promise<Approval | null> {
+    const row = this.db
+      .prepare(`SELECT ${APPROVAL_COLUMNS} FROM approvals WHERE id = ?`)
+      .get(id) as ApprovalRow | undefined;
+    return row ? rowToApproval(row) : null;
+  }
+
   async update(id: string, patch: Partial<Approval>): Promise<void> {
     const assignments: string[] = [];
     const values: SQLInputValue[] = [];

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import * as assert from "node:assert/strict";
 
 import { OpenAIModel } from "./openai-model.js";
-import type { LlmPlannerModelRequest } from "./planner.js";
+import type { LlmPlannerModelRequest } from "./model-types.js";
 
 function makeRequest(): LlmPlannerModelRequest {
   return {
@@ -46,9 +46,40 @@ test("OpenAIModel includes tool effects in the system prompt", async () => {
 
     const parsed = JSON.parse(capturedBody) as { messages: Array<{ role: string; content: string }> };
     const systemPrompt = parsed.messages.find((message) => message.role === "system")?.content ?? "";
+    assert.match(systemPrompt, /你是一个有帮助的 AI 代理/);
     assert.match(systemPrompt, /write_text_file/);
     assert.match(systemPrompt, /workspaceMutation=true/);
     assert.match(systemPrompt, /validationMode=all/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("OpenAIModel retries once with a repair prompt after malformed output", async () => {
+  const model = new OpenAIModel({ apiKey: "test-key", baseURL: "https://example.invalid/v1", model: "fake-model" });
+  const requestBodies: string[] = [];
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    requestBodies.push(String(init?.body ?? ""));
+    const body = requestBodies.length === 1
+      ? { choices: [{ message: { content: "I think you should call the tool now" } }] }
+      : { choices: [{ message: { content: JSON.stringify({ kind: "finish", content: "done" }) } }] };
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  try {
+    const result = await model.generateDecision(makeRequest());
+    assert.equal(result.action.kind, "finish");
+    assert.equal(requestBodies.length, 2);
+
+    const repairedRequest = JSON.parse(requestBodies[1] ?? "{}") as { messages: Array<{ role: string; content: string }> };
+    const lastMessage = repairedRequest.messages.at(-1)?.content ?? "";
+    assert.match(lastMessage, /请只返回一个合法的 JSON 对象/);
+    assert.match(lastMessage, /上一条回复不符合 agent 运行时要求/);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -365,6 +396,79 @@ test("OpenAIModel includes multiline diff summary in validation repair guidance"
     assert.match(repairGuidance, /Expected value: \{/);
     assert.match(repairGuidance, /Actual value: \{/);
     assert.match(repairGuidance, /Mismatched paths: status \(expected "done", received "pending"\), count \(expected 3, received 2\)/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("OpenAIModel includes exhausted repair state and last strategy in validation guidance", async () => {
+  const model = new OpenAIModel({ apiKey: "test-key", baseURL: "https://example.invalid/v1", model: "fake-model" });
+  let capturedBody = "";
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    capturedBody = String(init?.body ?? "");
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ kind: "finish", content: "done" }) } }] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  try {
+    const result = await model.generateDecision({
+      ...makeRequest(),
+      workingMemory: {
+        step: 9,
+        lastActionKind: "tool_call",
+        lastToolName: "run_validation",
+        validationFailure: {
+          mode: "typecheck",
+          failingCommands: ["typecheck"],
+          summary: "Validation typecheck failed.",
+          stderrSnippet: "src/app.ts:1:7 - error TS2322",
+          suspectFile: "src/app.ts",
+          suspectLine: 1,
+        },
+        repairAttempt: {
+          suspectFile: "src/app.ts",
+          validationFailureCount: 2,
+          editAttemptCount: 1,
+          exhausted: true,
+          lastStrategy: "patch_text_file",
+          lastPatchSignature: JSON.stringify({
+            tool: "patch_text_file",
+            path: "src/app.ts",
+            oldString: "const value: number = \"123\";",
+            newString: "const value: number = 123;",
+          }),
+          triedStrategies: ["patch_text_file", "synthesized import/export style fix"],
+          triedSuspectPaths: ["src/app.ts", "src/api.ts"],
+          triedStrategyPaths: ["patch_text_file@src/app.ts", "synthesized import/export style fix@src/api.ts"],
+          exhaustedSearchQuery: "fetchUser",
+          exhaustedSearchCandidatePaths: ["src/services/user-api.ts"],
+          exhaustedReadCandidatePaths: ["src/services/user-api.ts"],
+        },
+      },
+    });
+    assert.equal(result.action.kind, "finish");
+
+    const parsed = JSON.parse(capturedBody) as { messages: Array<{ role: string; content: string }> };
+    const repairGuidance = parsed.messages.find((message) => message.content.includes("Validation repair guidance:"))?.content ?? "";
+    assert.match(repairGuidance, /validationFailureCount=2, editAttemptCount=1, exhausted=true/);
+    assert.match(repairGuidance, /Last attempted deterministic repair strategy: patch_text_file/);
+    assert.match(repairGuidance, /Last attempted patch signature:/);
+    assert.match(repairGuidance, /Tried deterministic repair strategies: patch_text_file, synthesized import\/export style fix/);
+    assert.match(repairGuidance, /Tried deterministic suspect paths: src\/app\.ts, src\/api\.ts/);
+    assert.match(repairGuidance, /Tried deterministic strategy\/path pairs: patch_text_file@src\/app\.ts, synthesized import\/export style fix@src\/api\.ts/);
+    assert.match(repairGuidance, /Exhausted-cycle search query: fetchUser/);
+    assert.match(repairGuidance, /Exhausted-cycle ranked search candidates: src\/services\/user-api\.ts/);
+    assert.match(repairGuidance, /Exhausted-cycle read search candidates: src\/services\/user-api\.ts/);
+    assert.match(repairGuidance, /Do not repeat the same deterministic patch_text_file edit/);
+    assert.match(repairGuidance, /prefer reading and considering that related file before final fail/);
+    assert.match(repairGuidance, /use search_workspace before final fail to find related symbol\/module candidates/);
+    assert.match(repairGuidance, /prefer reading a narrow non-node_modules, non-test candidate/);
+    assert.match(repairGuidance, /after direct suspect paths and searched candidates are exhausted/);
+    assert.match(repairGuidance, /Avoid immediately repeating a deterministic strategy\/path pair/);
   } finally {
     globalThis.fetch = originalFetch;
   }

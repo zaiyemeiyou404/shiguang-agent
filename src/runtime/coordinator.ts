@@ -14,6 +14,7 @@ export class RuntimeCoordinator {
   ) {}
 
   async handle(cmd: RunLifecycleCommand): Promise<void> {
+    // coordinator 只维护 run 生命周期和事件落库，不参与 planner/dispatcher 细节。
     switch (cmd.type) {
       case "start": {
         const now = new Date();

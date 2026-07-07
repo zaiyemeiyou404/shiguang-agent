@@ -1,4 +1,4 @@
-import type { Tool, ToolDescriptor } from "./types.js";
+import type { Tool, ToolDescriptor, ToolExecutionContext } from "./types.js";
 
 export class ToolRegistry {
   private tools = new Map<string, Tool>();
@@ -15,11 +15,11 @@ export class ToolRegistry {
     return Array.from(this.tools.values()).map((t) => t.descriptor);
   }
 
-  async invoke(name: string, input: unknown): Promise<unknown> {
+  async invoke(name: string, input: unknown, context?: ToolExecutionContext): Promise<unknown> {
     const tool = this.tools.get(name);
     if (!tool) {
       throw new Error(`Tool not found: ${name}`);
     }
-    return tool.execute(input);
+    return tool.execute(input, context);
   }
 }

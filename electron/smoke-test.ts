@@ -6,6 +6,7 @@ import { InMemoryEventSink } from "../dist/runtime/event-sink.js";
 import { RulePlanner } from "../dist/brain/planner.js";
 import { createReadTextFileTool } from "../dist/tools/builtins/read-text-file.js";
 import { createSearchWorkspaceTool } from "../dist/tools/builtins/search-workspace.js";
+import { createWriteTextFileTool } from "../dist/tools/builtins/write-text-file.js";
 
 const tmpDir = mkdtempSync(join(tmpdir(), "shiguang-smoke-"));
 const storePath = join(tmpDir, "shiguang-store.json");
@@ -200,6 +201,86 @@ function loadStoreData(): { sessions: unknown[]; runs: unknown[]; events: unknow
   const model = new OpenAIModel({ apiKey: "" });
   assert(model.isConfigured === false, "Should not be configured without apiKey");
   console.log("  PASS (no crash on missing credentials)");
+
+  // --- Test 15: approval flow resumes automatically from approved tool state ---
+  console.log("\n[Test 15] approval flow resume path...");
+  const approvalSink = new InMemoryEventSink();
+  const approvalAgent = new Agent({
+    eventSink: approvalSink,
+    planner: {
+      async decide(input) {
+        if (input.history.length > 0) {
+          return {
+            action: { kind: "respond", content: "approved write completed" },
+            reasoning: "Approved tool already ran; now confirm completion.",
+          };
+        }
+        return {
+          action: {
+            kind: "tool_call",
+            toolName: "write_text_file",
+            toolInput: { path: "approved.txt", content: "approved" },
+          },
+          reasoning: "Need to write the requested file first.",
+        };
+      },
+    },
+    tools: [createWriteTextFileTool(wsDir), createReadTextFileTool(wsDir)],
+  });
+  const approvalTask = {
+    id: "task_approval",
+    sessionId: "sess_approval",
+    parentTaskId: null,
+    title: "Write an approved file",
+    description: null,
+    status: "in_progress" as const,
+    priority: 0,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+
+  const approvalOutput = await approvalAgent.run({
+    runId: "run_approval_test",
+    userMessage: "Write approved.txt with the text approved and then confirm completion.",
+    contextInput: {
+      task: approvalTask,
+      recentRuns: [],
+      linkedArtifacts: [],
+      memories: [],
+      workspaceRoot: wsDir,
+    },
+  });
+
+  assert(approvalOutput.state.stopReason === "needs_approval", "Run should stop for approval");
+  const approvalEvents = await approvalSink.list("run_approval_test");
+  const approvalRequest = approvalEvents.find((event) => event.kind === "approval_request");
+  assert(Boolean(approvalRequest), "Should emit approval_request event");
+  const requestPayload = approvalRequest?.payload as { request?: { toolName?: string; toolInput?: unknown } } | undefined;
+  assert(requestPayload?.request?.toolName === "write_text_file", "Approval request should target write_text_file");
+
+  const resumedOutput = await approvalAgent.resumeAfterApproval({
+    runId: "run_approval_test",
+    userMessage: "Write approved.txt with the text approved and then confirm completion.",
+    approvedAction: {
+      toolName: requestPayload?.request?.toolName ?? "write_text_file",
+      toolInput: requestPayload?.request?.toolInput,
+    },
+    contextInput: {
+      task: approvalTask,
+      recentRuns: [],
+      linkedArtifacts: [],
+      memories: [],
+      workspaceRoot: wsDir,
+    },
+  });
+
+  const approvedFile = readFileSync(join(wsDir, "approved.txt"), "utf-8");
+  assert(approvedFile === "approved", "Approved file should be written during resume");
+  assert(resumedOutput.state.steps >= 2, "Resumed run should continue beyond the approved tool step");
+  assert(resumedOutput.state.history[0]?.metadata?.toolName === "write_text_file", "Seeded history should begin with approved tool result");
+  const resumedEvents = await approvalSink.list("run_approval_test");
+  assert(resumedEvents.filter((event) => event.kind === "tool_call").length >= 1, "Resume path should emit tool_call events");
+  console.log("  PASS");
 
   // --- Cleanup ---
   rmSync(tmpDir, { recursive: true, force: true });

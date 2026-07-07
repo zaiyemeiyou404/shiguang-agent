@@ -56,8 +56,10 @@ export interface MemoryRepository {
 
 export interface ApprovalRepository {
   create(approval: Approval): Promise<void>;
+  get(id: string): Promise<Approval | null>;
   update(id: string, patch: Partial<Approval>): Promise<void>;
   listPending(runId: string): Promise<Approval[]>;
+  listBySession(sessionId: string): Promise<Approval[]>;
 }
 
 export interface Repositories {

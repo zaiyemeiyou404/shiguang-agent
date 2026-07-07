@@ -1,12 +1,17 @@
 import { app } from "electron";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, normalize, resolve } from "node:path";
 
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_MODEL = "gpt-4o-mini";
 const DEFAULT_MAX_TOKENS = 2048;
 
+export type ProviderProtocol = "openai-compatible" | "anthropic" | "gemini";
+export type ProviderAuthMode = "api_key" | "none";
+
 interface ProviderConfigFile {
+  type?: ProviderProtocol;
+  authMode?: ProviderAuthMode;
   baseURL?: string;
   apiKey?: string;
   apiKeyEnv?: string;
@@ -26,6 +31,8 @@ interface DesktopConfigFile {
 
 export interface ResolvedLlmConfig {
   provider: string;
+  providerType: ProviderProtocol;
+  authMode: ProviderAuthMode;
   baseURL: string;
   apiKey: string;
   model: string;
@@ -36,6 +43,103 @@ export interface ResolvedDesktopConfig {
   configPath: string;
   workspaceRoot: string;
   llm: ResolvedLlmConfig;
+}
+
+export interface DesktopProviderSettings {
+  type?: ProviderProtocol;
+  authMode?: ProviderAuthMode;
+  baseURL?: string;
+  apiKey?: string;
+  apiKeyEnv?: string;
+  model?: string;
+  maxTokens?: number;
+}
+
+export interface DesktopSettings {
+  configPath: string;
+  workspaceRoot: string;
+  llm: {
+    provider: string;
+    model?: string;
+    maxTokens?: number;
+  };
+  providers: Record<string, DesktopProviderSettings>;
+}
+
+function defaultProviderCatalog(): Record<string, DesktopProviderSettings> {
+  return {
+    deepseek: {
+      type: "openai-compatible",
+      authMode: "api_key",
+      baseURL: "https://api.deepseek.com/v1",
+      apiKeyEnv: "DEEPSEEK_API_KEY",
+      model: "deepseek-chat",
+      maxTokens: 4096,
+    },
+    openai: {
+      type: "openai-compatible",
+      authMode: "api_key",
+      baseURL: "https://api.openai.com/v1",
+      apiKeyEnv: "OPENAI_API_KEY",
+      model: "gpt-5",
+      maxTokens: 4096,
+    },
+    "codex-api": {
+      type: "openai-compatible",
+      authMode: "api_key",
+      baseURL: "https://api.openai.com/v1",
+      apiKeyEnv: "OPENAI_API_KEY",
+      model: "gpt-5",
+      maxTokens: 4096,
+    },
+    openrouter: {
+      type: "openai-compatible",
+      authMode: "api_key",
+      baseURL: "https://openrouter.ai/api/v1",
+      apiKeyEnv: "OPENROUTER_API_KEY",
+      model: "openai/gpt-5",
+      maxTokens: 4096,
+    },
+    siliconflow: {
+      type: "openai-compatible",
+      authMode: "api_key",
+      baseURL: "https://api.siliconflow.cn/v1",
+      apiKeyEnv: "SILICONFLOW_API_KEY",
+      model: "deepseek-ai/DeepSeek-V3",
+      maxTokens: 4096,
+    },
+    ollama: {
+      type: "openai-compatible",
+      authMode: "none",
+      baseURL: "http://127.0.0.1:11434/v1",
+      apiKey: "ollama",
+      model: "qwen2.5-coder:14b",
+      maxTokens: 4096,
+    },
+    anthropic: {
+      type: "anthropic",
+      authMode: "api_key",
+      baseURL: "https://api.anthropic.com/v1",
+      apiKeyEnv: "ANTHROPIC_API_KEY",
+      model: "claude-3-5-sonnet-latest",
+      maxTokens: 4096,
+    },
+    gemini: {
+      type: "gemini",
+      authMode: "api_key",
+      baseURL: "https://generativelanguage.googleapis.com/v1beta",
+      apiKeyEnv: "GEMINI_API_KEY",
+      model: "gemini-2.5-pro",
+      maxTokens: 4096,
+    },
+  };
+}
+
+function mergeProviderCatalog(fileProviders?: Record<string, ProviderConfigFile>): Record<string, DesktopProviderSettings> {
+  return {
+    ...defaultProviderCatalog(),
+    ...(fileProviders ?? {}),
+  };
 }
 
 export function getDesktopConfigPath(): string {
@@ -49,29 +153,36 @@ export function loadDesktopConfig(): ResolvedDesktopConfig {
   const fileConfig = readConfigFile(configPath);
   const providerName = process.env.SHIGUANG_LLM_PROVIDER
     ?? fileConfig.llm?.provider
-    ?? "openai-compatible";
-  const providerConfig = fileConfig.providers?.[providerName];
+    ?? "openai";
+  const providerCatalog = mergeProviderCatalog(fileConfig.providers);
+  const providerConfig = providerCatalog[providerName] ?? {};
+  const providerType = normalizeProviderProtocol(providerConfig.type ?? fileConfig.llm?.type);
+  const authMode = providerConfig.authMode ?? fileConfig.llm?.authMode ?? "api_key";
 
   const llm: ResolvedLlmConfig = {
     provider: providerName,
+    providerType,
+    authMode,
     baseURL: normalizeBaseURL(
       process.env.SHIGUANG_LLM_BASE_URL
-      ?? providerConfig?.baseURL
+      ?? providerConfig.baseURL
       ?? fileConfig.llm?.baseURL
       ?? DEFAULT_BASE_URL,
     ),
-    apiKey: process.env.SHIGUANG_LLM_API_KEY
-      ?? readProviderApiKey(providerConfig)
-      ?? fileConfig.llm?.apiKey
-      ?? "",
+    apiKey: authMode === "none"
+      ? providerConfig.apiKey ?? ""
+      : process.env.SHIGUANG_LLM_API_KEY
+        ?? readProviderApiKey(providerConfig)
+        ?? fileConfig.llm?.apiKey
+        ?? "",
     model: process.env.SHIGUANG_LLM_MODEL
       ?? fileConfig.llm?.model
-      ?? providerConfig?.model
+      ?? providerConfig.model
       ?? DEFAULT_MODEL,
     maxTokens: normalizeMaxTokens(
       process.env.SHIGUANG_LLM_MAX_TOKENS
       ?? fileConfig.llm?.maxTokens
-      ?? providerConfig?.maxTokens
+      ?? providerConfig.maxTokens
       ?? DEFAULT_MAX_TOKENS,
     ),
   };
@@ -83,6 +194,38 @@ export function loadDesktopConfig(): ResolvedDesktopConfig {
   ));
 
   return { configPath, workspaceRoot, llm };
+}
+
+export function getDesktopSettings(): DesktopSettings {
+  const configPath = getDesktopConfigPath();
+  const fileConfig = readConfigFile(configPath);
+  return {
+    configPath,
+    workspaceRoot: fileConfig.workspaceRoot ?? process.cwd(),
+    llm: {
+      provider: fileConfig.llm?.provider ?? "openai",
+      ...(fileConfig.llm?.model ? { model: fileConfig.llm.model } : {}),
+      ...(typeof fileConfig.llm?.maxTokens === "number" ? { maxTokens: fileConfig.llm.maxTokens } : {}),
+    },
+    providers: mergeProviderCatalog(fileConfig.providers),
+  };
+}
+
+export function saveDesktopSettings(settings: DesktopSettings): DesktopSettings {
+  ensureDesktopConfigDirectory();
+  const configPath = getDesktopConfigPath();
+  const nextConfig: DesktopConfigFile = {
+    workspaceRoot: settings.workspaceRoot,
+    llm: {
+      provider: settings.llm.provider,
+      ...(settings.llm.model ? { model: settings.llm.model } : {}),
+      ...(typeof settings.llm.maxTokens === "number" ? { maxTokens: settings.llm.maxTokens } : {}),
+    },
+    providers: settings.providers,
+  };
+  writeFileSync(configPath, `${JSON.stringify(nextConfig, null, 2)}
+`, "utf8");
+  return { ...settings, configPath };
 }
 
 function readConfigFile(configPath: string): DesktopConfigFile {
@@ -111,6 +254,13 @@ function readProviderApiKey(providerConfig: ProviderConfigFile | undefined): str
 
 function normalizeBaseURL(value: string): string {
   return value.replace(/\/+$/, "");
+}
+
+function normalizeProviderProtocol(value: ProviderProtocol | undefined): ProviderProtocol {
+  if (value === "anthropic" || value === "gemini" || value === "openai-compatible") {
+    return value;
+  }
+  return "openai-compatible";
 }
 
 function normalizeMaxTokens(value: string | number): number {

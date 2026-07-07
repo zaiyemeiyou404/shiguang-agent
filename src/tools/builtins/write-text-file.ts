@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve, normalize, relative } from "node:path";
-import type { Tool } from "../types.js";
+import type { Tool, ToolExecutionContext } from "../types.js";
 
 export interface WriteTextFileInput {
   path: string;
@@ -34,6 +34,12 @@ function resolvePath(workspaceRoot: string, userPath: string): string {
   return candidate;
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new DOMException("Run cancelled", "AbortError");
+  }
+}
+
 export function createWriteTextFileTool(workspaceRoot: string): Tool {
   return {
     descriptor: {
@@ -51,8 +57,11 @@ export function createWriteTextFileTool(workspaceRoot: string): Tool {
         workspaceMutation: true,
         validationMode: "all",
       },
+      risk: "write",
+      requiresApproval: true,
+      capability: "fs.write",
     },
-    async execute(input: unknown): Promise<WriteTextFileOutput> {
+    async execute(input: unknown, context?: ToolExecutionContext): Promise<WriteTextFileOutput> {
       const { path, content } = resolveInput(input);
       const fullPath = resolvePath(workspaceRoot, path);
       mkdirSync(dirname(fullPath), { recursive: true });

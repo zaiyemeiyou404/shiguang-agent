@@ -1,4 +1,4 @@
-import type { LlmPlannerModel, LlmPlannerModelRequest, LlmPlannerModelResponse } from "./planner.js";
+import type { LlmPlannerModel, LlmPlannerModelRequest, LlmPlannerModelResponse } from "./model-types.js";
 
 export class EchoDecisionModel implements LlmPlannerModel {
   async generateDecision(request: LlmPlannerModelRequest): Promise<LlmPlannerModelResponse> {

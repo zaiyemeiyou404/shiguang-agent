@@ -29,7 +29,10 @@ export class InMemoryEventSink implements EventSink {
 }
 
 export class RepositoryEventSink implements EventSink {
-  constructor(private readonly repository: RunEventRepository) {}
+  constructor(
+    private readonly repository: RunEventRepository,
+    private readonly onRecord?: (event: RunEvent) => void | Promise<void>,
+  ) {}
 
   async record(runId: string, kind: RunEventKind, payload: unknown): Promise<RunEvent> {
     const existing = await this.repository.listByRun(runId);
@@ -44,6 +47,7 @@ export class RepositoryEventSink implements EventSink {
     };
 
     await this.repository.create(event);
+    await this.onRecord?.(event);
     return event;
   }
 

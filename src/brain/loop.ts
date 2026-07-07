@@ -3,20 +3,25 @@ import type {
   BrainDecision,
   ActionResult,
   ActionResultCategory,
+  PlannerPhase,
   WorkingMemorySnapshot,
 } from "./types.js";
 import type { Planner } from "./planner.js";
 import type { Policy } from "./policy.js";
 import type { Evaluator, LoopStopReason } from "./evaluator.js";
-import type { ValidationModeHint } from "../tools/types.js";
+import type { ToolExecutionContext, ValidationModeHint } from "../tools/types.js";
 
 export interface LoopDeps {
   planner: Planner;
   policy: Policy;
   dispatcher: {
-    dispatch(decision: BrainDecision): Promise<ActionResult>;
+    dispatch(decision: BrainDecision, context?: ToolExecutionContext): Promise<ActionResult>;
   };
   evaluator: Evaluator;
+}
+
+export interface LoopContext {
+  signal?: AbortSignal;
 }
 
 export interface LoopState {
@@ -29,10 +34,22 @@ export interface LoopState {
   stopSummary: string | null;
 }
 
+const MAX_REPAIR_VALIDATION_FAILURES_PER_SUSPECT = 2;
+const MAX_REPAIR_ATTEMPT_HISTORY = 6;
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new DOMException("Run cancelled", "AbortError");
+  }
+}
+
 function createInitialWorkingMemory(input: BrainInput): WorkingMemorySnapshot {
-  return input.workingMemory ?? {
+  return {
+    // 所有 run 默认从 investigate 起步；resume 时再由外部注入已有 workingMemory 覆盖。
+    phase: "investigate",
     step: 0,
     lastActionKind: null,
+    ...input.workingMemory,
   };
 }
 
@@ -66,9 +83,12 @@ function updateWorkingMemory(
     && result.metadata.retryable === true
     && typeof toolName === "string";
   const validationFailure = inferValidationFailure(result);
+  const repairAttempt = updateRepairAttempt(previous, result, validationFailure);
 
   return {
     step,
+    // phase 由“刚执行完的结果”反推，而不是由 planner 口头声明，避免状态漂移。
+    phase: inferNextPhase(previous.phase ?? "investigate", result, validationFailure, repairAttempt),
     lastActionKind: result.action.kind,
     ...(toolName ? { lastToolName: toolName } : {}),
     lastObservation: {
@@ -82,6 +102,7 @@ function updateWorkingMemory(
         : previous.validationFailure
           ? { validationFailure: previous.validationFailure }
           : {}),
+    ...(repairAttempt ? { repairAttempt } : {}),
     ...(isRetryableToolError
       ? {
           retryableToolErrors: {
@@ -93,6 +114,298 @@ function updateWorkingMemory(
         }
       : {}),
   };
+}
+
+function inferNextPhase(
+  previousPhase: PlannerPhase,
+  result: ActionResult,
+  validationFailure: WorkingMemorySnapshot["validationFailure"],
+  repairAttempt: WorkingMemorySnapshot["repairAttempt"],
+): PlannerPhase {
+  // finish/fail/respond 都意味着当前回合已经可以进入对外总结阶段。
+  if (result.action.kind === "finish" || result.action.kind === "fail" || result.action.kind === "respond") {
+    return "summarize";
+  }
+
+  if (result.action.kind !== "tool_call") {
+    return previousPhase;
+  }
+
+  const toolName = result.metadata?.toolName ?? result.action.toolName;
+  if (toolName === "run_validation") {
+    // validation 成功则总结；失败但有 suspectFile 则进入 edit / exhausted investigate。
+    if (validationFailure?.suspectFile) return repairAttempt?.exhausted ? "investigate" : "edit";
+    if (validationFailure) return "investigate";
+    return result.ok ? "summarize" : "validate";
+  }
+
+  if (result.metadata?.workspaceMutation === true) {
+    return "validate";
+  }
+
+  if (toolName === "search_workspace") {
+    return "investigate";
+  }
+
+  if (toolName === "read_text_file" && repairAttempt?.exhausted === true) {
+    return "investigate";
+  }
+
+  if (result.ok && result.metadata?.category === "tool_observation") {
+    return "summarize";
+  }
+
+  return previousPhase;
+}
+
+function updateRepairAttempt(
+  previous: WorkingMemorySnapshot,
+  result: ActionResult,
+  validationFailure: WorkingMemorySnapshot["validationFailure"],
+): WorkingMemorySnapshot["repairAttempt"] | undefined {
+  const toolName = result.metadata?.toolName ?? result.action.toolName;
+
+  if (toolName === "run_validation") {
+    // repairAttempt 以 suspectFile 为主键累计，避免把不同故障混成一条修复历史。
+    if (!validationFailure?.suspectFile) return undefined;
+
+    const previousForSameSuspect = previous.repairAttempt?.suspectFile === validationFailure.suspectFile
+      ? previous.repairAttempt
+      : undefined;
+    const validationFailureCount = (previousForSameSuspect?.validationFailureCount ?? 0) + 1;
+    const editAttemptCount = previousForSameSuspect?.editAttemptCount ?? 0;
+
+    return {
+      suspectFile: validationFailure.suspectFile,
+      validationFailureCount,
+      editAttemptCount,
+      exhausted: validationFailureCount >= MAX_REPAIR_VALIDATION_FAILURES_PER_SUSPECT,
+      ...(previousForSameSuspect?.lastStrategy ? { lastStrategy: previousForSameSuspect.lastStrategy } : {}),
+      ...(previousForSameSuspect?.lastPatchSignature ? { lastPatchSignature: previousForSameSuspect.lastPatchSignature } : {}),
+      ...(previousForSameSuspect?.triedStrategies ? { triedStrategies: previousForSameSuspect.triedStrategies } : {}),
+      ...(previousForSameSuspect?.triedSuspectPaths ? { triedSuspectPaths: previousForSameSuspect.triedSuspectPaths } : {}),
+      ...(previousForSameSuspect?.triedStrategyPaths ? { triedStrategyPaths: previousForSameSuspect.triedStrategyPaths } : {}),
+      ...(previousForSameSuspect?.exhaustedSearchQuery ? { exhaustedSearchQuery: previousForSameSuspect.exhaustedSearchQuery } : {}),
+      ...(previousForSameSuspect?.exhaustedSearchCandidatePaths ? { exhaustedSearchCandidatePaths: previousForSameSuspect.exhaustedSearchCandidatePaths } : {}),
+      ...(previousForSameSuspect?.exhaustedReadCandidatePaths ? { exhaustedReadCandidatePaths: previousForSameSuspect.exhaustedReadCandidatePaths } : {}),
+    };
+  }
+
+  if (toolName === "search_workspace") {
+    // exhausted 后的 search 不是普通搜索，而是在为“下一批候选 suspect”留痕。
+    const currentSuspect = previous.validationFailure?.suspectFile ?? previous.repairAttempt?.suspectFile;
+    if (!currentSuspect || previous.repairAttempt?.exhausted !== true) return previous.repairAttempt;
+    const previousForSameSuspect = previous.repairAttempt?.suspectFile === currentSuspect
+      ? previous.repairAttempt
+      : undefined;
+    if (!previousForSameSuspect) return previous.repairAttempt;
+
+    const toolInput = result.action.toolInput as { query?: unknown } | null;
+    const query = typeof toolInput?.query === "string" ? toolInput.query : undefined;
+    const searchCandidatePaths = inferSearchResultPaths(result);
+
+    return {
+      ...previousForSameSuspect,
+      ...(query ? { exhaustedSearchQuery: query } : {}),
+      ...(searchCandidatePaths.length > 0 ? { exhaustedSearchCandidatePaths: searchCandidatePaths.slice(0, MAX_REPAIR_ATTEMPT_HISTORY) } : {}),
+    };
+  }
+
+  if (toolName === "read_text_file" && previous.repairAttempt?.exhausted === true) {
+    // exhausted 阶段读过哪些候选路径也要记住，避免反复读同一批文件。
+    const readPath = inferReadResultPath(result);
+    const currentSuspect = previous.validationFailure?.suspectFile ?? previous.repairAttempt?.suspectFile;
+    if (!readPath || !currentSuspect) return previous.repairAttempt;
+    const previousForSameSuspect = previous.repairAttempt?.suspectFile === currentSuspect
+      ? previous.repairAttempt
+      : undefined;
+    if (!previousForSameSuspect) return previous.repairAttempt;
+
+    return {
+      ...previousForSameSuspect,
+      exhaustedReadCandidatePaths: compactAppend(previousForSameSuspect.exhaustedReadCandidatePaths, readPath),
+    };
+  }
+
+  const mutationPath = inferWorkspaceMutationPath(result);
+  if (mutationPath) {
+    // 只有改到了 suspect 或其候选文件，才把这次写操作记入 repairAttempt。
+    const currentSuspect = previous.validationFailure?.suspectFile ?? previous.repairAttempt?.suspectFile;
+    if (!currentSuspect) return undefined;
+    if (!isRepairSuspectPath(previous.validationFailure, mutationPath)
+      && !previous.repairAttempt?.exhaustedSearchCandidatePaths?.includes(mutationPath)) return undefined;
+
+    const previousForSameSuspect = previous.repairAttempt?.suspectFile === currentSuspect
+      ? previous.repairAttempt
+      : undefined;
+
+    return {
+      suspectFile: currentSuspect,
+      validationFailureCount: previousForSameSuspect?.validationFailureCount ?? 0,
+      editAttemptCount: (previousForSameSuspect?.editAttemptCount ?? 0) + 1,
+      exhausted: previousForSameSuspect?.exhausted ?? false,
+      ...(previousForSameSuspect?.lastStrategy ? { lastStrategy: previousForSameSuspect.lastStrategy } : {}),
+      ...(previousForSameSuspect?.lastPatchSignature ? { lastPatchSignature: previousForSameSuspect.lastPatchSignature } : {}),
+      ...(previousForSameSuspect?.triedStrategies ? { triedStrategies: previousForSameSuspect.triedStrategies } : {}),
+      ...(previousForSameSuspect?.triedSuspectPaths ? { triedSuspectPaths: previousForSameSuspect.triedSuspectPaths } : {}),
+      ...(previousForSameSuspect?.triedStrategyPaths ? { triedStrategyPaths: previousForSameSuspect.triedStrategyPaths } : {}),
+      ...(previousForSameSuspect?.exhaustedSearchQuery ? { exhaustedSearchQuery: previousForSameSuspect.exhaustedSearchQuery } : {}),
+      ...(previousForSameSuspect?.exhaustedSearchCandidatePaths ? { exhaustedSearchCandidatePaths: previousForSameSuspect.exhaustedSearchCandidatePaths } : {}),
+      ...(previousForSameSuspect?.exhaustedReadCandidatePaths ? { exhaustedReadCandidatePaths: previousForSameSuspect.exhaustedReadCandidatePaths } : {}),
+      ...inferRepairPatchAttempt(result, mutationPath, previous.validationFailure, previousForSameSuspect),
+    };
+  }
+
+  return previous.repairAttempt;
+}
+
+function inferRepairPatchAttempt(
+  result: ActionResult,
+  mutationPath: string,
+  validationFailure: WorkingMemorySnapshot["validationFailure"],
+  previousRepairAttempt: WorkingMemorySnapshot["repairAttempt"],
+): Pick<NonNullable<WorkingMemorySnapshot["repairAttempt"]>, "lastStrategy" | "lastPatchSignature" | "triedStrategies" | "triedSuspectPaths" | "triedStrategyPaths"> {
+  const toolName = result.metadata?.toolName ?? result.action.toolName;
+  const toolInput = result.action.toolInput as Record<string, unknown> | null;
+  const lastStrategy = describeRepairStrategy(validationFailure, toolName);
+
+  if (toolName === "patch_text_file") {
+    const oldString = typeof toolInput?.oldString === "string" ? toolInput.oldString : undefined;
+    const newString = typeof toolInput?.newString === "string" ? toolInput.newString : undefined;
+    if (oldString && newString) {
+      const lastPatchSignature = createPatchSignature(mutationPath, oldString, newString);
+      return {
+        lastStrategy,
+        lastPatchSignature,
+        ...inferCompactAttemptHistory(previousRepairAttempt, lastStrategy, mutationPath),
+      };
+    }
+  }
+
+  if (toolName === "write_text_file") {
+    const content = typeof toolInput?.content === "string" ? toolInput.content : undefined;
+    if (typeof content === "string") {
+      const lastPatchSignature = createWriteSignature(mutationPath, content);
+      return {
+        lastStrategy,
+        lastPatchSignature,
+        ...inferCompactAttemptHistory(previousRepairAttempt, lastStrategy, mutationPath),
+      };
+    }
+  }
+
+  return {};
+}
+
+function inferCompactAttemptHistory(
+  previousRepairAttempt: WorkingMemorySnapshot["repairAttempt"],
+  lastStrategy: string,
+  mutationPath: string,
+): Pick<NonNullable<WorkingMemorySnapshot["repairAttempt"]>, "triedStrategies" | "triedSuspectPaths" | "triedStrategyPaths"> {
+  if (previousRepairAttempt?.exhausted !== true
+    && !previousRepairAttempt?.triedStrategies
+    && !previousRepairAttempt?.triedSuspectPaths
+    && !previousRepairAttempt?.triedStrategyPaths) {
+    return {};
+  }
+
+  return {
+    triedStrategies: compactAppend(previousRepairAttempt?.triedStrategies, lastStrategy),
+    triedSuspectPaths: compactAppend(previousRepairAttempt?.triedSuspectPaths, mutationPath),
+    triedStrategyPaths: compactAppend(previousRepairAttempt?.triedStrategyPaths, createStrategyPathKey(lastStrategy, mutationPath)),
+  };
+}
+
+function isRepairSuspectPath(
+  validationFailure: WorkingMemorySnapshot["validationFailure"],
+  path: string,
+): boolean {
+  return inferRepairSuspectPaths(validationFailure).includes(path);
+}
+
+function inferRepairSuspectPaths(validationFailure: WorkingMemorySnapshot["validationFailure"]): string[] {
+  const paths: string[] = [];
+  if (validationFailure?.suspectFile) paths.push(validationFailure.suspectFile);
+  if (validationFailure?.suspectImportPath) {
+    paths.push(resolveRelatedImportPath(validationFailure.suspectFile, validationFailure.suspectImportPath));
+  }
+  return uniqueCompact(paths);
+}
+
+function resolveRelatedImportPath(suspectFile: string | undefined, importPath: string): string {
+  if (!suspectFile || !importPath.startsWith(".")) return importPath;
+  const directory = suspectFile.includes("/") ? suspectFile.slice(0, suspectFile.lastIndexOf("/")) : "";
+  return normalizePath(`${directory}/${importPath}`);
+}
+
+function normalizePath(path: string): string {
+  const absolute = path.startsWith("/");
+  const parts: string[] = [];
+  for (const part of path.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      parts.pop();
+      continue;
+    }
+    parts.push(part);
+  }
+  return `${absolute ? "/" : ""}${parts.join("/")}`;
+}
+
+function createStrategyPathKey(strategy: string, path: string): string {
+  return `${strategy}@${path}`;
+}
+
+function compactAppend(values: string[] | undefined, value: string): string[] {
+  return uniqueCompact([...(values ?? []), value]).slice(-MAX_REPAIR_ATTEMPT_HISTORY);
+}
+
+function inferReadResultPath(result: ActionResult): string | null {
+  if (result.action.kind !== "tool_call" || result.action.toolName !== "read_text_file" || result.ok !== true) return null;
+  const output = result.output as { path?: unknown } | null;
+  return typeof output?.path === "string" && output.path.length > 0 ? output.path : null;
+}
+
+function inferSearchResultPaths(result: ActionResult): string[] {
+  if (result.action.kind !== "tool_call" || result.action.toolName !== "search_workspace" || result.ok !== true) return [];
+  const output = result.output as { results?: Array<{ file?: unknown }> } | null;
+  const paths = Array.isArray(output?.results)
+    ? output.results.map((item) => item.file).filter((file): file is string => typeof file === "string" && file.length > 0)
+    : [];
+  return uniqueCompact(paths);
+}
+
+function uniqueCompact(values: string[]): string[] {
+  return values.filter((value, index) => value.length > 0 && values.indexOf(value) === index);
+}
+
+function describeRepairStrategy(
+  validationFailure: WorkingMemorySnapshot["validationFailure"],
+  fallback: string | undefined,
+): string {
+  if (validationFailure?.suspectErrorCode === "TS2322") return "synthesized TS2322 number-literal fix";
+  if (validationFailure?.suspectExportName && validationFailure.suspectImportStyle) return "synthesized import/export style fix";
+  if (validationFailure?.assertExpected && validationFailure.assertActual) return "synthesized assertion expected-value fix";
+  return fallback ?? "workspace mutation";
+}
+
+function createPatchSignature(path: string, oldString: string, newString: string): string {
+  return JSON.stringify({ tool: "patch_text_file", path, oldString, newString });
+}
+
+function createWriteSignature(path: string, content: string): string {
+  return JSON.stringify({ tool: "write_text_file", path, content });
+}
+
+function inferWorkspaceMutationPath(result: ActionResult): string | null {
+  if (result.action.kind !== "tool_call") return null;
+  if (result.ok !== true || result.metadata?.workspaceMutation !== true) return null;
+
+  const toolInput = result.action.toolInput as { path?: unknown } | null;
+  if (typeof toolInput?.path === "string" && toolInput.path.length > 0) return toolInput.path;
+
+  const output = result.output as { path?: unknown } | null;
+  return typeof output?.path === "string" && output.path.length > 0 ? output.path : null;
 }
 
 function inferValidationFailure(result: ActionResult): WorkingMemorySnapshot["validationFailure"] | undefined {
@@ -648,30 +961,44 @@ function inferGenericSuspectLocation(text: string): { file?: string; line?: numb
   };
 }
 
+export function applyActionResultToWorkingMemory(
+  previous: WorkingMemorySnapshot,
+  step: number,
+  result: ActionResult,
+): WorkingMemorySnapshot {
+  return updateWorkingMemory(previous, step, result);
+}
+
 export async function runLoop(
   input: BrainInput,
   deps: LoopDeps,
   maxSteps = 10,
+  context?: LoopContext,
 ): Promise<LoopState> {
+  const seededHistory = [...input.history];
+  const seededSteps = input.workingMemory?.step ?? seededHistory.length;
   const state: LoopState = {
-    steps: 0,
-    history: [],
+    steps: seededSteps,
+    history: seededHistory,
     workingMemory: createInitialWorkingMemory(input),
     lastDecision: null,
-    lastResult: null,
+    lastResult: seededHistory.length > 0 ? seededHistory[seededHistory.length - 1] ?? null : null,
     stopReason: null,
     stopSummary: null,
   };
-  input = { ...input, workingMemory: state.workingMemory };
+  input = { ...input, history: state.history, workingMemory: state.workingMemory };
 
-  for (let i = 0; i < maxSteps; i++) {
+  for (let i = seededSteps; i < maxSteps; i++) {
+    throwIfAborted(context?.signal);
     state.steps++;
 
-    const decision = await deps.planner.decide(input);
+    const decision = await deps.planner.decide(input, { signal: context?.signal });
     const approved = await deps.policy.check(decision);
     state.lastDecision = approved;
 
-    const result = await deps.dispatcher.dispatch(approved);
+    throwIfAborted(context?.signal);
+    const result = await deps.dispatcher.dispatch(approved, { signal: context?.signal });
+    throwIfAborted(context?.signal);
     state.lastResult = result;
     state.history.push(result);
     state.workingMemory = updateWorkingMemory(state.workingMemory, state.steps, result);
