@@ -1,0 +1,110 @@
+name: Desktop Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - 'feature/**'
+      - 'fix/**'
+      - 'ci/**'
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-desktop:
+    name: Build desktop (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: shiguang-agent-windows
+            artifact_globs: |
+              release/拾光 Agent Setup *.exe
+              release/win-unpacked/**
+          - os: ubuntu-latest
+            artifact_name: shiguang-agent-linux
+            artifact_globs: |
+              release/linux-unpacked/**
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Typecheck desktop
+        run: npm run desktop:typecheck
+
+      - name: Package Windows desktop
+        if: runner.os == 'Windows'
+        run: npm run desktop:package:win
+
+      - name: Package Linux desktop
+        if: runner.os == 'Linux'
+        run: npm run desktop:package
+
+      - name: Zip Windows unpacked app
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path 'release/win-unpacked/*' -DestinationPath 'release/win-unpacked.zip' -Force
+
+      - name: Zip Linux unpacked app
+        if: runner.os == 'Linux'
+        run: |
+          cd release
+          zip -r linux-unpacked.zip linux-unpacked
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            ${{ matrix.artifact_globs }}
+            release/win-unpacked.zip
+            release/linux-unpacked.zip
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build-desktop
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Flatten release files
+        shell: bash
+        run: |
+          mkdir -p release-files
+          find release-artifacts -type f \( \
+            -name '*.exe' -o \
+            -name 'win-unpacked.zip' -o \
+            -name 'linux-unpacked.zip' \
+          \) -exec cp {} release-files/ \;
+          ls -R release-files
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-files/*.exe
+            release-files/*.zip
+          generate_release_notes: true

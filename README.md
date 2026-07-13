@@ -460,3 +460,40 @@ Current limitation: the planner currently speaks the **OpenAI-compatible chat co
 ## Current Status
 
 v0.2.0 — Framework skeleton with real TypeScript contracts, a composition root, SQLite migration strings, an in-memory event sink, a context builder with budget trimming, and a read-only example filesystem plugin.
+
+## Desktop Release Notes
+
+当前仓库已包含可打包的 Electron 桌面端，给 GitHub 下载用户时请优先发布这些产物：
+
+- Windows 安装版：`拾光 Agent Setup 0.2.0.exe`
+- Windows 免安装版：`win-unpacked` 压缩包（解压后运行 `拾光 Agent.exe`）
+- Linux 免安装版：`linux-unpacked` 压缩包（解压后运行 `./shiguang-agent`）
+
+### 首次启动后需要配置
+
+应用会在 Electron `userData` 目录写入 `shiguang.config.json`，建议用户至少配置：
+
+1. `workspaceRoot`
+2. 一个可用的 provider API Key
+3. 对应 `provider` 和 `model`
+
+内置 provider 目录当前包括：`deepseek`、`openai`、`codex-api`、`openrouter`、`siliconflow`、`ollama`、`anthropic`、`gemini`。
+
+### 本轮已修复的发布阻塞项
+
+- Electron 已升级到 `^43.1.0`
+- 修复了旧版 Electron 运行时不支持 `node:sqlite`，导致桌面包启动即崩的问题
+- 已验证 `linux-unpacked` 可重新打包
+- 已验证 `win-unpacked` 可重新打包
+
+### 当前环境下未覆盖的最后一步
+
+- Linux 服务器环境没有图形桌面，无法在这里完成 GUI 点击冒烟
+- Windows NSIS 安装包在 Linux 上继续构建需要 `wine`；但 `win-unpacked` 已成功产出，说明应用本体打包链路已通
+
+### GitHub 自动打包
+
+仓库现已添加 `.github/workflows/desktop-release.yml`：
+
+- push 到 `main` / `feature/**` / `fix/**` / `ci/**` 时自动构建 Windows + Linux 桌面产物并上传 Actions artifacts
+- 打 `v*` tag 时，会自动把 Windows 安装包、Windows 免安装 zip、Linux 免安装 zip 挂到 GitHub Release
