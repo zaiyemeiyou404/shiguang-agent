@@ -49,11 +49,11 @@ jobs:
 
       - name: Package Windows desktop
         if: runner.os == 'Windows'
-        run: npm run desktop:package:win
+        run: npx electron-builder build --win --x64 --publish never
 
       - name: Package Linux desktop
         if: runner.os == 'Linux'
-        run: npm run desktop:package
+        run: npx electron-builder build --linux --dir --publish never
 
       - name: Zip Windows unpacked app
         if: runner.os == 'Windows'
