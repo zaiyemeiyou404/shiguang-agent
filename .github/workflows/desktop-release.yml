@@ -47,6 +47,9 @@ jobs:
       - name: Typecheck desktop
         run: npm run desktop:typecheck
 
+      - name: Build desktop bundles
+        run: npm run desktop:build
+
       - name: Package Windows desktop
         if: runner.os == 'Windows'
         run: npx electron-builder build --win --x64 --publish never
