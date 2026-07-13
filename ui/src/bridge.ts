@@ -46,6 +46,18 @@ export interface DesktopApproval {
   decidedAt: string | null;
 }
 
+export interface DesktopArtifact {
+  id: string;
+  sessionId: string | null;
+  taskId: string | null;
+  runId: string | null;
+  kind: string;
+  uri: string;
+  title: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
 export interface ApprovalDecisionRequest {
   approvalId: string;
   decision: "granted" | "denied";
@@ -90,6 +102,7 @@ export interface ShiguangBridge {
   saveSettings(settings: DesktopSettings): Promise<DesktopSettings>;
   createSession(title?: string): Promise<DesktopSession>;
   getSessionDetail(sessionId: string): Promise<DesktopSessionDetail>;
+  listArtifacts(sessionId: string, runId?: string): Promise<DesktopArtifact[]>;
   sendUserMessage(req: SendMessageRequest): Promise<DesktopRun>;
   getRunEvents(runId: string): Promise<DesktopEvent[]>;
   listPendingApprovals(sessionId: string): Promise<DesktopApproval[]>;
@@ -97,4 +110,24 @@ export interface ShiguangBridge {
   cancelRun(req: RunActionRequest): Promise<DesktopRun>;
   retryRun(req: RunActionRequest): Promise<DesktopRun>;
   subscribeRunEvents(runId: string, callback: (event: DesktopEvent) => void): () => void;
+}
+
+export function getDesktopBridge(): ShiguangBridge | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const bridge = (window as Window & { shiguang?: ShiguangBridge }).shiguang;
+  return typeof bridge === "object" && bridge ? bridge : null;
+}
+
+export function getDesktopBridgeErrorMessage(): string {
+  return "This renderer needs the Electron desktop host. Start it with `npm run desktop:dev` or launch the packaged desktop app instead of opening the Vite page directly in a browser.";
+}
+
+export function requireDesktopBridge(): ShiguangBridge {
+  const bridge = getDesktopBridge();
+  if (!bridge) {
+    throw new Error(getDesktopBridgeErrorMessage());
+  }
+  return bridge;
 }

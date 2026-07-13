@@ -1,8 +1,8 @@
-import { ipcMain, BrowserWindow } from "electron";
-import type { DesktopService } from "./service.js";
+import { ipcMain } from "electron";
+import type { DesktopAppService } from "./app-service.js";
 import type { SendMessageRequest, DesktopSettings, ApprovalDecisionRequest, RunActionRequest } from "./types.js";
 
-export function registerIpcHandlers(service: DesktopService): void {
+export function registerIpcHandlers(service: DesktopAppService): void {
   ipcMain.handle("listSessions", () => {
     return service.listSessions();
   });
@@ -21,6 +21,10 @@ export function registerIpcHandlers(service: DesktopService): void {
 
   ipcMain.handle("getSessionDetail", (_event, sessionId: string) => {
     return service.getSessionDetail(sessionId);
+  });
+
+  ipcMain.handle("listArtifacts", (_event, sessionId: string, runId?: string) => {
+    return service.listArtifacts(sessionId, runId);
   });
 
   ipcMain.handle("sendUserMessage", (_event, req: SendMessageRequest) => {
@@ -48,12 +52,9 @@ export function registerIpcHandlers(service: DesktopService): void {
   });
 
   ipcMain.handle("subscribeRunEvents", (event, runId: string) => {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    if (!win) return;
-
     const unsubscribe = service.subscribeRunEvents(runId, (desktopEvent) => {
-      if (!win.isDestroyed()) {
-        win.webContents.send("run-event", desktopEvent);
+      if (!event.sender.isDestroyed()) {
+        event.sender.send("run-event", desktopEvent);
       }
     });
 

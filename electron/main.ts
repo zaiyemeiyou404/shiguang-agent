@@ -1,11 +1,11 @@
 import { app, BrowserWindow } from "electron";
 import path from "node:path";
 import { DesktopStore } from "./store.js";
-import { DesktopService } from "./service.js";
+import { DesktopAppService } from "./app-service.js";
 import { registerIpcHandlers } from "./ipc.js";
 
 const isDev = process.env.ELECTRON_DEV === "true";
-let service: DesktopService;
+let service: DesktopAppService;
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -21,8 +21,6 @@ function createWindow() {
     },
   });
 
-  service.addWindow(win);
-
   if (isDev) {
     win.loadURL("http://localhost:5173");
     win.webContents.openDevTools({ mode: "detach" });
@@ -33,7 +31,7 @@ function createWindow() {
 
 app.whenReady().then(() => {
   const store = new DesktopStore();
-  service = new DesktopService(store);
+  service = new DesktopAppService(store);
   registerIpcHandlers(service);
   createWindow();
 });

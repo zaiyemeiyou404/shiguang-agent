@@ -114,6 +114,7 @@ export interface ActionResultMetadata {
   summary: string;
   retryable?: boolean;
   toolName?: string;
+  toolCallId?: string;
   errorType?: string;
   errorKind?: ToolErrorKind;
   workspaceMutation?: boolean;

@@ -230,16 +230,34 @@ No runtime dependencies for the library. Only `typescript` as a dev dependency.
 A Vite + React + Electron desktop shell is provided alongside the library:
 
 ```
-electron/          # Electron main process (main.ts) & preload
+electron/          # Electron main process / preload / IPC / desktop app service
 ui/                # Vite + React renderer
   index.html       # Entry HTML
   src/
     main.tsx       # React mount
-    App.tsx        # Craft-style desktop shell (components inline)
-    styles.css     # All styling (ported from examples/craft-style-shell.html)
+    App.tsx        # Desktop operator workbench（会话 / 运行 / 审批 / 产物）
+    styles.css     # All styling for the desktop shell
 tsconfig.electron.json  # TypeScript config for electron/
 tsconfig.ui.json        # TypeScript config for ui/src (type-check only; Vite handles build)
 ```
+
+### 当前桌面 UI 已接通的主链路
+
+这套桌面 UI 现在不是静态壳子，下面这些入口已经是真逻辑：
+
+- **会话列表 / 新建会话**：直接走 Electron bridge → IPC → `DesktopAppService`
+- **发送消息并启动 run**：会创建真实 run，并在右侧看到运行状态与时间线
+- **审批流**：待审批 run 可以在 UI 里直接批准 / 拒绝 / 恢复
+- **自动入口**：顶部“自动”按钮已接成真行为
+  - 有待审批时优先跳到审批面板
+  - 没有会话时自动创建“自动会话”
+  - 会切到运行视图，并在输入框为空时预填继续任务提示
+- **运行产物（Artifacts）**：右侧面板会显示当前 session 的真实产物
+  - 目前优先展示 summary 类产物
+  - 支持“定位运行”“复制摘要”
+- **模型 / provider 设置**：通过桌面 bridge 读取与保存本地配置
+
+> 注意：桌面 renderer 依赖 preload 注入的 `window.shiguang` bridge，因此它是 **Electron 内 UI**，不是普通浏览器里独立可用的纯网页。
 
 ### Commands
 

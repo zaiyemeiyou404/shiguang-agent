@@ -1,6 +1,6 @@
 import { DesktopStore } from "./store.js";
-import { app, BrowserWindow } from "electron";
-import type { DesktopSession, DesktopRun, DesktopEvent, DesktopSessionDetail, DesktopSettings, DesktopApproval } from "./types.js";
+import { app } from "electron";
+import type { DesktopSession, DesktopRun, DesktopEvent, DesktopSessionDetail, DesktopSettings, DesktopApproval, DesktopArtifact } from "./types.js";
 import { Agent } from "../dist/app/agent.js";
 import { RepositoryEventSink } from "../dist/runtime/event-sink.js";
 import type { Approval, Artifact, Memory, Run, RunEvent, Session, Task } from "../dist/core/types.js";
@@ -34,9 +34,9 @@ function nextId(prefix: string): string {
   return `${prefix}_${Date.now()}_${++seqCounter}`;
 }
 
-export class DesktopService {
+export class DesktopAppService {
   private store: DesktopStore;
-  private windows: Set<BrowserWindow> = new Set();
+  private listeners: Set<(event: DesktopEvent) => void> = new Set();
   private activeRunControllers: Map<string, AbortController> = new Map();
   private sessionRepository: SqliteSessionRepository;
   private taskRepository: SqliteTaskRepository;
@@ -60,11 +60,6 @@ export class DesktopService {
     this.artifactRepository = new SqliteArtifactRepository(db);
     this.memoryRepository = new SqliteMemoryRepository(db);
     this.memoryService = new MemoryService(this.memoryRepository);
-  }
-
-  addWindow(win: BrowserWindow): void {
-    this.windows.add(win);
-    win.on("closed", () => this.windows.delete(win));
   }
 
   async listSessions(): Promise<DesktopSession[]> {
@@ -103,6 +98,11 @@ export class DesktopService {
     await this.ensureSqliteSession(session);
     const runs = (await this.runRepository.listBySession(sessionId)).map(coreRunToDesktop);
     return { session: await this.decorateSession(session), runs };
+  }
+
+  async listArtifacts(sessionId: string, runId?: string): Promise<DesktopArtifact[]> {
+    const artifacts = (await this.artifactRepository.listBySession(sessionId)).map(coreArtifactToDesktop);
+    return runId ? artifacts.filter((artifact) => artifact.runId === runId) : artifacts;
   }
 
   async sendUserMessage(sessionId: string, message: string): Promise<DesktopRun> {
@@ -466,24 +466,21 @@ export class DesktopService {
   }
 
   subscribeRunEvents(runId: string, callback: (event: DesktopEvent) => void): () => void {
-    const handler = (_event: unknown, data: DesktopEvent) => {
-      if (data.runId === runId) {
-        callback(data);
+    const listener = (event: DesktopEvent) => {
+      if (event.runId === runId) {
+        callback(event);
       }
     };
 
-    for (const win of Array.from(this.windows)) {
-      win.webContents.on("ipc-message", handler as unknown as (...args: unknown[]) => void);
-    }
-
-    return () => {};
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   private broadcastEvent(event: DesktopEvent): void {
-    for (const win of Array.from(this.windows)) {
-      if (!win.isDestroyed()) {
-        win.webContents.send("run-event", event);
-      }
+    for (const listener of Array.from(this.listeners)) {
+      listener(event);
     }
   }
 
@@ -996,5 +993,19 @@ function coreApprovalToDesktop(approval: Approval): DesktopApproval {
     status: approval.status,
     request: approval.request,
     decidedAt: approval.decidedAt?.toISOString() ?? null,
+  };
+}
+
+function coreArtifactToDesktop(artifact: Artifact): DesktopArtifact {
+  return {
+    id: artifact.id,
+    sessionId: artifact.sessionId,
+    taskId: artifact.taskId,
+    runId: artifact.runId,
+    kind: artifact.kind,
+    uri: artifact.uri,
+    title: artifact.title,
+    metadata: artifact.metadata ?? {},
+    createdAt: artifact.createdAt.toISOString(),
   };
 }

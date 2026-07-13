@@ -2,6 +2,7 @@ import type { BrainDecision, ActionResult, ToolErrorKind } from "../brain/types.
 import type { ToolRegistry } from "../tools/registry.js";
 import type { EventSink } from "./event-sink.js";
 import type { ToolExecutionContext } from "../tools/types.js";
+import { randomUUID } from "node:crypto";
 
 function summarize(value: unknown, maxLength = 500): string {
   const raw = typeof value === "string" ? value : JSON.stringify(value);
@@ -97,10 +98,12 @@ export class ActionDispatcher {
             },
           };
         }
+        const toolCallId = randomUUID();
         if (this.eventSink && runId) {
           await this.eventSink.record(runId, "tool_call", {
             tool: action.toolName,
             input: action.toolInput,
+            toolCallId,
           });
         }
         const tool = this.toolRegistry.get(action.toolName);
@@ -115,6 +118,7 @@ export class ActionDispatcher {
               summary: `Tool not found: ${action.toolName}`,
               retryable: false,
               toolName: action.toolName,
+              toolCallId,
               errorType: "Error",
               errorKind: "tool_missing",
             },
@@ -126,6 +130,7 @@ export class ActionDispatcher {
             await this.eventSink.record(runId, "tool_result", {
               tool: action.toolName,
               output,
+              toolCallId,
             });
           }
           return {
@@ -137,6 +142,7 @@ export class ActionDispatcher {
               summary: summarize(output),
               retryable: false,
               toolName: action.toolName,
+              toolCallId,
               ...(tool.descriptor.effects?.workspaceMutation
                 // workspaceMutation 会驱动 loop/planner 在下一步自动进入 validate。
                 ? { workspaceMutation: true }
@@ -159,6 +165,7 @@ export class ActionDispatcher {
               summary: summarize(msg, 300),
               retryable: classification.retryable,
               toolName: action.toolName,
+              toolCallId,
               errorType: errorType(err),
               errorKind: classification.kind,
             },

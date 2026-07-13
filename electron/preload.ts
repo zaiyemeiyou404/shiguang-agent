@@ -7,6 +7,7 @@ const bridge: ShiguangBridge = {
   saveSettings: (settings: DesktopSettings) => ipcRenderer.invoke("saveSettings", settings) as Promise<DesktopSettings>,
   createSession: (title?: string) => ipcRenderer.invoke("createSession", title),
   getSessionDetail: (sessionId: string) => ipcRenderer.invoke("getSessionDetail", sessionId),
+  listArtifacts: (sessionId: string, runId?: string) => ipcRenderer.invoke("listArtifacts", sessionId, runId),
   sendUserMessage: (req) => ipcRenderer.invoke("sendUserMessage", req),
   getRunEvents: (runId: string) => ipcRenderer.invoke("getRunEvents", runId),
   listPendingApprovals: (sessionId: string) => ipcRenderer.invoke("listPendingApprovals", sessionId),

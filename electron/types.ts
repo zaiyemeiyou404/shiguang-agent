@@ -46,6 +46,18 @@ export interface DesktopApproval {
   decidedAt: string | null;
 }
 
+export interface DesktopArtifact {
+  id: string;
+  sessionId: string | null;
+  taskId: string | null;
+  runId: string | null;
+  kind: string;
+  uri: string;
+  title: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
 export interface ApprovalDecisionRequest {
   approvalId: string;
   decision: "granted" | "denied";
@@ -90,6 +102,7 @@ export interface ShiguangBridge {
   saveSettings(settings: DesktopSettings): Promise<DesktopSettings>;
   createSession(title?: string): Promise<DesktopSession>;
   getSessionDetail(sessionId: string): Promise<DesktopSessionDetail>;
+  listArtifacts(sessionId: string, runId?: string): Promise<DesktopArtifact[]>;
   sendUserMessage(req: SendMessageRequest): Promise<DesktopRun>;
   getRunEvents(runId: string): Promise<DesktopEvent[]>;
   listPendingApprovals(sessionId: string): Promise<DesktopApproval[]>;
