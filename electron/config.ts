@@ -50,6 +50,8 @@ export interface DesktopProviderSettings {
   authMode?: ProviderAuthMode;
   baseURL?: string;
   apiKey?: string;
+  apiKeyMasked?: string;
+  hasStoredApiKey?: boolean;
   apiKeyEnv?: string;
   model?: string;
   maxTokens?: number;
@@ -207,13 +209,14 @@ export function getDesktopSettings(): DesktopSettings {
       ...(fileConfig.llm?.model ? { model: fileConfig.llm.model } : {}),
       ...(typeof fileConfig.llm?.maxTokens === "number" ? { maxTokens: fileConfig.llm.maxTokens } : {}),
     },
-    providers: mergeProviderCatalog(fileConfig.providers),
+    providers: sanitizeDesktopProviderCatalog(mergeProviderCatalog(fileConfig.providers)),
   };
 }
 
 export function saveDesktopSettings(settings: DesktopSettings): DesktopSettings {
   ensureDesktopConfigDirectory();
   const configPath = getDesktopConfigPath();
+  const previousConfig = readConfigFile(configPath);
   const nextConfig: DesktopConfigFile = {
     workspaceRoot: settings.workspaceRoot,
     llm: {
@@ -221,11 +224,16 @@ export function saveDesktopSettings(settings: DesktopSettings): DesktopSettings 
       ...(settings.llm.model ? { model: settings.llm.model } : {}),
       ...(typeof settings.llm.maxTokens === "number" ? { maxTokens: settings.llm.maxTokens } : {}),
     },
-    providers: settings.providers,
+    providers: buildConfigProvidersForSave(settings.providers, previousConfig.providers),
   };
-  writeFileSync(configPath, `${JSON.stringify(nextConfig, null, 2)}
-`, "utf8");
-  return { ...settings, configPath };
+  writeFileSync(configPath, `${JSON.stringify(nextConfig, null, 2)}\n`, "utf8");
+  return getDesktopSettings();
+}
+
+export function getStoredProviderApiKey(providerKey: string): string {
+  const configPath = getDesktopConfigPath();
+  const fileConfig = readConfigFile(configPath);
+  return fileConfig.providers?.[providerKey]?.apiKey?.trim() ?? "";
 }
 
 function readConfigFile(configPath: string): DesktopConfigFile {
@@ -250,6 +258,56 @@ function readProviderApiKey(providerConfig: ProviderConfigFile | undefined): str
     if (envValue) return envValue;
   }
   return providerConfig.apiKey;
+}
+
+function sanitizeDesktopProviderCatalog(catalog: Record<string, DesktopProviderSettings>): Record<string, DesktopProviderSettings> {
+  return Object.fromEntries(
+    Object.entries(catalog).map(([key, provider]) => [key, sanitizeDesktopProviderSettings(provider)]),
+  );
+}
+
+function sanitizeDesktopProviderSettings(provider: DesktopProviderSettings): DesktopProviderSettings {
+  const storedApiKey = provider.authMode === "none" ? (provider.apiKey ?? "") : "";
+  const hasStoredApiKey = provider.authMode !== "none" && Boolean(provider.apiKey?.trim());
+  return {
+    ...provider,
+    apiKey: storedApiKey,
+    ...(hasStoredApiKey ? { apiKeyMasked: maskApiKey(provider.apiKey ?? ""), hasStoredApiKey: true } : {}),
+  };
+}
+
+function buildConfigProvidersForSave(
+  providers: Record<string, DesktopProviderSettings>,
+  previousProviders?: Record<string, ProviderConfigFile>,
+): Record<string, ProviderConfigFile> {
+  return Object.fromEntries(
+    Object.entries(providers).map(([key, provider]) => {
+      const previousProvider = previousProviders?.[key];
+      const nextApiKey = provider.apiKey?.trim();
+      const preservedApiKey = !nextApiKey && provider.hasStoredApiKey ? previousProvider?.apiKey?.trim() : undefined;
+      return [
+        key,
+        {
+          ...(provider.type ? { type: provider.type } : {}),
+          ...(provider.authMode ? { authMode: provider.authMode } : {}),
+          ...(provider.baseURL?.trim() ? { baseURL: provider.baseURL.trim() } : {}),
+          ...((provider.authMode === "none"
+            ? (nextApiKey ? { apiKey: nextApiKey } : {})
+            : (nextApiKey ? { apiKey: nextApiKey } : preservedApiKey ? { apiKey: preservedApiKey } : {}))),
+          ...(provider.apiKeyEnv?.trim() ? { apiKeyEnv: provider.apiKeyEnv.trim() } : {}),
+          ...(provider.model?.trim() ? { model: provider.model.trim() } : {}),
+          ...(typeof provider.maxTokens === "number" ? { maxTokens: provider.maxTokens } : {}),
+        } satisfies ProviderConfigFile,
+      ];
+    }),
+  );
+}
+
+function maskApiKey(apiKey: string): string {
+  const trimmed = apiKey.trim();
+  if (!trimmed) return "";
+  if (trimmed.length <= 4) return "•".repeat(trimmed.length);
+  return `${"•".repeat(Math.min(8, Math.max(4, trimmed.length - 4)))}${trimmed.slice(-4)}`;
 }
 
 function normalizeBaseURL(value: string): string {

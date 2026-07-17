@@ -308,7 +308,8 @@ $env:SHIGUANG_WORKSPACE_ROOT = "C:\\path\\to\\your\\project"
 npm run desktop:dev
 ```
 
-If you want to use the built-in local `RulePlanner`, you can stop there — no API key is required.
+If you want a no-key local setup, switch the selected provider to something like `ollama` (`authMode: "none"`).
+The desktop app no longer silently falls back to `RulePlanner` when an API-key provider is selected without credentials — it keeps the LLM planner path and surfaces a real configuration error instead.
 
 To enable a real OpenAI-compatible model in PowerShell:
 
@@ -416,9 +417,9 @@ The desktop app reads these environment variables at runtime:
 | Variable | Default | Description |
 |---|---|---|
 | `SHIGUANG_LLM_BASE_URL` | `https://api.openai.com/v1` | Base URL for OpenAI-compatible chat completions endpoint |
-| `SHIGUANG_LLM_API_KEY` | *(none)* | API key for the LLM provider. If not set, the app falls back to `RulePlanner` (no LLM required) |
+| `SHIGUANG_LLM_API_KEY` | *(none)* | API key for the selected provider when that provider uses `authMode: api_key`. Missing credentials surface as a configuration/runtime error instead of silently falling back to `RulePlanner`. |
 | `SHIGUANG_LLM_MODEL` | `gpt-4o-mini` | Model name to use (e.g. `deepseek-chat`, `gpt-4o`) |
-| `SHIGUANG_LLM_PROVIDER` | `openai-compatible` | Provider key inside `providers` from the JSON config |
+| `SHIGUANG_LLM_PROVIDER` | `openai` | Provider key inside `providers` from the JSON config |
 | `SHIGUANG_LLM_MAX_TOKENS` | `2048` | Max completion tokens for the planner call |
 | `SHIGUANG_WORKSPACE_ROOT` | `process.cwd()` | Root directory for `read_text_file` and `search_workspace` tools; all paths are constrained under this root |
 | `SHIGUANG_CONFIG_PATH` | *(none)* | Absolute path to a custom JSON config file |
@@ -432,7 +433,7 @@ export SHIGUANG_WORKSPACE_ROOT="/path/to/project"
 npm run desktop:dev
 ```
 
-If `SHIGUANG_LLM_API_KEY` is not set and the selected provider also cannot resolve an API key (for example via `apiKeyEnv`), the app runs entirely locally using the built-in `RulePlanner` with the echo, `read_text_file`, and `search_workspace` tools. No credentials are required. No network calls are made.
+If `SHIGUANG_LLM_API_KEY` is not set and the selected provider also cannot resolve an API key (for example via `apiKeyEnv`), the desktop runtime does **not** silently switch to `RulePlanner`. Instead it keeps the planner path explicit and fails with a credential/configuration error so the operator can see the real problem. For a true local/no-key run, choose a provider configured with `authMode: "none"` (for example `ollama`).
 
 #### Adding more Hermes-style choices
 

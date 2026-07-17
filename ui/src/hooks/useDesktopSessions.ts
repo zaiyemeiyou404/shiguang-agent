@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from "react";
 import { getDesktopBridgeErrorMessage, requireDesktopBridge } from "../bridge";
-import type { DesktopSession, DesktopRun, DesktopEvent, DesktopSessionDetail } from "../bridge";
+import type { DesktopSession, DesktopRun, DesktopEvent, DesktopSessionDetail, DesktopWorkspaceSnapshot } from "../bridge";
 
 export function useDesktopSessions() {
   const [sessions, setSessions] = useState<DesktopSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [detail, setDetail] = useState<DesktopSessionDetail | null>(null);
+  const [workspaceSnapshot, setWorkspaceSnapshot] = useState<DesktopWorkspaceSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
@@ -21,7 +22,7 @@ export function useDesktopSessions() {
         const session = await bridge.createSession("Default Session");
         setSessions([session]);
         setActiveSessionId(session.id);
-      } else if (!activeSessionId) {
+      } else if (!activeSessionId || !list.some((session) => session.id === activeSessionId)) {
         setActiveSessionId(list[0].id);
       }
     } catch (error) {
@@ -51,7 +52,9 @@ export function useDesktopSessions() {
     if (activeSessionId) {
       const bridge = requireDesktopBridge();
       setDetailError(null);
-      void bridge.getSessionDetail(activeSessionId).then((d) => {
+      void bridge.getWorkspaceSnapshot(activeSessionId).then((snapshot) => {
+        const d = snapshot.detail;
+        setWorkspaceSnapshot(snapshot);
         setDetail(d);
         if (d.runs.length > 0) {
           const latest = d.runs.reduce((a, b) => ((a.startedAt ?? a.id) > (b.startedAt ?? b.id) ? a : b));
@@ -70,6 +73,21 @@ export function useDesktopSessions() {
     }
   }, [activeSessionId, activeRunId]);
 
+  const refreshDetail = useCallback(async () => {
+    if (!activeSessionId) return;
+    try {
+      const bridge = requireDesktopBridge();
+      setDetailError(null);
+      const snapshot = await bridge.getWorkspaceSnapshot(activeSessionId);
+      setWorkspaceSnapshot(snapshot);
+      setDetail(snapshot.detail);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setDetailError(`Failed to refresh session detail: ${message}`);
+    }
+  }, [activeSessionId]);
+
+
   const createSession = useCallback(async (title?: string) => {
     const session = await requireDesktopBridge().createSession(title);
     await refreshSessions();
@@ -77,25 +95,49 @@ export function useDesktopSessions() {
     return session;
   }, [refreshSessions]);
 
+  const branchSession = useCallback(async (runId: string, title?: string) => {
+    const result = await requireDesktopBridge().branchSession({ runId, title });
+    await refreshSessions();
+    setActiveSessionId(result.session.id);
+    setActiveRunId(null);
+    return result;
+  }, [refreshSessions]);
+
+  const renameSession = useCallback(async (sessionId: string, title: string) => {
+    const session = await requireDesktopBridge().renameSession({ sessionId, title });
+    await refreshSessions();
+    if (activeSessionId === sessionId) {
+      await refreshDetail();
+    }
+    return session;
+  }, [activeSessionId, refreshDetail, refreshSessions]);
+
+  const updateSessionStatus = useCallback(async (sessionId: string, status: DesktopSession["status"]) => {
+    const session = await requireDesktopBridge().updateSessionStatus({ sessionId, status });
+    await refreshSessions();
+    if (activeSessionId === sessionId) {
+      await refreshDetail();
+    }
+    return session;
+  }, [activeSessionId, refreshDetail, refreshSessions]);
+
+  const deleteSession = useCallback(async (sessionId: string) => {
+    await requireDesktopBridge().deleteSession({ sessionId });
+    if (activeSessionId === sessionId) {
+      setDetail(null);
+      setWorkspaceSnapshot(null);
+      setActiveRunId(null);
+      setActiveSessionId(null);
+    }
+    await refreshSessions();
+  }, [activeSessionId, refreshSessions]);
+
   const selectSession = useCallback((id: string) => {
     setActiveSessionId(id);
     setActiveRunId(null);
   }, []);
 
-  const refreshDetail = useCallback(async () => {
-    if (!activeSessionId) return;
-    try {
-      const bridge = requireDesktopBridge();
-      setDetailError(null);
-      const d = await bridge.getSessionDetail(activeSessionId);
-      setDetail(d);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setDetailError(`Failed to refresh session detail: ${message}`);
-    }
-  }, [activeSessionId]);
-
-  return { sessions, activeSessionId, detail, activeRunId, setActiveRunId, loading, sessionError, detailError, createSession, selectSession, refreshSessions, refreshDetail };
+  return { sessions, activeSessionId, detail, workspaceSnapshot, activeRunId, setActiveRunId, loading, sessionError, detailError, createSession, branchSession, renameSession, updateSessionStatus, deleteSession, selectSession, refreshSessions, refreshDetail };
 }
 
 export function useRunEvents(runId: string | null) {

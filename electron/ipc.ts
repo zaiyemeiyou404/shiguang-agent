@@ -1,6 +1,6 @@
 import { ipcMain } from "electron";
 import type { DesktopAppService } from "./app-service.js";
-import type { SendMessageRequest, DesktopSettings, ApprovalDecisionRequest, RunActionRequest } from "./types.js";
+import type { SendMessageRequest, DesktopSettings, ApprovalDecisionRequest, RunActionRequest, DesktopProviderConnectionRequest, SessionRenameRequest, SessionStatusRequest, SessionDeleteRequest, SessionBranchRequest, ArtifactActionRequest } from "./types.js";
 
 export function registerIpcHandlers(service: DesktopAppService): void {
   ipcMain.handle("listSessions", () => {
@@ -15,20 +15,56 @@ export function registerIpcHandlers(service: DesktopAppService): void {
     return service.saveSettings(settings);
   });
 
+  ipcMain.handle("testProviderConnection", (_event, req: DesktopProviderConnectionRequest) => {
+    return service.testProviderConnection(req);
+  });
+
   ipcMain.handle("createSession", (_event, title?: string) => {
     return service.createSession(title);
+  });
+
+  ipcMain.handle("branchSession", (_event, req: SessionBranchRequest) => {
+    return service.branchSessionFromRun(req.runId, req.title);
+  });
+
+  ipcMain.handle("renameSession", (_event, req: SessionRenameRequest) => {
+    return service.renameSession(req.sessionId, req.title);
+  });
+
+  ipcMain.handle("updateSessionStatus", (_event, req: SessionStatusRequest) => {
+    return service.updateSessionStatus(req.sessionId, req.status);
+  });
+
+  ipcMain.handle("deleteSession", (_event, req: SessionDeleteRequest) => {
+    return service.deleteSession(req.sessionId);
   });
 
   ipcMain.handle("getSessionDetail", (_event, sessionId: string) => {
     return service.getSessionDetail(sessionId);
   });
 
+  ipcMain.handle("getWorkspaceSnapshot", (_event, sessionId: string) => {
+    return service.getWorkspaceSnapshot(sessionId);
+  });
+
   ipcMain.handle("listArtifacts", (_event, sessionId: string, runId?: string) => {
     return service.listArtifacts(sessionId, runId);
   });
 
+  ipcMain.handle("openArtifact", (_event, req: ArtifactActionRequest) => {
+    return service.openArtifact(req.uri);
+  });
+
+  ipcMain.handle("revealArtifact", (_event, req: ArtifactActionRequest) => {
+    return service.revealArtifact(req.uri);
+  });
+
+  ipcMain.handle("pickAttachments", () => {
+    return service.pickAttachments();
+  });
+
   ipcMain.handle("sendUserMessage", (_event, req: SendMessageRequest) => {
-    return service.sendUserMessage(req.sessionId, req.message);
+    return service.sendUserMessage(req.sessionId, req.message, req.attachments ?? []);
   });
 
   ipcMain.handle("getRunEvents", (_event, runId: string) => {

@@ -1,6 +1,20 @@
 import { DesktopStore } from "./store.js";
-import { app } from "electron";
-import type { DesktopSession, DesktopRun, DesktopEvent, DesktopSessionDetail, DesktopSettings, DesktopApproval, DesktopArtifact } from "./types.js";
+import { app, dialog, shell } from "electron";
+import type {
+  DesktopSession,
+  DesktopRun,
+  DesktopEvent,
+  DesktopSessionDetail,
+  DesktopWorkspaceSnapshot,
+  DesktopSettings,
+  DesktopApproval,
+  DesktopArtifact,
+  DesktopProviderConnectionRequest,
+  DesktopProviderConnectionResult,
+  DesktopProviderSettings,
+  DesktopAttachment,
+  DesktopSessionBranchResult,
+} from "./types.js";
 import { Agent } from "../dist/app/agent.js";
 import { RepositoryEventSink } from "../dist/runtime/event-sink.js";
 import type { Approval, Artifact, Memory, Run, RunEvent, Session, Task } from "../dist/core/types.js";
@@ -26,8 +40,10 @@ import { createCopyPathTool } from "../dist/tools/builtins/copy-path.js";
 import { createMovePathTool } from "../dist/tools/builtins/move-path.js";
 import { createDeletePathTool } from "../dist/tools/builtins/delete-path.js";
 import { createPlanner } from "./planner-factory.js";
-import { loadDesktopConfig, getDesktopSettings, saveDesktopSettings } from "./config.js";
-import { join, resolve, normalize } from "node:path";
+import { loadDesktopConfig, getDesktopSettings, saveDesktopSettings, getStoredProviderApiKey } from "./config.js";
+import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
+import { statSync } from "node:fs";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 let seqCounter = 0;
 function nextId(prefix: string): string {
@@ -75,6 +91,10 @@ export class DesktopAppService {
     return saveDesktopSettings(settings);
   }
 
+  async testProviderConnection(req: DesktopProviderConnectionRequest): Promise<DesktopProviderConnectionResult> {
+    return testDesktopProviderConnection(req);
+  }
+
   async createSession(title?: string): Promise<DesktopSession> {
     const now = new Date().toISOString();
     const session: DesktopSession = {
@@ -90,6 +110,85 @@ export class DesktopAppService {
     return stored;
   }
 
+  async branchSessionFromRun(runId: string, title?: string): Promise<DesktopSessionBranchResult> {
+    const run = await this.runRepository.get(runId);
+    if (!run) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+    const sourceSession = this.store.getSession(run.sessionId);
+    if (!sourceSession) {
+      throw new Error(`Session not found for run: ${runId}`);
+    }
+    const task = await this.taskRepository.get(run.taskId);
+    if (!task) {
+      throw new Error(`Task not found for run: ${runId}`);
+    }
+    await this.ensureSqliteSession(sourceSession);
+    const sourceRun = coreRunToDesktop(run);
+    const branchTitle = title?.trim() || `${sourceSession.title} · 分支`;
+    const branched = await this.createSession(branchTitle);
+    const summary = `分支自 ${sourceSession.title} · ${branchStatusLabel(sourceRun.status)}`;
+    const updatedAt = new Date().toISOString();
+    const branchSession = this.store.updateSession(branched.id, { summary, updatedAt }) ?? branched;
+    await this.ensureSqliteSession(branchSession);
+    await this.sessionRepository.update(branchSession.id, { summary, updatedAt: new Date(updatedAt) });
+
+    const sourceArtifacts = (await this.listArtifacts(sourceSession.id, run.id)).slice(0, 6);
+    const latestUserMessage = await this.loadLatestUserMessage(run.sessionId, task);
+    const suggestedPrompt = buildBranchSuggestedPrompt({
+      sourceSession,
+      sourceRun,
+      latestUserMessage,
+      artifacts: sourceArtifacts,
+    });
+
+    return {
+      session: await this.decorateSession(branchSession),
+      sourceSession: await this.decorateSession(sourceSession),
+      sourceRun,
+      suggestedPrompt,
+    };
+  }
+
+  async renameSession(sessionId: string, title: string): Promise<DesktopSession> {
+    const session = this.store.getSession(sessionId);
+    if (!session) throw new Error(`Session not found: ${sessionId}`);
+    const trimmed = title.trim();
+    if (!trimmed) throw new Error("Session title cannot be empty.");
+    const updatedAt = new Date().toISOString();
+    const updated = this.store.updateSession(sessionId, { title: trimmed, updatedAt });
+    if (!updated) throw new Error(`Session not found: ${sessionId}`);
+    await this.ensureSqliteSession(updated);
+    await this.sessionRepository.update(sessionId, { title: trimmed, updatedAt: new Date(updatedAt) });
+    return this.decorateSession(updated);
+  }
+
+  async updateSessionStatus(sessionId: string, status: DesktopSession["status"]): Promise<DesktopSession> {
+    const session = this.store.getSession(sessionId);
+    if (!session) throw new Error(`Session not found: ${sessionId}`);
+    const updatedAt = new Date().toISOString();
+    const updated = this.store.updateSession(sessionId, { status, updatedAt });
+    if (!updated) throw new Error(`Session not found: ${sessionId}`);
+    await this.ensureSqliteSession(updated);
+    await this.sessionRepository.update(sessionId, { status, updatedAt: new Date(updatedAt) });
+    return this.decorateSession(updated);
+  }
+
+  async deleteSession(sessionId: string): Promise<{ sessionId: string }> {
+    const session = this.store.getSession(sessionId);
+    if (!session) throw new Error(`Session not found: ${sessionId}`);
+    const runs = await this.runRepository.listBySession(sessionId);
+    const hasLiveRun = runs.some((run) => run.status === "pending" || run.status === "running" || run.status === "needs_approval");
+    if (hasLiveRun) {
+      throw new Error("Session still has a live run. Cancel or finish it before deleting.");
+    }
+    await this.ensureSqliteSession(session);
+    await this.sessionRepository.update(sessionId, { status: "archived", updatedAt: new Date() });
+    const deleted = this.store.deleteSession(sessionId);
+    if (!deleted) throw new Error(`Session not found: ${sessionId}`);
+    return { sessionId };
+  }
+
   async getSessionDetail(sessionId: string): Promise<DesktopSessionDetail> {
     const session = this.store.getSession(sessionId);
     if (!session) {
@@ -100,12 +199,56 @@ export class DesktopAppService {
     return { session: await this.decorateSession(session), runs };
   }
 
+  async getWorkspaceSnapshot(sessionId: string): Promise<DesktopWorkspaceSnapshot> {
+    const detail = await this.getSessionDetail(sessionId);
+    const [pendingApprovals, artifacts] = await Promise.all([
+      this.listPendingApprovals(sessionId),
+      this.listArtifacts(sessionId),
+    ]);
+    return { detail, pendingApprovals, artifacts };
+  }
+
   async listArtifacts(sessionId: string, runId?: string): Promise<DesktopArtifact[]> {
     const artifacts = (await this.artifactRepository.listBySession(sessionId)).map(coreArtifactToDesktop);
     return runId ? artifacts.filter((artifact) => artifact.runId === runId) : artifacts;
   }
 
-  async sendUserMessage(sessionId: string, message: string): Promise<DesktopRun> {
+  async pickAttachments(): Promise<DesktopAttachment[]> {
+    const result = await dialog.showOpenDialog({
+      title: "选择要附加的文件",
+      properties: ["openFile", "multiSelections"],
+    });
+    if (result.canceled || result.filePaths.length === 0) return [];
+    return result.filePaths.map((filePath) => desktopAttachmentFromPath(filePath));
+  }
+
+  async openArtifact(uri: string): Promise<{ uri: string; targetPath: string }> {
+    const targetPath = resolveLocalArtifactPath(uri);
+    if (!targetPath) {
+      throw new Error("当前只支持直接打开本地文件产物。HTTP 链接请使用网页打开。");
+    }
+    assertArtifactPathExists(targetPath);
+    const error = await shell.openPath(targetPath);
+    if (error) throw new Error(error);
+    return { uri, targetPath };
+  }
+
+  async revealArtifact(uri: string): Promise<{ uri: string; targetPath: string }> {
+    const targetPath = resolveLocalArtifactPath(uri);
+    if (!targetPath) {
+      throw new Error("当前只支持显示本地文件产物的位置。");
+    }
+    const stats = assertArtifactPathExists(targetPath);
+    if (stats.isDirectory()) {
+      const error = await shell.openPath(targetPath);
+      if (error) throw new Error(error);
+    } else {
+      shell.showItemInFolder(targetPath);
+    }
+    return { uri, targetPath };
+  }
+
+  async sendUserMessage(sessionId: string, message: string, attachments: DesktopAttachment[] = []): Promise<DesktopRun> {
     let session = this.store.getSession(sessionId);
     if (!session) {
       session = await this.createSession("Auto-created session");
@@ -183,8 +326,8 @@ export class DesktopAppService {
         model: label,
       });
 
-      const userEvent = await sink.record(runId, "message", { role: "user", content: message });
-      this.broadcastEvent(coreEventToDesktop(userEvent));
+      await this.persistAttachmentArtifacts(sessionId, task.id, runId, attachments);
+      await sink.record(runId, "message", { role: "user", content: message, attachments });
 
       try {
         const recentRuns = (await this.runRepository.listBySession(sessionId))
@@ -194,10 +337,11 @@ export class DesktopAppService {
         const approvalContinuity = pendingApprovals.length > 0
           ? formatPendingApprovals(pendingApprovals)
           : undefined;
+        const attachmentPrompt = formatAttachmentPrompt(attachments);
         const combinedInstructions = [approvalContinuity].filter(Boolean).join("\n\n");
         const output = await agent.run({
           runId,
-          userMessage: message,
+          userMessage: buildUserMessageWithAttachments(message, attachments),
           signal: controller.signal,
           contextInput: {
             task,
@@ -205,7 +349,7 @@ export class DesktopAppService {
             linkedArtifacts,
             memories: [],
             workspaceRoot,
-            systemInstructions: combinedInstructions || undefined,
+            systemInstructions: [combinedInstructions, attachmentPrompt].filter(Boolean).join("\n\n") || undefined,
           },
         });
         const storedEvents = await sink.list(runId);
@@ -723,7 +867,10 @@ export class DesktopAppService {
       if (evt.kind === "approval_request") {
         const approval = makeApproval(runId, payload);
         if (approval) {
-          await this.approvalRepository.create(approval);
+          const existing = await this.approvalRepository.get(approval.id);
+          if (!existing) {
+            await this.approvalRepository.create(approval);
+          }
         }
       } else {
         const approvalId = payload.approvalId as string | undefined;
@@ -734,6 +881,27 @@ export class DesktopAppService {
           });
         }
       }
+    }
+  }
+
+  private async persistAttachmentArtifacts(sessionId: string, taskId: string, runId: string, attachments: DesktopAttachment[]): Promise<void> {
+    for (const attachment of attachments) {
+      await this.artifactRepository.create({
+        id: nextId("artifact"),
+        sessionId,
+        taskId,
+        runId,
+        kind: "user-attachment",
+        uri: attachment.uri,
+        title: attachment.name,
+        metadata: {
+          name: attachment.name,
+          path: attachment.path,
+          size: attachment.size,
+          source: "composer-attachment",
+        },
+        createdAt: new Date(),
+      });
     }
   }
 
@@ -950,6 +1118,196 @@ function summarizeRequest(request: unknown): string {
   return String(request).slice(0, 200);
 }
 
+async function testDesktopProviderConnection(req: DesktopProviderConnectionRequest): Promise<DesktopProviderConnectionResult> {
+  const providerType = normalizeProviderType(req.provider.type);
+  const authSource = resolveProviderAuthSource(req.provider);
+  const startedAt = Date.now();
+  const apiKey = resolveProviderApiKey(req.provider, req.providerKey);
+
+  if (req.provider.authMode !== "none" && !apiKey) {
+    return {
+      ok: false,
+      providerKey: req.providerKey,
+      providerType,
+      authSource,
+      checkedAt: new Date().toISOString(),
+      detail: `缺少 API Key：请填写 API Key，或提供可读取的环境变量 ${req.provider.apiKeyEnv ?? "(未设置)"}。`,
+    };
+  }
+
+  try {
+    await pingProvider({
+      providerType,
+      provider: req.provider,
+      apiKey,
+    });
+    return {
+      ok: true,
+      providerKey: req.providerKey,
+      providerType,
+      authSource,
+      checkedAt: new Date().toISOString(),
+      detail: `连接成功（${Date.now() - startedAt}ms） · ${formatAuthSourceLabel(authSource)}`,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      providerKey: req.providerKey,
+      providerType,
+      authSource,
+      checkedAt: new Date().toISOString(),
+      detail: `连接失败：${message}`,
+    };
+  }
+}
+
+function normalizeProviderType(value: DesktopProviderSettings["type"]): DesktopProviderConnectionResult["providerType"] {
+  if (value === "anthropic" || value === "gemini" || value === "openai-compatible") {
+    return value;
+  }
+  return "openai-compatible";
+}
+
+function resolveProviderAuthSource(provider: DesktopProviderSettings): DesktopProviderConnectionResult["authSource"] {
+  if (provider.authMode === "none") return "none";
+  if (provider.apiKey?.trim()) return "direct";
+  if (provider.hasStoredApiKey) return "direct";
+  if (provider.apiKeyEnv?.trim() && process.env[provider.apiKeyEnv.trim()]) return "env";
+  return "missing";
+}
+
+function resolveProviderApiKey(provider: DesktopProviderSettings, providerKey: string): string {
+  if (provider.authMode === "none") {
+    return provider.apiKey?.trim() || "ollama";
+  }
+  if (provider.apiKey?.trim()) {
+    return provider.apiKey.trim();
+  }
+  if (provider.hasStoredApiKey) {
+    const storedApiKey = getStoredProviderApiKey(providerKey);
+    if (storedApiKey) return storedApiKey;
+  }
+  if (provider.apiKeyEnv?.trim()) {
+    return process.env[provider.apiKeyEnv.trim()]?.trim() ?? "";
+  }
+  return "";
+}
+
+function formatAuthSourceLabel(source: DesktopProviderConnectionResult["authSource"]): string {
+  if (source === "direct") return "使用当前面板里的 API Key";
+  if (source === "env") return "使用环境变量里的 API Key";
+  if (source === "none") return "当前 provider 不需要 API Key";
+  return "未解析到 API Key";
+}
+
+async function pingProvider(input: {
+  providerType: DesktopProviderConnectionResult["providerType"];
+  provider: DesktopProviderSettings;
+  apiKey: string;
+}): Promise<void> {
+  if (input.providerType === "anthropic") {
+    await pingAnthropicProvider(input.provider, input.apiKey);
+    return;
+  }
+  if (input.providerType === "gemini") {
+    await pingGeminiProvider(input.provider, input.apiKey);
+    return;
+  }
+  await pingOpenAICompatibleProvider(input.provider, input.apiKey);
+}
+
+async function pingOpenAICompatibleProvider(provider: DesktopProviderSettings, apiKey: string): Promise<void> {
+  const baseURL = (provider.baseURL?.trim() || "https://api.openai.com/v1").replace(/\/+$/, "");
+  const modelsResponse = await fetchWithTimeout(`${baseURL}/models`, {
+    method: "GET",
+    headers: {
+      ...(provider.authMode !== "none" ? { Authorization: `Bearer ${apiKey}` } : {}),
+    },
+  });
+  if (modelsResponse.ok) return;
+  if (modelsResponse.status !== 404 && modelsResponse.status !== 405) {
+    throw new Error(await buildHttpError(modelsResponse, "OpenAI-compatible"));
+  }
+
+  const chatResponse = await fetchWithTimeout(`${baseURL}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(provider.authMode !== "none" ? { Authorization: `Bearer ${apiKey}` } : {}),
+    },
+    body: JSON.stringify({
+      model: provider.model?.trim() || "gpt-4o-mini",
+      messages: [{ role: "user", content: "ping" }],
+      max_tokens: 1,
+      temperature: 0,
+    }),
+  });
+  if (!chatResponse.ok) {
+    throw new Error(await buildHttpError(chatResponse, "OpenAI-compatible"));
+  }
+}
+
+async function pingAnthropicProvider(provider: DesktopProviderSettings, apiKey: string): Promise<void> {
+  const baseURL = (provider.baseURL?.trim() || "https://api.anthropic.com/v1").replace(/\/+$/, "");
+  const response = await fetchWithTimeout(`${baseURL}/messages`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model: provider.model?.trim() || "claude-3-5-sonnet-latest",
+      max_tokens: 1,
+      messages: [{ role: "user", content: [{ type: "text", text: "ping" }] }],
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(await buildHttpError(response, "Anthropic"));
+  }
+}
+
+async function pingGeminiProvider(provider: DesktopProviderSettings, apiKey: string): Promise<void> {
+  const baseURL = (provider.baseURL?.trim() || "https://generativelanguage.googleapis.com/v1beta").replace(/\/+$/, "");
+  const url = new URL(`${baseURL}/models/${provider.model?.trim() || "gemini-2.5-pro"}:generateContent`);
+  url.searchParams.set("key", apiKey);
+  const response = await fetchWithTimeout(url.toString(), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      contents: [{ role: "user", parts: [{ text: "ping" }] }],
+      generationConfig: { maxOutputTokens: 1, temperature: 0 },
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(await buildHttpError(response, "Gemini"));
+  }
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 12000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`请求超时（>${timeoutMs}ms）`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function buildHttpError(response: Response, label: string): Promise<string> {
+  const text = await response.text().catch(() => "unknown error");
+  const summary = text.replace(/\s+/g, " ").trim();
+  return `${label} API ${response.status}: ${summary.slice(0, 240) || "unknown error"}`;
+}
+
 function desktopSessionToCore(session: DesktopSession): Session {
   return {
     id: session.id,
@@ -994,6 +1352,96 @@ function coreApprovalToDesktop(approval: Approval): DesktopApproval {
     request: approval.request,
     decidedAt: approval.decidedAt?.toISOString() ?? null,
   };
+}
+
+function desktopAttachmentFromPath(filePath: string): DesktopAttachment {
+  let size: number | null = null;
+  try {
+    size = statSync(filePath).size;
+  } catch {}
+  return {
+    name: filePath.split(/[\\/]/).pop() ?? filePath,
+    path: filePath,
+    uri: pathToFileURL(filePath).href,
+    size,
+  };
+}
+
+function buildUserMessageWithAttachments(message: string, attachments: DesktopAttachment[]): string {
+  const trimmed = message.trim();
+  const attachmentBlock = formatAttachmentPrompt(attachments);
+  if (!attachmentBlock) return trimmed;
+  return [trimmed, attachmentBlock].filter(Boolean).join("\n\n");
+}
+
+function formatAttachmentPrompt(attachments: DesktopAttachment[]): string {
+  if (!attachments.length) return "";
+  const lines = attachments.map((attachment) => `- ${attachment.name} (${attachment.path})`);
+  return [
+    "User attached local files for this run.",
+    "Use read/search/stat tools against these paths when relevant:",
+    ...lines,
+  ].join("\n");
+}
+
+function truncateInline(text: string | null | undefined, maxLength = 180): string {
+  if (!text) return "";
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized;
+}
+
+function buildBranchSuggestedPrompt(input: {
+  sourceSession: DesktopSession;
+  sourceRun: DesktopRun;
+  latestUserMessage: string;
+  artifacts: DesktopArtifact[];
+}): string {
+  const artifactLines = input.artifacts.map((artifact) => {
+    const label = artifact.title?.trim() || artifact.kind;
+    return `- ${label} (${artifact.uri})`;
+  });
+  return [
+    "这是一个从历史运行分出来的新会话，请直接沿着原上下文继续，不要从零开始。",
+    `来源会话：${input.sourceSession.title}`,
+    `来源运行：${input.sourceRun.id}`,
+    `原始任务：${truncateInline(input.latestUserMessage.trim() || "继续当前任务", 240)}`,
+    `当时状态：${branchStatusLabel(input.sourceRun.status)}`,
+    input.sourceRun.summary ? `运行摘要：${truncateInline(input.sourceRun.summary, 240)}` : null,
+    input.sourceRun.reason ? `结束原因：${truncateInline(input.sourceRun.reason, 240)}` : null,
+    artifactLines.length > 0 ? ["可复用产物：", ...artifactLines].join("\n") : null,
+    "先检查上面这次运行的结论、报错和产物，再决定下一步；如果需要修复，做最小修改并重新验证。",
+  ].filter((item): item is string => Boolean(item)).join("\n\n");
+}
+
+function branchStatusLabel(status: DesktopRun["status"]): string {
+  if (status === "pending") return "排队中";
+  if (status === "running") return "运行中";
+  if (status === "completed") return "已完成";
+  if (status === "failed") return "失败后继续";
+  if (status === "cancelled") return "已取消后继续";
+  if (status === "needs_approval") return "审批中断后继续";
+  return status;
+}
+
+function resolveLocalArtifactPath(uri: string): string | null {
+  if (!uri) return null;
+  if (uri.startsWith("file://")) {
+    return fileURLToPath(uri);
+  }
+  if (isAbsolute(uri) || /^[a-zA-Z]:[\/]/.test(uri)) {
+    return normalize(uri);
+  }
+  return null;
+}
+
+function assertArtifactPathExists(targetPath: string) {
+  try {
+    return statSync(targetPath);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`产物路径不可用：${targetPath} (${message})`);
+  }
 }
 
 function coreArtifactToDesktop(artifact: Artifact): DesktopArtifact {
