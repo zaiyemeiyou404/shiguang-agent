@@ -1,0 +1,16 @@
+Fix the approval persistence regression you just introduced in /home/ubuntu/shiguang-agent.
+
+Observed verification failure from a real Node smoke test against dist/state/sqlite-approval-repository.js:
+- listBySession('s1') throws: SQLITE_ERROR ambiguous column name: status
+
+Likely cause:
+- src/state/sqlite-approval-repository.ts builds the SELECT with `a.${APPROVAL_COLUMNS}`, but APPROVAL_COLUMNS expands to multiple bare column names including `status`; the query joins `approvals a` with `runs r`, so `status` becomes ambiguous and/or only the first column is aliased.
+
+Task:
+- Fix src/state/sqlite-approval-repository.ts so listBySession(sessionId) selects the approval columns correctly with stable aliases for all returned columns.
+- Keep the rest of the design unchanged.
+- Re-run:
+  - npm run typecheck
+  - npm run desktop:typecheck
+
+Then print a very short summary only.

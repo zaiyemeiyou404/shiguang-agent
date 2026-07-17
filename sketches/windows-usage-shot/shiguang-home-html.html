@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>拾光 Agent 首页</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+    body {
+      background: linear-gradient(180deg, #eef2f7 0%, #e8edf4 100%);
+      color: #f5f7fa;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .stage {
+      width: 1600px;
+      height: 980px;
+      position: relative;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 82% 86%, rgba(78,175,255,.18), transparent 18%),
+        radial-gradient(circle at 78% 92%, rgba(78,222,177,.14), transparent 14%),
+        radial-gradient(circle at 20% 10%, rgba(124,102,255,.12), transparent 12%),
+        linear-gradient(180deg, #eef2f7, #e8edf4);
+    }
+    .browser {
+      position: absolute;
+      inset: 42px 56px;
+      border-radius: 24px;
+      background: #fafafc;
+      border: 1px solid #dbe0e7;
+      box-shadow: 0 18px 40px rgba(17, 24, 39, .08);
+      overflow: hidden;
+    }
+    .browser-bar {
+      height: 62px;
+      border-bottom: 1px solid #dbe0e7;
+      background: #f7f8fb;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 0 24px;
+    }
+    .dots { display: flex; gap: 10px; }
+    .dot { width: 12px; height: 12px; border-radius: 50%; }
+    .dot.red { background: #ff5f57; }
+    .dot.yellow { background: #ffbd2e; }
+    .dot.green { background: #28c840; }
+    .addr {
+      flex: 1;
+      height: 32px;
+      border-radius: 14px;
+      border: 1px solid #dfe4eb;
+      background: #fff;
+      display: flex;
+      align-items: center;
+      padding: 0 18px;
+      color: #8a93a0;
+      font-size: 12px;
+    }
+    .browser-more { color: #7a8390; font-size: 24px; line-height: 1; }
+    .app {
+      position: absolute;
+      left: 86px;
+      right: 86px;
+      top: 80px;
+      bottom: 46px;
+      border-radius: 28px;
+      overflow: hidden;
+      background: #131418;
+      border: 1px solid #2c2f36;
+      box-shadow: 0 28px 60px rgba(0,0,0,.28);
+      display: grid;
+      grid-template-rows: 48px 1fr;
+    }
+    .titlebar {
+      background: #17181c;
+      border-bottom: 1px solid #2b2e34;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .logo {
+      width: 32px; height: 26px; border-radius: 10px;
+      background: #7a62ff; display: grid; place-items: center; font-weight: 700;
+    }
+    .brand small { color: #808896; font-size: 12px; margin-left: 10px; }
+    .menus, .win-controls { display: flex; align-items: center; gap: 18px; color: #aab1bc; font-size: 12px; }
+    .win-controls span {
+      width: 28px; height: 22px; border-radius: 8px; background: #22242a;
+      display: grid; place-items: center;
+    }
+    .content {
+      display: grid;
+      grid-template-columns: 286px 1fr 330px;
+      min-height: 0;
+    }
+    .sidebar, .center, .right { min-height: 0; }
+    .sidebar, .center { border-right: 1px solid #292c32; }
+    .sidebar { padding: 16px 18px; background: #16171c; }
+    .center { padding: 18px 20px; background: #18191e; }
+    .right { padding: 18px 18px; background: #18191e; }
+    .panel {
+      background: #1e2127;
+      border: 1px solid #343842;
+      border-radius: 18px;
+    }
+    .workspace { padding: 18px; display: flex; gap: 14px; align-items: center; }
+    .avatar {
+      width: 44px; height: 44px; border-radius: 50%; background: #7a62ff;
+      display: grid; place-items: center; font-weight: 700;
+    }
+    .muted { color: #818998; font-size: 11px; }
+    .title { font-size: 15px; font-weight: 700; margin-top: 4px; }
+    .nav { margin-top: 16px; display: grid; gap: 4px; }
+    .nav-item {
+      height: 34px; border-radius: 12px; padding: 0 14px; display: flex; align-items: center; gap: 12px;
+      color: #d4dae2; font-size: 14px;
+    }
+    .nav-item.active { background: #23262d; }
+    .badge {
+      margin-left: auto; min-width: 22px; height: 22px; padding: 0 8px; border-radius: 999px;
+      background: rgba(122,98,255,.2); color: #d6ceff; font-size: 11px; display: grid; place-items: center;
+    }
+    .section {
+      margin-top: 18px; padding: 16px; display: grid; gap: 10px;
+    }
+    .section h4 { margin: 0; font-size: 12px; color: #8d95a3; }
+    .quick {
+      height: 30px; border-radius: 10px; background: #242730; color: #d7dce4;
+      display: flex; align-items: center; padding: 0 14px; font-size: 12px;
+    }
+    .group-item {
+      height: 26px; border-radius: 10px; padding: 0 12px; display: flex; align-items: center; color: #d7dce4; font-size: 12px;
+    }
+    .group-item.active { background: #242730; }
+    .statusbar {
+      margin-top: 18px; height: 42px; border-radius: 14px; background: #1d2026;
+      display: flex; align-items: center; gap: 12px; padding: 0 14px; font-size: 12px;
+    }
+    .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #51c89c; }
+    .chips { display: flex; gap: 10px; }
+    .chip {
+      height: 28px; padding: 0 14px; border-radius: 999px; display: flex; align-items: center;
+      font-size: 11px; font-weight: 600;
+    }
+    .chip.warn { background: #2d2720; color: #ffd496; border: 1px solid #5b4b31; }
+    .chip.info { background: #202834; color: #bdd7ff; border: 1px solid #3b4f72; }
+    .chip.ok { background: #202c28; color: #bef6dd; border: 1px solid #36584d; }
+    .hero {
+      margin-top: 10px; padding: 26px 30px; min-height: 150px; position: relative;
+      background: radial-gradient(circle at 80% 35%, rgba(90,140,255,.16), transparent 22%), #1b1d23;
+    }
+    .hero h1 { margin: 8px 0 12px; font-size: 30px; line-height: 1.2; }
+    .hero p { margin: 0; font-size: 14px; color: #9aa3af; max-width: 460px; line-height: 1.6; }
+    .hero .mini-chips { margin-top: 14px; display: flex; gap: 10px; }
+    .hero .mini-chips span {
+      height: 26px; border-radius: 999px; padding: 0 12px; display: flex; align-items: center;
+      background: #242730; color: #d8ddea; font-size: 10px;
+    }
+    .cards {
+      margin-top: 20px;
+      display: grid; grid-template-columns: 1fr 1fr; gap: 18px;
+    }
+    .card {
+      min-height: 148px; padding: 18px; border-radius: 20px; background: #21242b; border: 1px solid #343842;
+      display: flex; flex-direction: column; gap: 12px;
+    }
+    .icon {
+      width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-size: 14px; font-weight: 700;
+    }
+    .icon.blue { background: #5688ff; }
+    .icon.purple { background: #7a62ff; }
+    .icon.green { background: #51c89c; }
+    .icon.orange { background: #ff9b54; }
+    .card h3 { margin: 0; font-size: 15px; }
+    .card p { margin: 0; color: #98a1ad; font-size: 12px; line-height: 1.6; }
+    .linkline { margin-top: auto; color: #7f8896; font-size: 11px; }
+    .stats-row { margin-top: 18px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+    .mini-stat {
+      min-height: 64px; padding: 14px 16px; border-radius: 18px; background: #1f2229; border: 1px solid #343842;
+    }
+    .mini-stat .k { color: #8f97a4; font-size: 11px; }
+    .mini-stat .v { margin-top: 6px; font-size: 16px; font-weight: 700; }
+    .prompt {
+      margin-top: 12px; height: 34px; border-radius: 16px; background: #1c1f25; color: #6f7886;
+      display: flex; align-items: center; padding: 0 16px; font-size: 12px;
+    }
+    .right-col { display: grid; gap: 16px; }
+    .side-card { padding: 18px; }
+    .side-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+    .side-head h4 { margin: 0; font-size: 15px; }
+    .pill-btn {
+      height: 24px; padding: 0 12px; border-radius: 999px; background: #4d3d24; color: #ffd496; font-size: 10px;
+      display: flex; align-items: center;
+    }
+    .action-row, .artifact-row {
+      min-height: 44px; border-radius: 14px; background: #242730; padding: 10px 14px;
+      display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center;
+      color: #d6dbe3; font-size: 12px;
+    }
+    .action-row.primary { background: #322b24; border: 1px solid #5c4b34; }
+    .artifact-row .open, .action-row .open { color: #bdd7ff; }
+    .source-row {
+      display: grid; grid-template-columns: 12px 1fr auto; gap: 10px; align-items: center;
+      color: #d6dbe3; font-size: 12px; min-height: 24px;
+    }
+    .source-dot { width: 10px; height: 10px; border-radius: 50%; }
+    .blue { background: #5688ff; }
+    .green { background: #51c89c; }
+    .gray { background: #cdd4de; }
+    .violet { background: #b5a4ff; }
+    .focus-row {
+      display: grid; grid-template-columns: 60px 1fr; gap: 12px; min-height: 22px; font-size: 12px;
+    }
+    .focus-row span:first-child { color: #8e97a4; }
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <div class="browser">
+      <div class="browser-bar">
+        <div class="dots"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></div>
+        <div class="addr">shiguang://workspace/home?view=desktop</div>
+        <div class="browser-more">⋯</div>
+      </div>
+      <div class="app">
+        <div class="titlebar">
+          <div class="brand">
+            <div class="logo">拾</div>
+            <strong>拾光 Agent</strong>
+            <small>桌面工作台</small>
+          </div>
+          <div style="display:flex;align-items:center;gap:24px;">
+            <div class="menus"><span>会话</span><span>来源</span><span>产物</span><span>设置</span></div>
+            <div class="win-controls"><span>—</span><span>□</span><span>✕</span></div>
+          </div>
+        </div>
+        <div class="content">
+          <aside class="sidebar">
+            <div class="panel workspace">
+              <div class="avatar">拾</div>
+              <div>
+                <div class="muted">当前工作区</div>
+                <div class="title">拾光产品实验室</div>
+                <div class="muted">DeepSeek 默认 · 7 个来源在线</div>
+              </div>
+            </div>
+            <div class="nav">
+              <div class="nav-item"><span>✦</span><span>新建对话</span></div>
+              <div class="nav-item active"><span>◷</span><span>待处理</span><span class="badge">2</span></div>
+              <div class="nav-item"><span>⌘</span><span>技能</span></div>
+              <div class="nav-item"><span>⌂</span><span>来源</span></div>
+              <div class="nav-item"><span>⧉</span><span>产物</span></div>
+              <div class="nav-item"><span>☰</span><span>历史</span></div>
+            </div>
+            <div class="panel section">
+              <h4>快速入口</h4>
+              <div class="quick">查看待审批项目</div>
+              <div class="quick">打开最近产物</div>
+              <div class="quick">切换默认模型</div>
+            </div>
+            <div class="panel section">
+              <h4>会话分组</h4>
+              <div class="group-item active">拾光 Agent 首页</div>
+              <div class="group-item">运行中任务</div>
+              <div class="group-item">待审批工具调用</div>
+              <div class="group-item">来源接入与授权</div>
+              <div class="group-item">产物导出与跳转</div>
+            </div>
+            <div class="statusbar"><span class="status-dot"></span><span>本地桌面实例</span><span class="muted">运行正常 · 时间线在线</span></div>
+          </aside>
+          <main class="center">
+            <div class="chips">
+              <div class="chip warn">待审批 2</div>
+              <div class="chip info">运行中 5</div>
+              <div class="chip ok">可见产物 18</div>
+            </div>
+            <section class="panel hero">
+              <div class="muted">拾光 Agent 首页</div>
+              <h1>今天想让拾光 Agent 帮你推进什么？</h1>
+              <p>从会话、来源、产物到审批流，首页直接进入真实工作，不再只是聊天壳子。</p>
+              <div class="mini-chips"><span>工作入口</span><span>可见状态</span><span>可跳转产物</span></div>
+            </section>
+            <section class="cards">
+              <div class="card"><div class="icon blue">▶</div><h3>继续上次任务</h3><p>恢复最近运行中的会话，继续计划、工具链和上下文。</p><div class="linkline">立即进入</div></div>
+              <div class="card"><div class="icon purple">⌂</div><h3>接入来源与仓库</h3><p>连接 GitHub、目录、网页或 MCP，让上下文立即可用。</p><div class="linkline">立即进入</div></div>
+              <div class="card"><div class="icon green">✓</div><h3>处理待审批动作</h3><p>集中查看终端、浏览器、写文件等等待批准的步骤。</p><div class="linkline">立即进入</div></div>
+              <div class="card"><div class="icon orange">↗</div><h3>查看产物与跳转</h3><p>直接打开截图、页面、文档和差异，不把结果埋在聊天里。</p><div class="linkline">立即进入</div></div>
+            </section>
+            <section class="stats-row">
+              <div class="mini-stat"><div class="k">最新焦点</div><div class="v">桌面首页产品化</div></div>
+              <div class="mini-stat"><div class="k">最近产物</div><div class="v">3 张截图</div></div>
+              <div class="mini-stat"><div class="k">待审批</div><div class="v">终端 / 发布</div></div>
+              <div class="mini-stat"><div class="k">在线来源</div><div class="v">GitHub / MCP</div></div>
+            </section>
+            <div class="prompt">例如：继续处理待审批的终端步骤，并把最新产物直接挂到右侧。</div>
+          </main>
+          <aside class="right">
+            <div class="right-col">
+              <div class="panel side-card">
+                <div class="side-head"><h4>待审批动作</h4><div class="pill-btn">2 项等待</div></div>
+                <div class="action-row primary"><div><strong>终端打包验证</strong><div class="muted">等待批准后导出 Windows 构建截图</div></div><div class="open">批准 →</div></div>
+                <div class="action-row"><div>页面发布到演示位</div><div class="open">查看</div></div>
+              </div>
+              <div class="panel side-card">
+                <div class="side-head"><h4>最新产物</h4></div>
+                <div class="artifact-row"><div><strong>首页产品稿 PNG</strong><div class="muted">刚刚生成 · 可直接预览</div></div><div class="open">打开 ↗</div></div>
+                <div class="artifact-row"><div><strong>Codex 骨架稿</strong><div class="muted">上一轮版本 · 供对照</div></div><div class="open">打开 ↗</div></div>
+                <div class="artifact-row"><div><strong>HTML 单页原型</strong><div class="muted">浏览器打开 · 继续拖改</div></div><div class="open">打开 ↗</div></div>
+              </div>
+              <div class="panel side-card">
+                <div class="side-head"><h4>来源状态</h4></div>
+                <div class="source-row"><span class="source-dot green"></span><span>GitHub 仓库</span><span style="color:#51c89c">已连接</span></div>
+                <div class="source-row"><span class="source-dot blue"></span><span>Browser / 页面验证</span><span style="color:#9bc1ff">在线</span></div>
+                <div class="source-row"><span class="source-dot gray"></span><span>本地文件系统</span><span>可读写</span></div>
+                <div class="source-row"><span class="source-dot violet"></span><span>MCP 服务</span><span style="color:#d4c9ff">2 个可用</span></div>
+              </div>
+              <div class="panel side-card">
+                <div class="side-head"><h4>当前焦点</h4></div>
+                <div class="focus-row"><span>会话</span><span>桌面首页产品化</span></div>
+                <div class="focus-row"><span>最新动作</span><span>已补齐右侧真实状态区</span></div>
+                <div class="focus-row"><span>下一步</span><span>继续做运行中与待审批页</span></div>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,91 @@
+Repo: /home/ubuntu/shiguang-agent
+Branch: feature/bootstrap
+Model: deepseek/deepseek-chat
+
+Task: implement a dual-layer context compression system for shiguang-agent.
+
+Constraints:
+- Keep changes focused to src/context/* and minimal safe touchpoints in src/memory/* if needed.
+- Do not redesign unrelated architecture.
+- Keep TypeScript simple and explicit.
+- Must compile with `npx tsc --noEmit`.
+- Do not leave temp files except code changes.
+
+Current state summary:
+- Context pipeline exists: memory retrieval -> buildContext -> trimToBudget -> renderPrompt.
+- ContextBundle has stable/volatile/live.
+- Current trimToBudget only does budget-based selection, no real pruning/compression.
+- MemoryService.search currently retrieves and ranks but does not dedupe/compact results for prompt use.
+
+Implement these changes:
+
+1) Extend context item kinds
+- In src/context/types.ts add at least:
+  - "context_digest"
+  - "memory_digest"
+  - "artifact_digest"
+  - "run_digest"
+- If useful, add a small type for compression stats/options, but keep it lightweight.
+
+2) Add rule-based pruning layer
+- New file: src/context/prune.ts
+- Export a function like `pruneContextBundle(bundle: ContextBundle): ContextBundle`
+- Deterministic/no LLM.
+- Behavior:
+  - preserve all stable items and current user_turn
+  - dedupe live refs by canonical source
+  - for volatile run_summary items: keep at most 2 highest-priority/recent-looking items intact; truncate older long ones
+  - for artifacts: keep concise label/title form; dedupe identical source/content
+  - for memories: dedupe obvious duplicates by normalized content/summary
+- Recompute totalBudget.
+
+3) Add rule-based compression layer
+- New file: src/context/compress.ts
+- Export:
+  - `compressContextBundle(bundle: ContextBundle): ContextBundle`
+  - helper functions if needed
+- This should aggregate middle/older volatile items into digest items instead of only dropping them.
+- Suggested behavior:
+  - multiple run_summary items -> one run_digest bullet list item
+  - multiple memory items -> one memory_digest bullet list item, prefer higher score items
+  - multiple artifact items -> one artifact_digest bullet list item
+  - optionally one combined context_digest if helpful, but keep render simple
+- Preserve recent user_turn and important stable items untouched.
+- Recompute budgets and preserve sensible scores.
+
+4) Add optional LLM compactor hook/skeleton (but do NOT build a full model integration)
+- New file: src/context/llm-compactor.ts
+- Define an interface/type such as:
+  - `ContextCompactionPressure`
+  - `LlmCompactor`
+  - maybe `LlmCompactorInput`
+- Add a small heuristic helper like `shouldUseLlmCompaction(bundle, maxBudget): boolean`
+- This is a hook/skeleton only. It can be optional and default to disabled/no-op.
+- Do NOT wire to OpenAI model directly in this task.
+
+5) Wire pipeline into ContextService
+- In src/context/service.ts change the build flow to:
+  - retrieve memories
+  - dedupe retrieved memories before appending
+  - buildContext
+  - pruneContextBundle
+  - compressContextBundle
+  - if optional llm compactor exists and heuristic says yes, call it safely (no-op by default)
+  - trimToBudget
+- Add constructor options for optional llmCompactor if needed.
+- Keep behavior backward-compatible when no compactor is provided.
+
+6) Improve render support for digest items
+- In src/context/render.ts, make digest items render cleanly instead of as awkward generic lines.
+- Keep refs behavior intact.
+
+7) Export new modules from src/context/index.ts.
+
+8) Minimal memory retrieval improvement
+- In src/memory/service.ts, improve search result handling so exact duplicates are removed before ranking/slicing returns to context callers, but keep behavior simple and safe.
+
+Validation:
+- Run `npx tsc --noEmit`
+- Then show `git diff --stat`
+
+Please implement the code, run validation, and stop.

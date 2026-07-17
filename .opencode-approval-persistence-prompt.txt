@@ -1,0 +1,42 @@
+Implement the next persistence slice in this repo: sqlite-backed approvals + approval continuity for desktop runs.
+
+Repo: /home/ubuntu/shiguang-agent
+Branch is already checked out; do not touch git config or create commits.
+Model target: deepseek/deepseek-chat.
+
+Current state to build on:
+- sqlite repositories already exist for sessions/tasks/runs/run events/turns/artifacts/memories under src/state/
+- electron/service.ts already hydrates recentRuns + linkedArtifacts into Agent context
+- src/state/repositories.ts already defines ApprovalRepository
+- src/state/schema.ts already has an approvals table
+- There is currently no src/state/sqlite-approval-repository.ts
+
+Goals:
+1. Add a sqlite approval repository implementation following the style of the other sqlite repositories.
+   - File: src/state/sqlite-approval-repository.ts
+   - Implement create(approval), update(id, patch), listPending(runId)
+   - Use the existing approvals table columns and map request_json <-> request, decided_at <-> decidedAt
+2. Export the new repository from src/state/index.ts
+3. Wire electron/service.ts to use the approval repository.
+4. Add approval continuity for future turns with the least invasive design:
+   - If a run emitted approval events, persist them into approvals table.
+   - Before agent.run(...), load pending approvals from recent runs in the same session and surface them into context via contextInput.systemInstructions (or another similarly low-risk existing context channel) as a compact textual summary.
+   - Keep it concise and deterministic; avoid large blobs. Include approval id, source run id, plugin id, capability, and a short request summary.
+5. Update any smoke test/types/imports needed so typecheck passes.
+
+Implementation guidance:
+- Reuse the coding patterns from sqlite-run-repository.ts / sqlite-memory-repository.ts / sqlite-artifact-repository.ts.
+- Keep changes small and local.
+- Do not redesign the agent loop or add new product/UI surfaces.
+- Avoid adding new dependencies.
+- If approval events are absent, behavior should remain unchanged.
+- For parsing event payloads, be defensive and tolerate unknown shapes.
+
+After editing, run:
+- npm run typecheck
+- npm run desktop:typecheck
+
+Then print a concise summary with:
+- files changed
+- how approval persistence works now
+- any caveats remaining
