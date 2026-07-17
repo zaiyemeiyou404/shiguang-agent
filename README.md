@@ -288,6 +288,34 @@ To package for Windows (requires a Windows environment or Wine):
 npm run desktop:package:win
 ```
 
+### Current packaged desktop artifact
+
+The latest validated Linux desktop bundle is produced locally by:
+
+```bash
+npm run desktop:package
+```
+
+Output path:
+
+```text
+release/linux-unpacked/shiguang-agent
+```
+
+This `release/` directory is intentionally gitignored, so packaged binaries are **not committed into the repo**. If you want to hand the build to someone else, archive the unpacked folder and upload it to a GitHub Release or workflow artifact instead of committing it:
+
+```bash
+cd release
+tar -czf shiguang-agent-linux-x64.tar.gz linux-unpacked
+```
+
+Recommended delivery pattern:
+
+1. keep source/code on the feature branch
+2. run `npm run desktop:package`
+3. archive `release/linux-unpacked/`
+4. upload the archive to GitHub Releases / Actions artifacts
+
 ### Windows Run Guide
 
 Yes — the **project can run on Windows**, but the current checked build artifact in this repo is Linux-only (`release/linux-unpacked/`). On a real Windows machine, use the source tree and run/build there.
