@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDesktopSessions, useRunEvents } from "./hooks/useDesktopSessions";
 import { getDesktopBridge, getDesktopBridgeErrorMessage, requireDesktopBridge } from "./bridge";
-import type { DesktopSession, DesktopRun, DesktopEvent, DesktopSettings, DesktopApproval, DesktopArtifact, DesktopProviderConnectionResult, DesktopAttachment } from "./bridge";
+import type { DesktopSession, DesktopRun, DesktopTurn, DesktopEvent, DesktopSettings, DesktopApproval, DesktopArtifact, DesktopProviderConnectionResult, DesktopAttachment } from "./bridge";
 
 type PillVariant = "progress" | "safe" | "auto" | "todo";
 type BannerVariant = "info" | "warn" | "danger" | "success";
@@ -443,29 +443,19 @@ function SessionCard({ active, session, pinned, onClick, onTogglePin }: {
   onClick?: () => void;
   onTogglePin?: () => void;
 }) {
-  const pillMap: Record<string, [string, PillVariant]> = {
-    active: ["进行中", "progress"],
-    paused: ["已暂停", "todo"],
-    archived: ["已归档", "safe"],
-  };
-  const pill = pillMap[session.status] ?? ["进行中", "progress"];
-  const attentionPills: Array<[string, PillVariant]> = [];
-  if (session.attention?.hasPendingApproval) {
-    attentionPills.push([`审批 ${session.attention.pendingApprovalCount}`, "todo"]);
-  }
-  if (session.attention?.hasRunningRun) {
-    attentionPills.push(["运行中", "progress"]);
-  }
-  if (session.attention?.hasFailedRun) {
-    attentionPills.push(["失败", "auto"]);
-  }
-  if (session.attention?.hasContextCompaction) {
-    attentionPills.push(["已压缩", "safe"]);
-  }
-  const preview = session.summary ?? formatRunStatus(session.attention?.latestRunStatus) ?? formatSessionStatus(session.status);
+  const statusLabel = active
+    ? "当前会话"
+    : session.attention?.hasPendingApproval
+      ? `待审批 ${session.attention.pendingApprovalCount}`
+      : session.attention?.hasFailedRun
+        ? "失败"
+        : session.attention?.hasRunningRun
+          ? "运行中"
+          : formatSessionStatus(session.status);
+  const preview = session.summary ?? "打开后继续这个会话。";
   return (
     <article className={`session-card${active ? " active" : ""}${pinned ? " pinned" : ""}`} onClick={onClick} style={{ cursor: "pointer" }}>
-      <div className="session-top" style={{ alignItems: "flex-start", gap: 8 }}>
+      <div className="session-top" style={{ alignItems: "center", gap: 8 }}>
         <div className="session-name-row">
           <div className="session-name">{session.title}</div>
           {onTogglePin ? (
@@ -482,13 +472,13 @@ function SessionCard({ active, session, pinned, onClick, onTogglePin }: {
             </button>
           ) : null}
         </div>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
-          <Pill variant={pill[1]}>{pill[0]}</Pill>
-          {attentionPills.map(([label, variant]) => <Pill key={label} variant={variant}>{label}</Pill>)}
-        </div>
+        <span className="session-card-status">{statusLabel}</span>
       </div>
       <p className="session-preview">{preview}</p>
-      <div className="meta-line"><span>{active ? "当前会话" : (session.attention?.latestRunStatus ? `最近运行：${formatRunStatus(session.attention.latestRunStatus)}` : "")}</span>{pinned ? <span>已固定</span> : null}</div>
+      <div className="session-card-meta">
+        <span>{formatAgeFromTimestamp(session.updatedAt) ?? "刚刚更新"}</span>
+        {pinned ? <span>已固定</span> : null}
+      </div>
     </article>
   );
 }
@@ -509,6 +499,252 @@ function Message({ role, from, time, children }: {
         {children}
       </div>
     </article>
+  );
+}
+
+function LegacySimpleChatTranscript({ events }: { events: DesktopEvent[] }) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  type ChatTranscriptItem = {
+    id: string;
+    role?: "user" | "system";
+    from: string;
+    time: string;
+    content: string;
+    duplicateCount?: number;
+  };
+
+  const rawItems: ChatTranscriptItem[] = events.flatMap((event): ChatTranscriptItem[] => {
+    const payload = eventPayloadRecord(event);
+    if (event.kind === "message") {
+      const content = typeof payload.content === "string" ? payload.content.trim() : "";
+      if (!content) return [];
+      return [{
+        id: event.id,
+        role: payload.role === "user" ? "user" as const : undefined,
+        from: payload.role === "user" ? "你" : "拾光 Agent",
+        time: new Date(event.createdAt).toLocaleTimeString(),
+        content,
+      }];
+    }
+
+    if (event.kind === "error") {
+      const content = typeof payload.message === "string" ? payload.message.trim() : formatPayload(payload).trim();
+      if (!content) return [];
+      return [{
+        id: event.id,
+        role: "system" as const,
+        from: "系统",
+        time: new Date(event.createdAt).toLocaleTimeString(),
+        content,
+      }];
+    }
+
+    if (event.kind === "system" || event.kind === "context_compacted" || event.kind === "approval_granted" || event.kind === "approval_denied") {
+      const title = event.kind === "approval_granted"
+        ? "审批已通过"
+        : event.kind === "approval_denied"
+          ? "审批已拒绝"
+          : event.kind === "context_compacted"
+            ? "上下文已压缩"
+            : "系统消息";
+      const body = typeof payload.message === "string"
+        ? payload.message.trim()
+        : typeof payload.content === "string"
+          ? payload.content.trim()
+          : "";
+      return [{
+        id: event.id,
+        role: "system" as const,
+        from: "系统",
+        time: new Date(event.createdAt).toLocaleTimeString(),
+        content: body ? `${title}\n${body}` : title,
+      }];
+    }
+
+    return [];
+  });
+
+  const items = rawItems.reduce<ChatTranscriptItem[]>((acc, item) => {
+    const prev = acc[acc.length - 1];
+    const canCollapse = prev
+      && item.role !== "user"
+      && prev.role === item.role
+      && prev.from === item.from
+      && prev.content === item.content;
+    if (!canCollapse) {
+      acc.push(item);
+      return acc;
+    }
+    prev.time = item.time;
+    prev.duplicateCount = (prev.duplicateCount ?? 1) + 1;
+    return acc;
+  }, []);
+
+  useEffect(() => {
+    const host = scrollRef.current;
+    if (!host) return;
+    requestAnimationFrame(() => {
+      host.scrollTo({ top: host.scrollHeight });
+    });
+  }, [items.length]);
+
+  if (items.length === 0) {
+    return (
+      <div className="chat-transcript empty">
+        <p className="muted">还没有聊天内容，发一条消息就会开始。</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="chat-transcript" ref={scrollRef}>
+      {items.map((item) => (
+        <Message
+          key={item.id}
+          role={item.role}
+          from={item.from}
+          time={item.duplicateCount && item.duplicateCount > 1 ? `${item.time} · x${item.duplicateCount}` : item.time}
+        >
+          <p className="message-text">{item.content}</p>
+        </Message>
+      ))}
+    </div>
+  );
+}
+
+function SimpleChatTranscript({
+  turns,
+  events,
+  showRunEvents,
+}: {
+  turns: DesktopTurn[];
+  events: DesktopEvent[];
+  showRunEvents: boolean;
+}) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  type ChatTranscriptItem = {
+    id: string;
+    source: "turn" | "event";
+    role?: "user" | "system";
+    from: string;
+    time: string;
+    content: string;
+    duplicateCount?: number;
+  };
+
+  const historyItems: ChatTranscriptItem[] = turns.flatMap((turn): ChatTranscriptItem[] => {
+    const content = typeof turn.content === "string" ? turn.content.trim() : "";
+    if (!content) return [];
+    return [{
+      id: `turn:${turn.id}`,
+      source: "turn",
+      role: turn.role === "user" ? "user" : turn.role === "system" ? "system" : undefined,
+      from: turn.role === "user" ? "你" : turn.role === "system" ? "系统" : "拾光 Agent",
+      time: new Date(turn.createdAt).toLocaleTimeString(),
+      content,
+    }];
+  });
+
+  const liveItems: ChatTranscriptItem[] = !showRunEvents ? [] : events.flatMap((event): ChatTranscriptItem[] => {
+    const payload = eventPayloadRecord(event);
+    if (event.kind === "message") {
+      if (payload.role === "user") return [];
+      const content = typeof payload.content === "string" ? payload.content.trim() : "";
+      if (!content) return [];
+      return [{
+        id: `event:${event.id}`,
+        source: "event",
+        from: "拾光 Agent",
+        time: new Date(event.createdAt).toLocaleTimeString(),
+        content,
+      }];
+    }
+
+    if (event.kind === "error") {
+      const content = typeof payload.message === "string" ? payload.message.trim() : formatPayload(payload).trim();
+      if (!content) return [];
+      return [{
+        id: `event:${event.id}`,
+        source: "event",
+        role: "system" as const,
+        from: "系统",
+        time: new Date(event.createdAt).toLocaleTimeString(),
+        content,
+      }];
+    }
+
+    if (event.kind === "system" || event.kind === "context_compacted" || event.kind === "approval_granted" || event.kind === "approval_denied") {
+      const title = event.kind === "approval_granted"
+        ? "审批已通过"
+        : event.kind === "approval_denied"
+          ? "审批已拒绝"
+          : event.kind === "context_compacted"
+            ? "上下文已压缩"
+            : "系统消息";
+      const body = typeof payload.message === "string"
+        ? payload.message.trim()
+        : typeof payload.content === "string"
+          ? payload.content.trim()
+          : "";
+      return [{
+        id: `event:${event.id}`,
+        source: "event",
+        role: "system" as const,
+        from: "系统",
+        time: new Date(event.createdAt).toLocaleTimeString(),
+        content: body ? `${title}\n${body}` : title,
+      }];
+    }
+
+    return [];
+  });
+
+  const items = [...historyItems, ...liveItems].reduce<ChatTranscriptItem[]>((acc, item) => {
+    const prev = acc[acc.length - 1];
+    const canCollapse = prev
+      && item.role !== "user"
+      && prev.role === item.role
+      && prev.from === item.from
+      && prev.content === item.content
+      && (prev.source === "event" || item.source === "event");
+    if (!canCollapse) {
+      acc.push(item);
+      return acc;
+    }
+    prev.time = item.time;
+    prev.duplicateCount = (prev.duplicateCount ?? 1) + 1;
+    return acc;
+  }, []);
+
+  useEffect(() => {
+    const host = scrollRef.current;
+    if (!host) return;
+    requestAnimationFrame(() => {
+      host.scrollTo({ top: host.scrollHeight });
+    });
+  }, [items.length]);
+
+  if (items.length === 0) {
+    return (
+      <div className="chat-transcript empty">
+        <p className="muted">还没有聊天内容，发一条消息就会开始。</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="chat-transcript" ref={scrollRef}>
+      {items.map((item) => (
+        <Message
+          key={item.id}
+          role={item.role}
+          from={item.from}
+          time={item.duplicateCount && item.duplicateCount > 1 ? `${item.time} x${item.duplicateCount}` : item.time}
+        >
+          <p className="message-text">{item.content}</p>
+        </Message>
+      ))}
+    </div>
   );
 }
 
@@ -2445,6 +2681,19 @@ export default function App() {
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
 
   const activeRun = detail?.runs?.find((r) => r.id === activeRunId) ?? null;
+  const sessionTurns = detail?.turns ?? [];
+  const latestSessionRun = detail?.runs.length
+    ? detail.runs.reduce((latest, run) => {
+      const latestKey = latest.startedAt ?? latest.endedAt ?? latest.id;
+      const runKey = run.startedAt ?? run.endedAt ?? run.id;
+      return runKey > latestKey ? run : latest;
+    })
+    : null;
+  const showActiveRunTranscript = Boolean(
+    activeRun
+      && (activeRun.status === "pending" || activeRun.status === "running" || activeRun.status === "needs_approval")
+      && (sessionTurns.length === 0 || (latestSessionRun?.id ?? null) === (activeRunId ?? null)),
+  );
   const pendingApprovals = workspaceSnapshot?.pendingApprovals ?? [];
   const artifacts = workspaceSnapshot?.artifacts ?? [];
   const sortedEvents = [...events].sort((a, b) => a.seq - b.seq);
@@ -2509,16 +2758,13 @@ export default function App() {
     }
     return acc;
   }, {}), [artifacts]);
-  const surfaceTitle = surface === "home"
-    ? "拾光首页"
-    : surface === "approval"
-      ? "待审批动作"
-      : (detail?.session?.title ?? "运行中会话");
-  const surfaceSubtitle = surface === "home"
-    ? "从入口、状态、审批和产物直接进入工作"
-    : surface === "approval"
-      ? "集中处理有副作用的关键动作"
-      : (activeRun ? `运行状态：${formatRunStatus(activeRun.status)}` : (detail ? `${detail.runs.length} 次运行` : "选择一个会话开始"));
+  const surfaceTitle = surface === "running"
+    ? (detail?.session?.title ?? activeSession?.title ?? "会话")
+    : "会话";
+  const surfaceSubtitle = surface === "running"
+    ? (activeRun ? `运行状态：${formatRunStatus(activeRun.status)}` : activeSession?.summary ?? "消息、审批和运行时间线都在这里。")
+    : "左侧保留会话和设置，点开会话直接进入聊天。";
+  const showChatView = surface === "running" && Boolean(activeSession);
   const eventKindCounts = useMemo(() => {
     return sortedEvents.reduce<Record<string, number>>((acc, event) => {
       acc[event.kind] = (acc[event.kind] ?? 0) + 1;
@@ -2553,7 +2799,7 @@ export default function App() {
       : sending
         ? "正在发送消息…"
         : activeRun?.status === "needs_approval"
-          ? "运行因审批暂停，请在右侧面板通过或拒绝后继续。"
+          ? "运行因审批暂停，请先处理上方审批卡片后继续。"
           : settingsError
             ? "先修好模型设置，再启动下一次运行。"
             : "Shift+Enter 换行 · Enter 发送";
@@ -2805,7 +3051,13 @@ export default function App() {
 
   const handleAutoAction = async () => {
     if (pendingApprovals.length > 0) {
-      setSurface("approval");
+      if (!activeSessionId) {
+        const nextSessionId = focusSessions[0]?.id ?? sortedSessions[0]?.id ?? null;
+        if (nextSessionId) {
+          selectSession(nextSessionId);
+        }
+      }
+      setSurface("running");
       return;
     }
     if (!activeSessionId) {
@@ -2968,7 +3220,300 @@ export default function App() {
         onSubmit={() => { void submitSessionLifecycle(); }}
       />
 
-      <div className="app">
+      {true ? (
+        <div className="app simple-layout">
+          <aside className="panel app-nav-panel">
+            <div className="app-nav-top">
+              <div className="brand-mark">拾</div>
+              <div className="app-nav-copy">
+                <strong>拾光</strong>
+                <span>Agent</span>
+              </div>
+            </div>
+
+            <div className="app-nav-group">
+              <button className={`app-nav-btn${surface === "home" ? " active" : ""}`} type="button" onClick={() => setSurface("home")}>
+                <span className="app-nav-glyph">会</span>
+                <span className="app-nav-text">会话</span>
+              </button>
+              <button className={`app-nav-btn${showChatView ? " active" : ""}`} type="button" onClick={() => setSurface(activeSessionId ? "running" : "home")}>
+                <span className="app-nav-glyph">聊</span>
+                <span className="app-nav-text">聊天</span>
+              </button>
+              <button className="app-nav-btn" type="button" onClick={handleCreateSession}>
+                <span className="app-nav-glyph">＋</span>
+                <span className="app-nav-text">新建</span>
+              </button>
+            </div>
+
+            <div className="app-nav-footer">
+              <div className={`app-nav-status${pendingApprovals.length > 0 ? " warn" : ""}`}>
+                <span>{pendingApprovals.length > 0 ? `${pendingApprovals.length} 待审` : runtimeLabel}</span>
+                <small>{streamLabel}</small>
+              </div>
+              <button className="app-nav-btn secondary" type="button" onClick={() => { void openSettings(); }}>
+                <span className="app-nav-glyph">设</span>
+                <span className="app-nav-text">设置</span>
+              </button>
+            </div>
+          </aside>
+
+          <aside className="panel session-pane">
+            <div className="session-pane-header">
+              <div>
+                <span className="tiny">My Workspace</span>
+                <h2>拾光 Agent</h2>
+                <p>{providerLabel} · {modelLabel}</p>
+              </div>
+              <div className="session-pane-header-actions">
+                <IconBtn label="设置" onClick={openSettings}>⚙</IconBtn>
+                <IconBtn label="新建会话" onClick={handleCreateSession}>＋</IconBtn>
+              </div>
+            </div>
+
+            <div className="session-controls-card session-pane-tools">
+              <input
+                className="settings-input"
+                value={sessionQuery}
+                onChange={(event) => setSessionQuery(event.target.value)}
+                placeholder="搜索会话标题 / 摘要"
+              />
+              <div className="session-filter-row">
+                <button className={`session-filter-chip${sessionView === "all" ? " active" : ""}`} type="button" onClick={() => setSessionView("all")}>全部</button>
+                <button className={`session-filter-chip${sessionView === "pinned" ? " active" : ""}`} type="button" onClick={() => setSessionView("pinned")}>固定</button>
+                <button className={`session-filter-chip${sessionView === "attention" ? " active" : ""}`} type="button" onClick={() => setSessionView("attention")}>焦点</button>
+                <button className={`session-filter-chip${sessionView === "active" ? " active" : ""}`} type="button" onClick={() => setSessionView("active")}>进行中</button>
+                <button className={`session-filter-chip${sessionView === "archived" ? " active" : ""}`} type="button" onClick={() => setSessionView("archived")}>已归档</button>
+              </div>
+              {activeSession ? (
+                <div className="session-action-row">
+                  <ToolBtn onClick={() => openSessionLifecycle("rename")}>重命名</ToolBtn>
+                  <ToolBtn onClick={() => openSessionLifecycle("archive")}>{activeSession.status === "archived" ? "恢复" : "归档"}</ToolBtn>
+                  <ToolBtn onClick={() => openSessionLifecycle("delete")}>删除</ToolBtn>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="session-list session-pane-list">
+              {sessions.length === 0 ? (
+                <p className="muted" style={{ padding: 16 }}>还没有会话，点左上角新建一个。</p>
+              ) : null}
+              {sessions.length > 0 && filteredSessions.length === 0 ? (
+                <p className="muted" style={{ padding: 16 }}>当前筛选下没有会话，换个关键词或视图试试。</p>
+              ) : null}
+              {filteredSessions.map((session) => (
+                <SessionCard
+                  key={session.id}
+                  active={session.id === activeSessionId}
+                  pinned={pinnedSessionIds.includes(session.id)}
+                  session={session}
+                  onClick={() => {
+                    selectSession(session.id);
+                    setSurface("running");
+                  }}
+                  onTogglePin={() => toggleSessionPin(session.id)}
+                />
+              ))}
+            </div>
+          </aside>
+
+          <main className="panel main chat-pane">
+            <header className="chat-pane-header">
+              <div className="chat-pane-title">
+                <span className="tiny">{showChatView ? "当前会话" : "会话中心"}</span>
+                <h2>{surfaceTitle}</h2>
+                <p>{showChatView ? surfaceSubtitle : "保留会话、聊天和设置三件事，点开会话就能继续。"}</p>
+              </div>
+              <div className="toolbar">
+                {showChatView && activeRun && (activeRun.status === "pending" || activeRun.status === "running" || activeRun.status === "needs_approval") ? (
+                  <ToolBtn onClick={() => { void handleCancelRun(); }}>{runActionState === "cancelling" ? "取消中..." : "取消运行"}</ToolBtn>
+                ) : null}
+                {showChatView && activeRun ? (
+                  <>
+                    <ToolBtn onClick={() => { void handleRetryRun(); }}>{runActionState === "retrying" ? "重试中..." : "重新运行"}</ToolBtn>
+                    <ToolBtn onClick={() => { void handleBranchFromRun(); }}>{branchingRunId === activeRun.id ? "分支中..." : "从此处分支"}</ToolBtn>
+                  </>
+                ) : null}
+                {showChatView && activeSession ? (
+                  <>
+                    <ToolBtn onClick={() => openSessionLifecycle("rename")}>重命名</ToolBtn>
+                    <ToolBtn onClick={() => openSessionLifecycle("archive")}>{activeSession.status === "archived" ? "恢复" : "归档"}</ToolBtn>
+                  </>
+                ) : null}
+                <ToolBtn onClick={() => { void openSettings(); }}>设置</ToolBtn>
+                <ToolBtn
+                  primary
+                  onClick={() => {
+                    if (showChatView) {
+                      void handleAutoAction();
+                      return;
+                    }
+                    handleCreateSession();
+                  }}
+                >
+                  {showChatView ? "继续工作" : "新建会话"}
+                </ToolBtn>
+              </div>
+            </header>
+
+            <section className="chat-banner-stack">
+              {sessionError ? (
+                <GlobalBanner variant="danger" title="会话连接异常" detail={sessionError} />
+              ) : null}
+              {detailError ? (
+                <GlobalBanner variant="danger" title="会话详情异常" detail={detailError} />
+              ) : null}
+              {settingsError ? (
+                <GlobalBanner variant="warn" title="模型设置不可用" detail={settingsError} />
+              ) : null}
+              {eventsError ? (
+                <GlobalBanner variant="danger" title="运行时间线不可用" detail={eventsError} />
+              ) : null}
+              {approvalError ? (
+                <GlobalBanner variant="warn" title="审批动作异常" detail={approvalError} />
+              ) : null}
+              {actionError ? (
+                <GlobalBanner variant="danger" title="桌面动作失败" detail={actionError} />
+              ) : null}
+              {pendingApprovals.length > 0 ? (
+                <GlobalBanner
+                  variant="warn"
+                  title={`待审批动作：${pendingApprovals.length}`}
+                  detail="高风险动作正在等待审阅，打开当前会话即可直接处理。"
+                />
+              ) : null}
+              {latestErrorEvent ? (
+                <GlobalBanner
+                  variant="danger"
+                  title="运行错误"
+                  detail={String(((latestErrorEvent.payload as Record<string, unknown> | undefined)?.message) ?? activeRun?.reason ?? "运行失败。")}
+                />
+              ) : null}
+              {latestCompactionEvent ? (
+                <GlobalBanner
+                  variant="info"
+                  title="上下文已压缩"
+                  detail={String(((latestCompactionEvent.payload as Record<string, unknown> | undefined)?.message) ?? "为了适配模型预算，较早上下文已被压缩。")}
+                />
+              ) : null}
+              {runActivity.stalled ? (
+                <GlobalBanner
+                  variant="warn"
+                  title="运行长时间无新事件"
+                  detail={runActivity.stalledDetail ?? "当前运行可能正在等待模型或长命令返回。"}
+                />
+              ) : null}
+              {hasApprovedResume ? (
+                <GlobalBanner
+                  variant="success"
+                  title="审批已通过，运行已恢复"
+                  detail="阻塞动作已被通过，Agent 正从暂停点继续执行。"
+                />
+              ) : null}
+            </section>
+
+            {!showChatView ? (
+              <section className="chat-home">
+                <div className="chat-empty compact">
+                  <span className="tiny">会话页</span>
+                  <h3>{sessions.length === 0 ? "从一个新会话开始" : "从左侧打开会话，直接进入聊天"}</h3>
+                  <p className="muted">这里只保留会话入口。设置在左侧，选中会话后右边就是纯聊天界面。</p>
+                  <div className="home-command-bar">
+                    <button className="home-command-chip" type="button" onClick={handleCreateSession}>新建会话</button>
+                    <button
+                      className="home-command-chip"
+                      type="button"
+                      disabled={!latestSession}
+                      onClick={() => {
+                        if (!latestSession) return;
+                        selectSession(latestSession.id);
+                        setSurface("running");
+                      }}
+                    >
+                      打开最近会话
+                    </button>
+                    <button className="home-command-chip" type="button" onClick={() => { void openSettings(); }}>打开设置</button>
+                  </div>
+                </div>
+              </section>
+            ) : (
+              <>
+                <section className="chat-surface">
+                  {pendingApprovals.length > 0 ? (
+                    <section className="detail-block chat-inline-block">
+                      <div className="section-title">
+                        <h3>待审批动作</h3>
+                        <span className="tiny">{pendingApprovals.length} 个</span>
+                      </div>
+                      <div className="chat-approval-list">
+                        {pendingApprovals.map((approval) => (
+                          <ApprovalCard
+                            key={approval.id}
+                            approval={approval}
+                            decisionState={decisionState[approval.id]}
+                            onDecision={handleApprovalDecision}
+                          />
+                        ))}
+                      </div>
+                    </section>
+                  ) : null}
+                  <SimpleChatTranscript
+                    turns={sessionTurns}
+                    events={sortedEvents}
+                    showRunEvents={showActiveRunTranscript}
+                  />
+                </section>
+
+                <section className="composer composer-dock">
+                  <div className="composer-hint-row">
+                    <SignalPill tone={activeRun?.status === "needs_approval" ? "warn" : streamState === "error" ? "danger" : activeRun?.status === "running" ? "success" : "neutral"}>
+                      {activeRun?.status === "needs_approval" ? "需要审批" : activeRun ? formatRunStatus(activeRun.status) : "就绪"}
+                    </SignalPill>
+                    <p className="muted">{failureInsight && activeRun?.status !== "running" ? `可直接写入修复提示：${failureInsight.nextStep}` : composerBlockedReason}</p>
+                  </div>
+                  <textarea
+                    ref={composerRef}
+                    value={inputText}
+                    onChange={(e) => {
+                      const nextValue = e.target.value;
+                      setInputText(nextValue);
+                      if (activeSessionId) {
+                        setSessionDrafts((prev) => ({ ...prev, [activeSessionId]: nextValue }));
+                      }
+                    }}
+                    placeholder="输入要继续推进的任务、问题或命令..."
+                    disabled={!activeSessionId || sending || runActionState === "retrying"}
+                    onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void handleSend(); } }}
+                  />
+                  {selectedAttachments.length > 0 ? (
+                    <div className="composer-attachment-row">
+                      {selectedAttachments.map((attachment) => (
+                        <div key={attachment.path} className="composer-attachment-chip">
+                          <div>
+                            <strong>{attachment.name}</strong>
+                            <p className="muted">{formatAttachmentSize(attachment.size)}</p>
+                          </div>
+                          <button type="button" className="tool-btn" onClick={() => handleRemoveAttachment(attachment.path)}>移除</button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className="composer-footer">
+                    <div className="composer-actions">
+                      <button className="composer-action" type="button" onClick={() => { void handlePickAttachments(); }} disabled={!activeSessionId || sending || runActionState !== "idle"}>📎 附件{selectedAttachments.length > 0 ? ` (${selectedAttachments.length})` : ""}</button>
+                      <button className="composer-action" type="button" onClick={() => { void openSettings(); }}>⚙ 模型</button>
+                    </div>
+                    <button className="send-btn" type="button" onClick={() => { void handleSend(); }} disabled={!activeSessionId || sending || runActionState !== "idle" || (!inputText.trim() && selectedAttachments.length === 0)}>
+                      {sending ? "..." : "发送 ↗"}
+                    </button>
+                  </div>
+                </section>
+              </>
+            )}
+          </main>
+        </div>
+      ) : null}
+      {/* <div className="app">
         <aside className="panel sidebar">
           <div className="brand">
             <div className="brand-badge">
@@ -3694,6 +4239,7 @@ export default function App() {
           </div>
         </aside>
       </div>
+      */}
     </div>
   );
 }

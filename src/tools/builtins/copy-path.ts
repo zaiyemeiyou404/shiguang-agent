@@ -1,6 +1,7 @@
 import { copyFileSync, mkdirSync, statSync } from "node:fs";
 import { dirname, normalize, relative, resolve } from "node:path";
 import type { Tool, ToolExecutionContext } from "../types.js";
+import { toPortablePath } from "./path-format.js";
 
 export interface CopyPathInput {
   sourcePath: string;
@@ -72,8 +73,8 @@ export function createCopyPathTool(workspaceRoot: string): Tool {
       mkdirSync(dirname(destinationFullPath), { recursive: true });
       copyFileSync(sourceFullPath, destinationFullPath);
       return {
-        sourcePath: sourceFullPath,
-        destinationPath: destinationFullPath,
+        sourcePath: toPortablePath(sourceFullPath),
+        destinationPath: toPortablePath(destinationFullPath),
         bytes: sourceStats.size,
       };
     },

@@ -214,9 +214,7 @@ export class Agent {
 
   private async emitContextCompactionEvent(runId: string, diagnostics: ContextBuildDiagnostics): Promise<void> {
     const { compression, usedLlmCompactor } = diagnostics;
-    const changed = compression.prunedCount > 0
-      || compression.compressedCount > 0
-      || compression.finalBudget < compression.originalBudget;
+    const changed = compression.finalBudget < compression.originalBudget;
     if (!changed || !this.options.eventSink) return;
 
     const finalItemEstimate = Math.max(
@@ -224,7 +222,7 @@ export class Agent {
       compression.originalItemCount - compression.prunedCount - compression.compressedCount,
     );
     await this.options.eventSink.record(runId, "context_compacted", {
-      message: `Context compacted from ~${compression.originalBudget} to ~${compression.finalBudget} tokens.`,
+      message: `上下文已压缩，估算 token 约从 ${compression.originalBudget} 降到 ${compression.finalBudget}。`,
       originalItemCount: compression.originalItemCount,
       prunedCount: compression.prunedCount,
       compressedCount: compression.compressedCount,

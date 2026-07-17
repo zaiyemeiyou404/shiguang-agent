@@ -11,7 +11,7 @@ function createWindow() {
   const appPath = app.getAppPath();
   const projectRoot = path.basename(appPath) === "desktop-build" ? path.dirname(appPath) : appPath;
   const desktopBuildDir = path.basename(appPath) === "desktop-build" ? appPath : path.join(appPath, "desktop-build");
-  const preloadPath = path.join(desktopBuildDir, "preload.js");
+  const preloadPath = path.join(desktopBuildDir, "preload.cjs");
   const uiEntry = path.join(projectRoot, "ui", "dist", "index.html");
   const win = new BrowserWindow({
     width: 1400,

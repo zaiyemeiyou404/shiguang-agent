@@ -113,6 +113,14 @@ function makeDigest(
   };
 }
 
+function totalBudget(items: ContextItem[]): number {
+  return items.reduce((sum, item) => sum + item.budget, 0);
+}
+
+function shouldReplaceWithDigest(items: ContextItem[], digest: ContextItem): boolean {
+  return digest.budget < totalBudget(items);
+}
+
 function normalizedLimit(value: number | undefined, fallback: number): number {
   if (value === undefined) return fallback;
   if (!Number.isFinite(value)) return fallback;
@@ -209,6 +217,10 @@ function compressRunSummaries(
     avgScore,
   );
 
+  if (!shouldReplaceWithDigest(toDigest, digest)) {
+    return [...other, ...runItems];
+  }
+
   return [...other, ...kept, digest];
 }
 
@@ -244,6 +256,10 @@ function compressMemories(
     memoryDigestContent(uniqueDigest),
     avgScore,
   );
+
+  if (!shouldReplaceWithDigest(toDigest, digest)) {
+    return [...other, ...memoryItems];
+  }
 
   return [...other, ...kept, digest];
 }
@@ -282,6 +298,10 @@ function compressArtifacts(
     artifactDigestContent(toDigest),
     avgScore,
   );
+
+  if (!shouldReplaceWithDigest(toDigest, digest)) {
+    return [...other, ...uniqueArts];
+  }
 
   return [...other, ...kept, digest];
 }

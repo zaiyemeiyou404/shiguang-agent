@@ -27,6 +27,14 @@ export interface DesktopRun {
   summary: string | null;
 }
 
+export interface DesktopTurn {
+  id: string;
+  sessionId: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  createdAt: string;
+}
+
 export interface DesktopEvent {
   id: string;
   runId: string;
@@ -96,6 +104,7 @@ export interface DesktopSessionBranchResult {
 export interface DesktopSessionDetail {
   session: DesktopSession;
   runs: DesktopRun[];
+  turns: DesktopTurn[];
 }
 
 export interface DesktopWorkspaceSnapshot {

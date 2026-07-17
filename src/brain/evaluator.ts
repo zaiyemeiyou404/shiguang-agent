@@ -5,6 +5,7 @@ type ToolErrorResult = ActionResult & {
 };
 
 export type LoopStopReason =
+  | "respond"
   | "finish"
   | "fail"
   | "needs_approval"
@@ -29,8 +30,13 @@ export class BasicEvaluator implements Evaluator {
     result?: ActionResult,
     history: ActionResult[] = result ? [result] : [],
   ): Promise<LoopAction> {
-    // 显式终止类 action 直接停；无需再看工具结果。
-    if (decision.action.kind === "finish" || decision.action.kind === "fail" || decision.action.kind === "needs_approval") {
+    // 对外可见回复也要立刻停；否则同一轮里可能反复生成多条助手消息。
+    if (
+      decision.action.kind === "respond"
+      || decision.action.kind === "finish"
+      || decision.action.kind === "fail"
+      || decision.action.kind === "needs_approval"
+    ) {
       return { kind: "stop", reason: decision.action.kind };
     }
 

@@ -3,6 +3,7 @@ import { app, dialog, shell } from "electron";
 import type {
   DesktopSession,
   DesktopRun,
+  DesktopTurn,
   DesktopEvent,
   DesktopSessionDetail,
   DesktopWorkspaceSnapshot,
@@ -17,7 +18,7 @@ import type {
 } from "./types.js";
 import { Agent } from "../dist/app/agent.js";
 import { RepositoryEventSink } from "../dist/runtime/event-sink.js";
-import type { Approval, Artifact, Memory, Run, RunEvent, Session, Task } from "../dist/core/types.js";
+import type { Approval, Artifact, Memory, Run, RunEvent, Session, Task, Turn } from "../dist/core/types.js";
 import { MemoryService } from "../dist/memory/service.js";
 import { openStateDatabase } from "../dist/state/sqlite.js";
 import { SqliteApprovalRepository } from "../dist/state/sqlite-approval-repository.js";
@@ -195,8 +196,15 @@ export class DesktopAppService {
       throw new Error(`Session not found: ${sessionId}`);
     }
     await this.ensureSqliteSession(session);
-    const runs = (await this.runRepository.listBySession(sessionId)).map(coreRunToDesktop);
-    return { session: await this.decorateSession(session), runs };
+    const [runs, turns] = await Promise.all([
+      this.runRepository.listBySession(sessionId),
+      this.turnRepository.listBySession(sessionId, 200),
+    ]);
+    return {
+      session: await this.decorateSession(session),
+      runs: runs.map(coreRunToDesktop),
+      turns: turns.map(coreTurnToDesktop),
+    };
   }
 
   async getWorkspaceSnapshot(sessionId: string): Promise<DesktopWorkspaceSnapshot> {
@@ -1328,6 +1336,16 @@ function coreRunToDesktop(run: Run): DesktopRun {
     startedAt: run.startedAt?.toISOString() ?? null,
     endedAt: run.endedAt?.toISOString() ?? null,
     summary: run.summary,
+  };
+}
+
+function coreTurnToDesktop(turn: Turn): DesktopTurn {
+  return {
+    id: turn.id,
+    sessionId: turn.sessionId,
+    role: turn.role,
+    content: turn.content,
+    createdAt: turn.createdAt.toISOString(),
   };
 }
 

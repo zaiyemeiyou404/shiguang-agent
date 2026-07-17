@@ -1,5 +1,11 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { ShiguangBridge, DesktopEvent, DesktopSettings, DesktopProviderConnectionRequest, DesktopProviderConnectionResult } from "./types.js";
+import type {
+  ShiguangBridge,
+  DesktopEvent,
+  DesktopSettings,
+  DesktopProviderConnectionRequest,
+  DesktopProviderConnectionResult,
+} from "./types.js";
 
 const bridge: ShiguangBridge = {
   listSessions: () => ipcRenderer.invoke("listSessions"),

@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { resolve, normalize, relative, join, extname } from "node:path";
 import type { Tool, ToolExecutionContext } from "../types.js";
+import { toPortablePath } from "./path-format.js";
 
 const MAX_RESULTS = 15;
 const MAX_SNIPPET_BYTES = 512;
@@ -81,7 +82,7 @@ function walkDir(dirPath: string, results: SearchWorkspaceResult[], query: strin
         const lines = content.split("\n");
         for (let i = 0; i < lines.length; i++) {
           if (lines[i]!.toLowerCase().includes(query.toLowerCase())) {
-            const rel = relative(workspaceRoot, full);
+            const rel = toPortablePath(relative(workspaceRoot, full));
             const snippet = lines[i]!.slice(0, MAX_SNIPPET_BYTES);
             results.push({ file: rel, line: i + 1, snippet });
             if (results.length >= MAX_RESULTS) return scanned;

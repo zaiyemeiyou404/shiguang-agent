@@ -1,6 +1,7 @@
 import { accessSync, constants, statSync } from "node:fs";
 import { basename, normalize, relative, resolve } from "node:path";
 import type { Tool, ToolExecutionContext } from "../types.js";
+import { toPortablePath } from "./path-format.js";
 
 export interface StatPathOutput {
   path: string;
@@ -60,7 +61,7 @@ export function createStatPathTool(workspaceRoot: string): Tool {
       }
       const stats = statSync(fullPath);
       return {
-        path: fullPath,
+        path: toPortablePath(fullPath),
         name: basename(fullPath),
         kind: stats.isDirectory() ? "directory" : "file",
         size: stats.size,
