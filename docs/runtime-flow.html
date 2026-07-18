@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>shiguang-agent 完整运行流程图</title>
+  <style>
+    :root {
+      --bg: #020617;
+      --panel: #0f172a;
+      --panel-2: #111827;
+      --grid: #1e293b;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --cyan: #22d3ee;
+      --emerald: #34d399;
+      --violet: #a78bfa;
+      --amber: #fbbf24;
+      --rose: #fb7185;
+      --orange: #fb923c;
+      --slate: #94a3b8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+      background:
+        linear-gradient(var(--grid) 1px, transparent 1px),
+        linear-gradient(90deg, var(--grid) 1px, transparent 1px),
+        var(--bg);
+      background-size: 40px 40px, 40px 40px, auto;
+      color: var(--text);
+      padding: 24px;
+    }
+    .wrap { max-width: 1760px; margin: 0 auto; }
+    .header {
+      display: flex; align-items: center; gap: 12px; margin-bottom: 18px;
+    }
+    .dot {
+      width: 12px; height: 12px; border-radius: 999px; background: var(--cyan);
+      box-shadow: 0 0 18px rgba(34,211,238,.8);
+      animation: pulse 1.8s infinite;
+    }
+    @keyframes pulse {
+      0% { transform: scale(1); opacity: .7; }
+      50% { transform: scale(1.3); opacity: 1; }
+      100% { transform: scale(1); opacity: .7; }
+    }
+    h1 { font-size: 28px; margin: 0; }
+    .subtitle { color: var(--muted); margin: 6px 0 0 24px; line-height: 1.6; }
+    .card {
+      background: rgba(15,23,42,.82);
+      border: 1px solid #233047;
+      border-radius: 18px;
+      padding: 18px;
+      box-shadow: 0 16px 60px rgba(0,0,0,.3);
+    }
+    .legend {
+      display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin: 18px 0 22px;
+    }
+    .legend-item {
+      display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px;
+      background: rgba(15,23,42,.75); border: 1px solid #22314a; color: var(--muted); font-size: 12px;
+    }
+    .swatch { width: 12px; height: 12px; border-radius: 999px; }
+    .meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 18px; }
+    .meta h3 { margin: 0 0 10px; font-size: 14px; }
+    .meta ul { margin: 0; padding-left: 18px; color: var(--muted); line-height: 1.7; font-size: 12px; }
+    svg { width: 100%; height: auto; display: block; }
+    .footer { color: var(--muted); font-size: 12px; margin-top: 12px; }
+  </style>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <div class="dot"></div>
+      <div>
+        <h1>shiguang-agent 完整运行流程图</h1>
+        <div class="subtitle">主线从桌面入口 <code>electron/service.ts::sendUserMessage()</code> 开始，穿过上下文构建、记忆召回、brain loop、工具执行、validation 修复闭环，最后再写回 SQLite 与 artifact。</div>
+      </div>
+    </div>
+
+    <div class="legend">
+      <div class="legend-item"><span class="swatch" style="background:#22d3ee"></span>入口 / UI / Session</div>
+      <div class="legend-item"><span class="swatch" style="background:#34d399"></span>Agent / Planner / Runtime</div>
+      <div class="legend-item"><span class="swatch" style="background:#a78bfa"></span>Context / Working Memory</div>
+      <div class="legend-item"><span class="swatch" style="background:#fbbf24"></span>SQLite / Repository</div>
+      <div class="legend-item"><span class="swatch" style="background:#fb7185"></span>Validation 失败修复链</div>
+      <div class="legend-item"><span class="swatch" style="background:#fb923c"></span>Tools / Workspace</div>
+    </div>
+
+    <div class="card">
+      <svg viewBox="0 0 1750 1460" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="shiguang-agent 完整运行流程图">
+        <defs>
+          <marker id="arrowCyan" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+            <path d="M0,0 L10,5 L0,10 Z" fill="#67e8f9" />
+          </marker>
+          <marker id="arrowGreen" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+            <path d="M0,0 L10,5 L0,10 Z" fill="#6ee7b7" />
+          </marker>
+          <marker id="arrowViolet" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+            <path d="M0,0 L10,5 L0,10 Z" fill="#c4b5fd" />
+          </marker>
+          <marker id="arrowAmber" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+            <path d="M0,0 L10,5 L0,10 Z" fill="#fcd34d" />
+          </marker>
+          <marker id="arrowRose" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+            <path d="M0,0 L10,5 L0,10 Z" fill="#fda4af" />
+          </marker>
+          <filter id="glow"><feGaussianBlur stdDeviation="4" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+        </defs>
+
+        <!-- swimlanes -->
+        <rect x="20" y="20" width="280" height="1280" rx="18" fill="rgba(8,51,68,.22)" stroke="#22d3ee" stroke-width="1.5" stroke-dasharray="8 4"/>
+        <rect x="320" y="20" width="310" height="1280" rx="18" fill="rgba(120,53,15,.20)" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="8 4"/>
+        <rect x="650" y="20" width="380" height="1280" rx="18" fill="rgba(76,29,149,.20)" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="8 4"/>
+        <rect x="1050" y="20" width="340" height="1280" rx="18" fill="rgba(6,78,59,.20)" stroke="#34d399" stroke-width="1.5" stroke-dasharray="8 4"/>
+        <rect x="1410" y="20" width="320" height="1280" rx="18" fill="rgba(251,146,60,.18)" stroke="#fb923c" stroke-width="1.5" stroke-dasharray="8 4"/>
+
+        <text x="38" y="52" fill="#67e8f9" font-size="18" font-weight="700">A. Desktop / Session 入口</text>
+        <text x="338" y="52" fill="#fcd34d" font-size="18" font-weight="700">B. SQLite / Repository 状态层</text>
+        <text x="668" y="52" fill="#c4b5fd" font-size="18" font-weight="700">C. Context / Memory / Prompt</text>
+        <text x="1068" y="52" fill="#6ee7b7" font-size="18" font-weight="700">D. Brain Loop / Planner / Runtime</text>
+        <text x="1428" y="52" fill="#fdba74" font-size="18" font-weight="700">E. Tools / Workspace / Validation</text>
+
+        <!-- arrows behind nodes -->
+        <g opacity="0.95">
+          <path d="M160 148 L160 198" stroke="#67e8f9" stroke-width="3" fill="none" marker-end="url(#arrowCyan)"/>
+          <path d="M160 272 L160 326" stroke="#67e8f9" stroke-width="3" fill="none" marker-end="url(#arrowCyan)"/>
+          <path d="M160 398 C160 430, 470 430, 470 462" stroke="#67e8f9" stroke-width="3" fill="none" marker-end="url(#arrowAmber)"/>
+          <path d="M470 548 C470 582, 840 582, 840 616" stroke="#fcd34d" stroke-width="3" fill="none" marker-end="url(#arrowViolet)"/>
+          <path d="M840 742 C840 782, 1220 782, 1220 820" stroke="#c4b5fd" stroke-width="3" fill="none" marker-end="url(#arrowGreen)"/>
+          <path d="M1220 888 C1220 930, 1570 930, 1570 974" stroke="#6ee7b7" stroke-width="3" fill="none" marker-end="url(#arrowGreen)"/>
+          <path d="M1570 1054 C1570 1092, 1220 1092, 1220 1130" stroke="#fdba74" stroke-width="3" fill="none" marker-end="url(#arrowGreen)"/>
+          <path d="M1220 1204 C1220 1238, 470 1238, 470 1272" stroke="#6ee7b7" stroke-width="3" fill="none" marker-end="url(#arrowAmber)"/>
+
+          <path d="M470 236 C470 266, 840 266, 840 296" stroke="#fcd34d" stroke-width="2.5" fill="none" marker-end="url(#arrowViolet)"/>
+          <path d="M470 370 C470 402, 840 402, 840 438" stroke="#fcd34d" stroke-width="2.5" fill="none" marker-end="url(#arrowViolet)"/>
+          <path d="M840 510 C840 542, 470 542, 470 576" stroke="#c4b5fd" stroke-width="2.5" fill="none" marker-end="url(#arrowAmber)"/>
+
+          <path d="M1220 506 C1220 536, 1570 536, 1570 566" stroke="#6ee7b7" stroke-width="2.5" fill="none" marker-end="url(#arrowGreen)"/>
+          <path d="M1570 642 C1570 674, 1220 674, 1220 706" stroke="#fdba74" stroke-width="2.5" fill="none" marker-end="url(#arrowGreen)"/>
+          <path d="M1220 974 C1220 1010, 840 1010, 840 1048" stroke="#fda4af" stroke-width="3" stroke-dasharray="8 6" fill="none" marker-end="url(#arrowRose)"/>
+          <path d="M840 1128 C840 1160, 1220 1160, 1220 1192" stroke="#c4b5fd" stroke-width="2.5" fill="none" marker-end="url(#arrowGreen)"/>
+        </g>
+
+        <!-- node helper: base + overlay -->
+        <!-- A lane -->
+        <g>
+          <rect x="56" y="82" width="208" height="66" rx="10" fill="#0f172a"/>
+          <rect x="56" y="82" width="208" height="66" rx="10" fill="rgba(8,51,68,.42)" stroke="#22d3ee" stroke-width="1.6"/>
+          <text x="72" y="108" fill="#e2e8f0" font-size="14" font-weight="700">1. UI 触发用户消息</text>
+          <text x="72" y="128" fill="#94a3b8" font-size="11">electron/service.ts</text>
+          <text x="72" y="143" fill="#94a3b8" font-size="11">DesktopService.sendUserMessage()</text>
+        </g>
+
+        <g>
+          <rect x="56" y="198" width="208" height="74" rx="10" fill="#0f172a"/>
+          <rect x="56" y="198" width="208" height="74" rx="10" fill="rgba(8,51,68,.42)" stroke="#22d3ee" stroke-width="1.6"/>
+          <text x="72" y="224" fill="#e2e8f0" font-size="14" font-weight="700">2. 组装运行单元</text>
+          <text x="72" y="244" fill="#94a3b8" font-size="11">生成 session/task/run id</text>
+          <text x="72" y="259" fill="#94a3b8" font-size="11">task.status = in_progress</text>
+        </g>
+
+        <g>
+          <rect x="56" y="326" width="208" height="72" rx="10" fill="#0f172a"/>
+          <rect x="56" y="326" width="208" height="72" rx="10" fill="rgba(8,51,68,.42)" stroke="#22d3ee" stroke-width="1.6"/>
+          <text x="72" y="352" fill="#e2e8f0" font-size="14" font-weight="700">3. 创建运行依赖</text>
+          <text x="72" y="372" fill="#94a3b8" font-size="11">RepositoryEventSink</text>
+          <text x="72" y="387" fill="#94a3b8" font-size="11">planner / tools / Agent 实例</text>
+        </g>
+
+        <!-- B lane -->
+        <g>
+          <rect x="364" y="96" width="212" height="88" rx="10" fill="#0f172a"/>
+          <rect x="364" y="96" width="212" height="88" rx="10" fill="rgba(120,53,15,.34)" stroke="#fbbf24" stroke-width="1.6"/>
+          <text x="380" y="122" fill="#e2e8f0" font-size="14" font-weight="700">4. 持久化 session/task/run</text>
+          <text x="380" y="142" fill="#94a3b8" font-size="11">sessionRepository.create()</text>
+          <text x="380" y="157" fill="#94a3b8" font-size="11">taskRepository.create()</text>
+          <text x="380" y="172" fill="#94a3b8" font-size="11">runRepository.create()</text>
+        </g>
+
+        <g>
+          <rect x="364" y="220" width="212" height="150" rx="10" fill="#0f172a"/>
+          <rect x="364" y="220" width="212" height="150" rx="10" fill="rgba(120,53,15,.34)" stroke="#fbbf24" stroke-width="1.6"/>
+          <text x="380" y="246" fill="#e2e8f0" font-size="14" font-weight="700">5. 预取运行环境状态</text>
+          <text x="380" y="266" fill="#94a3b8" font-size="11">runRepository.listBySession()</text>
+          <text x="380" y="281" fill="#94a3b8" font-size="11">loadLinkedArtifacts()</text>
+          <text x="380" y="296" fill="#94a3b8" font-size="11">approvalRepository.listBySession()</text>
+          <text x="380" y="311" fill="#94a3b8" font-size="11">拼成 combinedInstructions</text>
+          <text x="380" y="338" fill="#e2e8f0" font-size="12">这里把历史 run / artifact / approval</text>
+          <text x="380" y="353" fill="#e2e8f0" font-size="12">变成 ContextService 的输入原料</text>
+        </g>
+
+        <g>
+          <rect x="364" y="1272" width="212" height="188" rx="10" fill="#0f172a"/>
+          <rect x="364" y="1272" width="212" height="188" rx="10" fill="rgba(120,53,15,.34)" stroke="#fbbf24" stroke-width="1.6"/>
+          <text x="380" y="1298" fill="#e2e8f0" font-size="14" font-weight="700">13. 收尾写回状态层</text>
+          <text x="380" y="1318" fill="#94a3b8" font-size="11">runRepository.update(completed/failed)</text>
+          <text x="380" y="1333" fill="#94a3b8" font-size="11">taskRepository.update()</text>
+          <text x="380" y="1348" fill="#94a3b8" font-size="11">artifactRepository.create(run-summary)</text>
+          <text x="380" y="1363" fill="#94a3b8" font-size="11">persistApprovalsFromEvents()</text>
+          <text x="380" y="1378" fill="#94a3b8" font-size="11">sessionRepository.update(summary)</text>
+          <text x="380" y="1404" fill="#e2e8f0" font-size="12">结果：这轮 run 被沉淀成</text>
+          <text x="380" y="1419" fill="#e2e8f0" font-size="12">历史、artifact、approval、summary</text>
+        </g>
+
+        <!-- C lane -->
+        <g>
+          <rect x="700" y="296" width="280" height="120" rx="10" fill="#0f172a"/>
+          <rect x="700" y="296" width="280" height="120" rx="10" fill="rgba(76,29,149,.34)" stroke="#a78bfa" stroke-width="1.6"/>
+          <text x="716" y="322" fill="#e2e8f0" font-size="14" font-weight="700">6. Agent.run() 预处理</text>
+          <text x="716" y="342" fill="#94a3b8" font-size="11">src/app/agent.ts</text>
+          <text x="716" y="357" fill="#94a3b8" font-size="11">loadPriorTurns(sessionId)</text>
+          <text x="716" y="372" fill="#94a3b8" font-size="11">persistCurrentTurns(system/user)</text>
+          <text x="716" y="396" fill="#e2e8f0" font-size="12">把会话连续性补齐后再进上下文构建</text>
+        </g>
+
+        <g>
+          <rect x="700" y="438" width="280" height="138" rx="10" fill="#0f172a"/>
+          <rect x="700" y="438" width="280" height="138" rx="10" fill="rgba(76,29,149,.34)" stroke="#a78bfa" stroke-width="1.6"/>
+          <text x="716" y="464" fill="#e2e8f0" font-size="14" font-weight="700">7. ContextService.build()</text>
+          <text x="716" y="484" fill="#94a3b8" font-size="11">src/context/service.ts</text>
+          <text x="716" y="499" fill="#94a3b8" font-size="11">memoryService.search(...) 召回记忆</text>
+          <text x="716" y="514" fill="#94a3b8" font-size="11">workspace scope / task scope 过滤</text>
+          <text x="716" y="529" fill="#94a3b8" font-size="11">把 foundMemories 注入 input.memories</text>
+          <text x="716" y="553" fill="#e2e8f0" font-size="12">持久记忆层 ≠ workingMemory，</text>
+          <text x="716" y="568" fill="#e2e8f0" font-size="12">这里只负责“回忆”进 prompt 原料</text>
+        </g>
+
+        <g>
+          <rect x="700" y="616" width="280" height="186" rx="10" fill="#0f172a"/>
+          <rect x="700" y="616" width="280" height="186" rx="10" fill="rgba(76,29,149,.34)" stroke="#a78bfa" stroke-width="1.6"/>
+          <text x="716" y="642" fill="#e2e8f0" font-size="14" font-weight="700">8. 上下文压缩流水线</text>
+          <text x="716" y="662" fill="#94a3b8" font-size="11">buildContext() → stable / volatile / live</text>
+          <text x="716" y="677" fill="#94a3b8" font-size="11">pruneContextBundle() 去重</text>
+          <text x="716" y="692" fill="#94a3b8" font-size="11">compressContextBundle() 生成 digest</text>
+          <text x="716" y="707" fill="#94a3b8" font-size="11">computeCompactionPressure()</text>
+          <text x="716" y="722" fill="#94a3b8" font-size="11">shouldUseLlmCompaction() 可选 LLM 压缩</text>
+          <text x="716" y="737" fill="#94a3b8" font-size="11">trimToBudget() 保 stable + user_turn</text>
+          <text x="716" y="761" fill="#e2e8f0" font-size="12">优先级：digest &gt; run_summary &gt; file_ref</text>
+          <text x="716" y="776" fill="#e2e8f0" font-size="12">失败/取消/待审批 run 比普通 completed 更值钱</text>
+        </g>
+
+        <g>
+          <rect x="700" y="840" width="280" height="164" rx="10" fill="#0f172a"/>
+          <rect x="700" y="840" width="280" height="164" rx="10" fill="rgba(76,29,149,.34)" stroke="#a78bfa" stroke-width="1.6"/>
+          <text x="716" y="866" fill="#e2e8f0" font-size="14" font-weight="700">9. Prompt / Runtime 状态注入</text>
+          <text x="716" y="886" fill="#94a3b8" font-size="11">renderPrompt() 产出 system + messages</text>
+          <text x="716" y="901" fill="#94a3b8" font-size="11">OpenAIModel.buildSystemPrompt(tools)</text>
+          <text x="716" y="916" fill="#94a3b8" font-size="11">formatWorkingMemory()</text>
+          <text x="716" y="931" fill="#94a3b8" font-size="11">formatHistory()</text>
+          <text x="716" y="946" fill="#94a3b8" font-size="11">formatValidationRepairGuidance()</text>
+          <text x="716" y="970" fill="#e2e8f0" font-size="12">模型看到的不只是对话，还会看到</text>
+          <text x="716" y="985" fill="#e2e8f0" font-size="12">tool 列表、workingMemory、最近 action history</text>
+        </g>
+
+        <g>
+          <rect x="700" y="1048" width="280" height="128" rx="10" fill="#0f172a"/>
+          <rect x="700" y="1048" width="280" height="128" rx="10" fill="rgba(136,19,55,.30)" stroke="#fb7185" stroke-width="1.6"/>
+          <text x="716" y="1074" fill="#e2e8f0" font-size="14" font-weight="700">11. validation 失败被提炼</text>
+          <text x="716" y="1094" fill="#94a3b8" font-size="11">workingMemory.validationFailure</text>
+          <text x="716" y="1109" fill="#94a3b8" font-size="11">suspectFile / line / errorCode</text>
+          <text x="716" y="1124" fill="#94a3b8" font-size="11">failingTest / expected / actual / diff</text>
+          <text x="716" y="1148" fill="#e2e8f0" font-size="12">下一次模型决策时会被单独注入 repair guidance</text>
+        </g>
+
+        <!-- D lane -->
+        <g>
+          <rect x="1088" y="820" width="264" height="150" rx="10" fill="#0f172a"/>
+          <rect x="1088" y="820" width="264" height="150" rx="10" fill="rgba(6,78,59,.34)" stroke="#34d399" stroke-width="1.6"/>
+          <text x="1104" y="846" fill="#e2e8f0" font-size="14" font-weight="700">10. runLoop() 主循环</text>
+          <text x="1104" y="866" fill="#94a3b8" font-size="11">src/brain/loop.ts</text>
+          <text x="1104" y="881" fill="#94a3b8" font-size="11">最多 maxSteps = 10</text>
+          <text x="1104" y="896" fill="#94a3b8" font-size="11">planner.decide(input)</text>
+          <text x="1104" y="911" fill="#94a3b8" font-size="11">policy.check(decision)</text>
+          <text x="1104" y="926" fill="#94a3b8" font-size="11">dispatcher.dispatch(action)</text>
+          <text x="1104" y="941" fill="#94a3b8" font-size="11">history.push(result)</text>
+          <text x="1104" y="956" fill="#94a3b8" font-size="11">updateWorkingMemory()</text>
+        </g>
+
+        <g>
+          <rect x="1088" y="990" width="264" height="118" rx="10" fill="#0f172a"/>
+          <rect x="1088" y="990" width="264" height="118" rx="10" fill="rgba(6,78,59,.34)" stroke="#34d399" stroke-width="1.6"/>
+          <text x="1104" y="1016" fill="#e2e8f0" font-size="14" font-weight="700">10a. Planner 分叉点</text>
+          <text x="1104" y="1036" fill="#94a3b8" font-size="11">RulePlanner 或 LlmPlanner</text>
+          <text x="1104" y="1051" fill="#94a3b8" font-size="11">如检测到 workspaceMutation</text>
+          <text x="1104" y="1066" fill="#94a3b8" font-size="11">会自动插入 run_validation</text>
+          <text x="1104" y="1090" fill="#e2e8f0" font-size="12">这是 validation loop 的自动回路入口</text>
+        </g>
+
+        <g>
+          <rect x="1088" y="1130" width="264" height="120" rx="10" fill="#0f172a"/>
+          <rect x="1088" y="1130" width="264" height="120" rx="10" fill="rgba(6,78,59,.34)" stroke="#34d399" stroke-width="1.6"/>
+          <text x="1104" y="1156" fill="#e2e8f0" font-size="14" font-weight="700">12. Evaluator 判停</text>
+          <text x="1104" y="1176" fill="#94a3b8" font-size="11">finish / fail 立即停</text>
+          <text x="1104" y="1191" fill="#94a3b8" font-size="11">非重试 tool error 停</text>
+          <text x="1104" y="1206" fill="#94a3b8" font-size="11">同一 retryable tool error 连续 3 次停</text>
+          <text x="1104" y="1230" fill="#e2e8f0" font-size="12">否则继续下一轮，带着 history + workingMemory 回去</text>
+        </g>
+
+        <!-- E lane -->
+        <g>
+          <rect x="1460" y="566" width="220" height="76" rx="10" fill="#0f172a"/>
+          <rect x="1460" y="566" width="220" height="76" rx="10" fill="rgba(251,146,60,.28)" stroke="#fb923c" stroke-width="1.6"/>
+          <text x="1476" y="592" fill="#e2e8f0" font-size="14" font-weight="700">工具注册表</text>
+          <text x="1476" y="612" fill="#94a3b8" font-size="11">read_text / write_text /</text>
+          <text x="1476" y="627" fill="#94a3b8" font-size="11">search_workspace / run_validation</text>
+        </g>
+
+        <g>
+          <rect x="1460" y="682" width="220" height="146" rx="10" fill="#0f172a"/>
+          <rect x="1460" y="682" width="220" height="146" rx="10" fill="rgba(251,146,60,.28)" stroke="#fb923c" stroke-width="1.6"/>
+          <text x="1476" y="708" fill="#e2e8f0" font-size="14" font-weight="700">ActionDispatcher</text>
+          <text x="1476" y="728" fill="#94a3b8" font-size="11">toolRegistry.get(toolName)</text>
+          <text x="1476" y="743" fill="#94a3b8" font-size="11">execute(toolInput)</text>
+          <text x="1476" y="758" fill="#94a3b8" font-size="11">eventSink.record(thinking/tool_call/</text>
+          <text x="1476" y="773" fill="#94a3b8" font-size="11">tool_result/message)</text>
+          <text x="1476" y="797" fill="#e2e8f0" font-size="12">把 tool output 标准化成 ActionResult</text>
+          <text x="1476" y="812" fill="#e2e8f0" font-size="12">并附带 workspaceMutation/validationMode</text>
+        </g>
+
+        <g>
+          <rect x="1460" y="900" width="220" height="154" rx="10" fill="#0f172a"/>
+          <rect x="1460" y="900" width="220" height="154" rx="10" fill="rgba(251,146,60,.28)" stroke="#fb923c" stroke-width="1.6"/>
+          <text x="1476" y="926" fill="#e2e8f0" font-size="14" font-weight="700">run_validation 特殊地位</text>
+          <text x="1476" y="946" fill="#94a3b8" font-size="11">读取 package.json scripts</text>
+          <text x="1476" y="961" fill="#94a3b8" font-size="11">mode = typecheck/test/build/all</text>
+          <text x="1476" y="976" fill="#94a3b8" font-size="11">输出 commands / summary / stdout / stderr</text>
+          <text x="1476" y="1000" fill="#e2e8f0" font-size="12">loop.ts 会解析失败输出，</text>
+          <text x="1476" y="1015" fill="#e2e8f0" font-size="12">提炼 suspect file/test/assert diff</text>
+          <text x="1476" y="1030" fill="#e2e8f0" font-size="12">从而形成 repair guidance</text>
+        </g>
+
+        <g>
+          <rect x="1460" y="1130" width="220" height="132" rx="10" fill="#0f172a"/>
+          <rect x="1460" y="1130" width="220" height="132" rx="10" fill="rgba(251,146,60,.28)" stroke="#fb923c" stroke-width="1.6"/>
+          <text x="1476" y="1156" fill="#e2e8f0" font-size="14" font-weight="700">Workspace 真实副作用</text>
+          <text x="1476" y="1176" fill="#94a3b8" font-size="11">读文件 / 搜索 / 改文件 / 跑测试</text>
+          <text x="1476" y="1191" fill="#94a3b8" font-size="11">descriptor.effects.workspaceMutation</text>
+          <text x="1476" y="1206" fill="#94a3b8" font-size="11">决定是否自动补 validation</text>
+          <text x="1476" y="1230" fill="#e2e8f0" font-size="12">这是 agent 真正接触代码库的层</text>
+        </g>
+
+        <!-- side notes -->
+        <g filter="url(#glow)">
+          <rect x="70" y="1118" width="180" height="96" rx="12" fill="rgba(2,6,23,.86)" stroke="#22d3ee" stroke-width="1.3"/>
+          <text x="84" y="1144" fill="#e2e8f0" font-size="13" font-weight="700">一句话总结</text>
+          <text x="84" y="1164" fill="#94a3b8" font-size="11">桌面壳负责发起 run，</text>
+          <text x="84" y="1179" fill="#94a3b8" font-size="11">Agent 负责上下文与 loop，</text>
+          <text x="84" y="1194" fill="#94a3b8" font-size="11">SQLite 负责沉淀连续性。</text>
+        </g>
+
+        <g filter="url(#glow)">
+          <rect x="1082" y="1300" width="275" height="116" rx="12" fill="rgba(2,6,23,.90)" stroke="#34d399" stroke-width="1.3"/>
+          <text x="1098" y="1326" fill="#e2e8f0" font-size="13" font-weight="700">真正的闭环不是“模型→回答”</text>
+          <text x="1098" y="1346" fill="#94a3b8" font-size="11">而是：</text>
+          <text x="1098" y="1361" fill="#94a3b8" font-size="11">模型决策 → tool 副作用 → validation →</text>
+          <text x="1098" y="1376" fill="#94a3b8" font-size="11">workingMemory 提炼 → repair guidance → 再决策</text>
+          <text x="1098" y="1396" fill="#94a3b8" font-size="11">这就是 shiguang-agent 现在最像 harness 的部分。</text>
+        </g>
+      </svg>
+    </div>
+
+    <div class="meta">
+      <div class="card">
+        <h3>关键入口文件</h3>
+        <ul>
+          <li><code>electron/service.ts</code>：桌面端 run 发起与收尾</li>
+          <li><code>src/app/agent.ts</code>：一次 Agent.run 的总入口</li>
+          <li><code>src/brain/loop.ts</code>：主循环与 workingMemory 更新</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>三层“记忆”边界</h3>
+        <ul>
+          <li>Persistent memory：SQLite durable facts</li>
+          <li>Context bundle：本轮 prompt 压缩后的可见上下文</li>
+          <li>Working memory：runLoop 内部运行态</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>最关键的 harness 特征</h3>
+        <ul>
+          <li>写文件后自动补 validation</li>
+          <li>validation 失败会提炼成 repair guidance</li>
+          <li>下轮模型看到 history + workingMemory，而不只是聊天记录</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="footer">生成位置：<code>/home/ubuntu/shiguang-agent/docs/runtime-flow.html</code></div>
+  </div>
+</body>
+</html>

@@ -1,13 +1,18 @@
 import { app, BrowserWindow } from "electron";
-import path from "node:path";
+import * as path from "node:path";
 import { DesktopStore } from "./store.js";
-import { DesktopService } from "./service.js";
+import { DesktopAppService } from "./app-service.js";
 import { registerIpcHandlers } from "./ipc.js";
 
 const isDev = process.env.ELECTRON_DEV === "true";
-let service: DesktopService;
+let service: DesktopAppService;
 
 function createWindow() {
+  const appPath = app.getAppPath();
+  const projectRoot = path.basename(appPath) === "desktop-build" ? path.dirname(appPath) : appPath;
+  const desktopBuildDir = path.basename(appPath) === "desktop-build" ? appPath : path.join(appPath, "desktop-build");
+  const preloadPath = path.join(desktopBuildDir, "preload.cjs");
+  const uiEntry = path.join(projectRoot, "ui", "dist", "index.html");
   const win = new BrowserWindow({
     width: 1400,
     height: 960,
@@ -15,25 +20,23 @@ function createWindow() {
     minHeight: 700,
     title: "拾光 Agent",
     webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
+      preload: preloadPath,
       contextIsolation: true,
       nodeIntegration: false,
     },
   });
 
-  service.addWindow(win);
-
   if (isDev) {
     win.loadURL("http://localhost:5173");
     win.webContents.openDevTools({ mode: "detach" });
   } else {
-    win.loadFile(path.join(__dirname, "../ui/dist/index.html"));
+    win.loadFile(uiEntry);
   }
 }
 
 app.whenReady().then(() => {
   const store = new DesktopStore();
-  service = new DesktopService(store);
+  service = new DesktopAppService(store);
   registerIpcHandlers(service);
   createWindow();
 });

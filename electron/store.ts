@@ -59,6 +59,14 @@ export class DesktopStore {
     return this.data.sessions[idx];
   }
 
+  deleteSession(id: string): boolean {
+    const before = this.data.sessions.length;
+    this.data.sessions = this.data.sessions.filter((session) => session.id !== id);
+    if (this.data.sessions.length === before) return false;
+    this.save();
+    return true;
+  }
+
   createRun(run: DesktopRun): DesktopRun {
     this.data.runs.push(run);
     this.save();

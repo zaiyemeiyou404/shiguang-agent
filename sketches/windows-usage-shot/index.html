@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>拾光 Agent Windows 使用截图</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0b1020;
+      --panel: rgba(13, 18, 35, 0.82);
+      --panel-2: rgba(19, 24, 46, 0.92);
+      --line: rgba(255,255,255,0.08);
+      --text: #eef2ff;
+      --muted: #98a2c6;
+      --accent: #8b7dff;
+      --accent-2: #57d3a6;
+      --warn: #ffb84d;
+      --danger: #ff6b6b;
+    }
+    body {
+      min-height: 100vh;
+      font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 20% 20%, rgba(139,125,255,0.30), transparent 28%),
+        radial-gradient(circle at 80% 15%, rgba(87,211,166,0.18), transparent 24%),
+        linear-gradient(180deg, #09111f, #0a0f1a 45%, #070b12);
+      display: grid;
+      place-items: center;
+      padding: 36px;
+    }
+    .canvas {
+      width: 1500px;
+      height: 920px;
+      border-radius: 28px;
+      padding: 18px;
+      background: rgba(255,255,255,0.05);
+      box-shadow:
+        0 40px 100px rgba(0,0,0,0.55),
+        inset 0 1px 0 rgba(255,255,255,0.06);
+      backdrop-filter: blur(18px);
+    }
+    .window {
+      width: 100%;
+      height: 100%;
+      border-radius: 24px;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02));
+    }
+    .titlebar {
+      height: 54px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px 0 18px;
+      background: rgba(255,255,255,0.05);
+      border-bottom: 1px solid var(--line);
+    }
+    .title-left { display: flex; align-items: center; gap: 12px; }
+    .app-dot {
+      width: 28px; height: 28px; border-radius: 10px;
+      background: linear-gradient(135deg, #9d8fff, #5f7cff);
+      display: grid; place-items: center; font-size: 15px; font-weight: 700;
+      box-shadow: 0 8px 24px rgba(99, 102, 241, 0.35);
+    }
+    .subtitle { color: var(--muted); font-size: 12px; margin-top: 2px; }
+    .title-actions { display: flex; gap: 8px; }
+    .win-btn {
+      width: 38px; height: 28px; border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.04);
+      color: #d6dcff; display: grid; place-items: center; font-size: 12px;
+    }
+    .main {
+      height: calc(100% - 54px);
+      display: grid;
+      grid-template-columns: 290px 1fr 320px;
+      gap: 16px;
+      padding: 16px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01)),
+        radial-gradient(circle at top, rgba(139,125,255,0.08), transparent 38%);
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      padding: 16px;
+      backdrop-filter: blur(18px);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+    }
+    .brand {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 16px;
+    }
+    .brand-badge { display: flex; align-items: center; gap: 12px; }
+    .brand-mark {
+      width: 44px; height: 44px; border-radius: 14px;
+      background: linear-gradient(135deg, rgba(139,125,255,0.90), rgba(87,211,166,0.65));
+      display: grid; place-items: center; font-weight: 700;
+      box-shadow: 0 10px 28px rgba(139,125,255,0.28);
+    }
+    .icon-row { display: flex; gap: 8px; }
+    .icon-btn, .chip, .small-btn {
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.05);
+      color: var(--text);
+      border-radius: 12px;
+    }
+    .icon-btn { width: 36px; height: 36px; display: grid; place-items: center; }
+    .status-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+    .status-card {
+      padding: 12px; border-radius: 16px; background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+    .tiny { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+    .status-card strong { display: block; margin-top: 8px; font-size: 14px; }
+    .session-list { display: grid; gap: 10px; }
+    .session {
+      padding: 12px; border-radius: 16px; background: rgba(255,255,255,0.035);
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+    .session.active {
+      background: linear-gradient(180deg, rgba(139,125,255,0.16), rgba(139,125,255,0.07));
+      border-color: rgba(139,125,255,0.30);
+      box-shadow: 0 10px 24px rgba(99,102,241,0.18);
+    }
+    .meta { color: var(--muted); font-size: 12px; margin-top: 6px; }
+    .center {
+      display: grid;
+      grid-template-rows: auto auto 1fr auto;
+      gap: 14px;
+    }
+    .hero {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 18px 20px; border-radius: 22px;
+      background: linear-gradient(135deg, rgba(139,125,255,0.15), rgba(87,211,166,0.08));
+      border: 1px solid rgba(139,125,255,0.20);
+    }
+    .hero h2 { font-size: 22px; margin-bottom: 6px; }
+    .hero p { color: var(--muted); font-size: 13px; }
+    .pill-row { display: flex; gap: 8px; }
+    .pill {
+      padding: 8px 12px; border-radius: 999px; font-size: 12px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.05);
+    }
+    .pill.success { color: #b8ffe8; background: rgba(87,211,166,0.12); }
+    .pill.warn { color: #ffd79b; background: rgba(255,184,77,0.12); }
+    .toolbar {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 0 2px;
+    }
+    .timeline {
+      padding: 16px;
+      border-radius: 22px;
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      display: grid;
+      gap: 14px;
+      overflow: hidden;
+    }
+    .message, .tool-block {
+      border-radius: 18px;
+      padding: 14px 16px;
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+    .message.user { background: rgba(139,125,255,0.10); }
+    .message.agent { background: rgba(255,255,255,0.04); }
+    .tool-block {
+      background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+    }
+    .line-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .tool-chips { display: flex; gap: 8px; margin-top: 12px; }
+    .chip { padding: 8px 10px; font-size: 12px; }
+    .composer {
+      display: grid; grid-template-columns: 1fr auto; gap: 12px;
+      padding: 14px; border-radius: 20px; background: rgba(255,255,255,0.04); border: 1px solid var(--line);
+    }
+    .input {
+      min-height: 56px; border-radius: 16px; padding: 16px; color: var(--text);
+      background: rgba(8,12,24,0.88); border: 1px solid rgba(255,255,255,0.07);
+      display: flex; align-items: center;
+    }
+    .send {
+      min-width: 120px; border: none; border-radius: 16px; color: white; font-weight: 700;
+      background: linear-gradient(135deg, #8b7dff, #5cc9d2);
+      box-shadow: 0 14px 30px rgba(92, 201, 210, 0.22);
+    }
+    .right { display: grid; gap: 14px; }
+    .side-block {
+      padding: 16px; border-radius: 20px; background: rgba(255,255,255,0.04); border: 1px solid var(--line);
+    }
+    .detail-row { display: flex; justify-content: space-between; gap: 10px; margin-top: 10px; font-size: 13px; }
+    .detail-key { color: var(--muted); }
+    .approval {
+      margin-top: 12px; padding: 14px; border-radius: 16px;
+      background: rgba(255,184,77,0.08); border: 1px solid rgba(255,184,77,0.18);
+    }
+    .btn-row { display: flex; gap: 10px; margin-top: 12px; }
+    .small-btn { padding: 10px 12px; font-size: 12px; }
+    .small-btn.primary { background: rgba(87,211,166,0.16); color: #cbfff0; }
+    .small-btn.danger { background: rgba(255,107,107,0.14); color: #ffc2c2; }
+    .footer-note {
+      position: absolute; right: 34px; bottom: 26px; color: rgba(255,255,255,0.45); font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="canvas">
+    <div class="window">
+      <div class="titlebar">
+        <div class="title-left">
+          <div class="app-dot">拾</div>
+          <div>
+            <div style="font-size:14px;font-weight:600">拾光 Agent</div>
+            <div class="subtitle">Windows 11 · Desktop host · Live timeline</div>
+          </div>
+        </div>
+        <div class="title-actions">
+          <div class="win-btn">—</div>
+          <div class="win-btn">□</div>
+          <div class="win-btn">✕</div>
+        </div>
+      </div>
+      <div class="main">
+        <aside class="panel">
+          <div class="brand">
+            <div class="brand-badge">
+              <div class="brand-mark">拾</div>
+              <div>
+                <div style="font-weight:700">拾光 Agent</div>
+                <div class="subtitle">Desktop · Live</div>
+              </div>
+            </div>
+            <div class="icon-row">
+              <div class="icon-btn">⚙</div>
+              <div class="icon-btn">＋</div>
+            </div>
+          </div>
+          <div class="status-grid">
+            <div class="status-card">
+              <div class="tiny">Provider</div>
+              <strong>deepseek</strong>
+              <div class="meta">deepseek-chat</div>
+            </div>
+            <div class="status-card">
+              <div class="tiny">Timeline</div>
+              <strong style="color:#9bf0cf">live</strong>
+              <div class="meta">Run c5213a8f</div>
+            </div>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <div style="font-weight:600">Sessions</div>
+            <div class="tiny">4 active</div>
+          </div>
+          <div class="session-list">
+            <div class="session active">
+              <div style="display:flex;justify-content:space-between"><strong>Strict tool pairing</strong><span class="pill success">running</span></div>
+              <div class="meta">Runtime + desktop timeline polish</div>
+            </div>
+            <div class="session">
+              <div style="display:flex;justify-content:space-between"><strong>Windows screenshots</strong><span class="pill warn">draft</span></div>
+              <div class="meta">Visual demo assets for shiguang-agent</div>
+            </div>
+            <div class="session">
+              <div style="display:flex;justify-content:space-between"><strong>Approval resume audit</strong><span class="pill">completed</span></div>
+              <div class="meta">Operator surface checklist</div>
+            </div>
+            <div class="session">
+              <div style="display:flex;justify-content:space-between"><strong>Provider presets</strong><span class="pill">ready</span></div>
+              <div class="meta">DeepSeek / OpenAI / Anthropic / Gemini</div>
+            </div>
+          </div>
+        </aside>
+
+        <main class="center">
+          <section class="hero">
+            <div>
+              <h2>Run detail · Strict tool pairing</h2>
+              <p>Timeline blocks now group tool_call + tool_result by stable toolCallId, with clear fallback labels when only old events are available.</p>
+            </div>
+            <div class="pill-row">
+              <div class="pill success">paired by call id</div>
+              <div class="pill warn">1 pending approval</div>
+            </div>
+          </section>
+
+          <div class="toolbar">
+            <div class="tiny">Timeline · user → model → tools → approvals → resume</div>
+            <div class="pill-row">
+              <div class="pill">8 events</div>
+              <div class="pill">workspace: /home/ubuntu/shiguang-agent</div>
+            </div>
+          </div>
+
+          <section class="timeline">
+            <div class="message user">
+              <div class="line-head"><strong>You</strong><span class="tiny">09:31:04</span></div>
+              <div>把 tool_call 和 tool_result 严格配对，不要再只靠相邻事件。</div>
+            </div>
+            <div class="message agent">
+              <div class="line-head"><strong>拾光 Agent</strong><span class="tiny">09:31:08</span></div>
+              <div>已改为优先按 <code>toolCallId</code> 配对；旧事件才回退到 tool name 配对。</div>
+            </div>
+            <div class="tool-block">
+              <div class="line-head"><strong>tool: patch</strong><span class="pill success">paired by call id</span></div>
+              <div class="meta">Updated <code>src/runtime/dispatcher.ts</code> and attached matching <code>toolCallId</code> to both runtime events.</div>
+              <div class="tool-chips">
+                <div class="chip">input → add toolCallId to tool_call + tool_result</div>
+                <div class="chip">result → dispatcher + test updated</div>
+              </div>
+            </div>
+            <div class="tool-block">
+              <div class="line-head"><strong>tool: terminal</strong><span class="pill success">paired by call id</span></div>
+              <div class="meta">Verification passed across runtime and desktop shell.</div>
+              <div class="tool-chips">
+                <div class="chip">npm run test ✅</div>
+                <div class="chip">npm run desktop:typecheck ✅</div>
+                <div class="chip">npm run desktop:build ✅</div>
+              </div>
+            </div>
+            <div class="message agent">
+              <div class="line-head"><strong>拾光 Agent</strong><span class="tiny">09:33:41</span></div>
+              <div>下一步可继续把 orphan <code>tool_result</code> 单独渲染，避免它们在旧 run 里被吞掉。</div>
+            </div>
+          </section>
+
+          <div class="composer">
+            <div class="input">继续把纯浏览器打开时的 host mismatch 提示做得更明显一点…</div>
+            <button class="send">发送</button>
+          </div>
+        </main>
+
+        <aside class="right">
+          <div class="panel side-block">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <strong>Runtime health</strong>
+              <span class="pill success">running</span>
+            </div>
+            <div class="detail-row"><span class="detail-key">Model</span><span>deepseek-chat</span></div>
+            <div class="detail-row"><span class="detail-key">Stream</span><span>live · 8 events</span></div>
+            <div class="detail-row"><span class="detail-key">Workspace</span><span>/home/ubuntu/shiguang-agent</span></div>
+            <div class="detail-row"><span class="detail-key">Latest tool</span><span>patch</span></div>
+          </div>
+
+          <div class="panel side-block">
+            <strong>Pending approval</strong>
+            <div class="approval">
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span>tool: terminal</span>
+                <span class="pill warn">needs approval</span>
+              </div>
+              <div class="meta" style="margin-top:8px;line-height:1.5;">Reason: execute package step on host machine to validate Windows build path and screenshot artifacts.</div>
+              <div class="btn-row">
+                <div class="small-btn primary">Approve</div>
+                <div class="small-btn danger">Deny</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel side-block">
+            <strong>Settings snapshot</strong>
+            <div class="detail-row"><span class="detail-key">Config</span><span>desktop-config.json</span></div>
+            <div class="detail-row"><span class="detail-key">Workspace root</span><span>/home/ubuntu/shiguang-agent</span></div>
+            <div class="detail-row"><span class="detail-key">Presets</span><span>DeepSeek / OpenAI / Gemini</span></div>
+            <div class="detail-row"><span class="detail-key">UI mode</span><span>Windows 11 glass</span></div>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

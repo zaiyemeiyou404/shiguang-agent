@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>拾光 Agent Runnable UI</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="stage">
+    <div class="browser">
+      <div class="browser-bar">
+        <div class="dots"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></div>
+        <div class="addr" id="addr">shiguang://workspace/home?view=home</div>
+        <div class="browser-more">⋯</div>
+      </div>
+      <div class="app">
+        <div class="titlebar">
+          <div class="brand"><div class="logo">拾</div><strong>拾光 Agent</strong><small id="subtitle">桌面工作台</small></div>
+          <div style="display:flex;align-items:center;gap:24px;"><div class="menus"><span>会话</span><span>来源</span><span>产物</span><span>设置</span></div><div class="win-controls"><span>—</span><span>□</span><span>✕</span></div></div>
+        </div>
+        <div class="content">
+          <aside class="sidebar">
+            <div class="panel workspace">
+              <div class="avatar">拾</div>
+              <div>
+                <div class="muted">当前工作区</div>
+                <div class="title">拾光产品实验室</div>
+                <div class="muted" id="workspace-status">DeepSeek 默认 · 7 个来源在线</div>
+              </div>
+            </div>
+            <div class="nav">
+              <button class="nav-item" data-route="home"><span>⌂</span><span>首页</span></button>
+              <button class="nav-item" data-route="running"><span>▶</span><span>运行中</span><span class="badge">5</span></button>
+              <button class="nav-item" data-route="approval"><span>✓</span><span>待审批</span><span class="badge">2</span></button>
+              <button class="nav-item"><span>⌘</span><span>技能</span></button>
+              <button class="nav-item"><span>⧉</span><span>产物</span></button>
+              <button class="nav-item"><span>☰</span><span>历史</span></button>
+            </div>
+            <div class="panel section">
+              <h4>快速入口</h4>
+              <div class="quick" data-route="approval">查看待审批项目</div>
+              <div class="quick" data-route="home">打开最近产物</div>
+              <div class="quick" data-route="running">查看运行时间线</div>
+            </div>
+            <div class="panel section">
+              <h4>会话分组</h4>
+              <button class="group-item route-btn" data-route="home">拾光 Agent 首页</button>
+              <button class="group-item route-btn" data-route="running">运行中任务</button>
+              <button class="group-item route-btn" data-route="approval">待审批工具调用</button>
+              <div class="group-item">来源接入与授权</div>
+              <div class="group-item">产物导出与跳转</div>
+            </div>
+            <div class="statusbar"><span class="status-dot"></span><span>本地桌面实例</span><span class="muted">运行正常 · 时间线在线</span></div>
+          </aside>
+
+          <main class="center">
+            <section class="page active" id="page-home">
+              <div class="chips"><div class="chip warn">待审批 2</div><div class="chip info">运行中 5</div><div class="chip ok">可见产物 18</div></div>
+              <section class="panel hero">
+                <div class="muted">拾光 Agent 首页</div>
+                <h1>今天想让拾光 Agent 帮你推进什么？</h1>
+                <p>从会话、来源、产物到审批流，首页直接进入真实工作，不再只是聊天壳子。</p>
+                <div class="mini-chips"><span class="mini-chip">工作入口</span><span class="mini-chip">可见状态</span><span class="mini-chip">可跳转产物</span></div>
+              </section>
+              <section class="cards">
+                <button class="card route-btn" data-route="running"><div class="icon blue">▶</div><h3>继续上次任务</h3><p>恢复最近运行中的会话，继续计划、工具链和上下文。</p><div class="linkline">立即进入</div></button>
+                <div class="card"><div class="icon purple">⌂</div><h3>接入来源与仓库</h3><p>连接 GitHub、目录、网页或 MCP，让上下文立即可用。</p><div class="linkline">入口保留</div></div>
+                <button class="card route-btn" data-route="approval"><div class="icon green">✓</div><h3>处理待审批动作</h3><p>集中查看终端、浏览器、写文件等等待批准的步骤。</p><div class="linkline">立即进入</div></button>
+                <div class="card"><div class="icon orange">↗</div><h3>查看产物与跳转</h3><p>直接打开截图、页面、文档和差异，不把结果埋在聊天里。</p><div class="linkline">产物可见</div></div>
+              </section>
+              <section class="stats-row">
+                <div class="mini-stat"><div class="k">最新焦点</div><div class="v">桌面首页产品化</div></div>
+                <div class="mini-stat"><div class="k">最近产物</div><div class="v">3 张截图</div></div>
+                <div class="mini-stat"><div class="k">待审批</div><div class="v">终端 / 发布</div></div>
+                <div class="mini-stat"><div class="k">在线来源</div><div class="v">GitHub / MCP</div></div>
+              </section>
+              <div class="prompt">例如：继续处理待审批的终端步骤，并把最新产物直接挂到右侧。</div>
+            </section>
+
+            <section class="page" id="page-running">
+              <div class="chips"><div class="chip info">运行流活跃</div><div class="chip ok">工具 3 个</div><div class="chip warn">审批等待 1</div></div>
+              <section class="panel hero compact-hero">
+                <div class="muted">运行中的任务</div>
+                <h1>桌面首页产品化 · 正在导出与验证</h1>
+              </section>
+              <div class="toolbar-lanes"><div class="lane info">全部 24</div><div class="lane">对话 6</div><div class="lane info">工具 11</div><div class="lane warn">审批 1</div><div class="lane">错误 0</div></div>
+              <div class="timeline">
+                <div class="timeline-item user"><div class="line-head"><strong>用户</strong><span class="muted">11:48</span></div><p>把首页做成更像真实可运行的桌面 Agent。</p></div>
+                <div class="timeline-item"><div class="line-head"><strong>Agent</strong><span class="muted">11:49</span></div><p>收到，继续补右侧审批、产物、来源状态块，并统一视觉。</p></div>
+                <div class="timeline-item tool done"><div class="line-head"><strong>工具执行 · vision_analyze</strong><span class="muted">11:50 · 完成</span></div><p>已对参考图完成比对，确认主骨架方向正确。</p></div>
+                <div class="timeline-item tool done"><div class="line-head"><strong>工具执行 · write_file</strong><span class="muted">11:52 · 完成</span></div><p>写入 refined 首页生成脚本并更新 HTML 入口。</p></div>
+                <div class="timeline-item tool live"><div class="line-head"><strong>工具执行 · terminal</strong><span class="muted">11:53 · 运行中</span></div><p>正在运行导出命令，生成可预览页面与截图。</p></div>
+                <div class="timeline-item tool done"><div class="line-head"><strong>工具执行 · vision_analyze</strong><span class="muted">11:54 · 完成</span></div><p>已检查 refined 首页，确认具备产品稿质感与真实状态区。</p></div>
+              </div>
+              <div class="prompt">输入：继续导出第三张待审批页，并把可点击动作做得更强。</div>
+            </section>
+
+            <section class="page" id="page-approval">
+              <div class="chips"><div class="chip warn">审批等待 2</div><div class="chip danger">阻塞任务 1</div><div class="chip ok">可立即处理</div></div>
+              <section class="panel hero compact-hero approval-hero">
+                <div class="muted">待审批中心</div>
+                <h1>有 2 个动作在等你点头继续</h1>
+                <p>把会影响系统状态、文件或发布的关键步骤集中展示，不让它们埋在消息里。</p>
+              </section>
+              <div class="approval-stack">
+                <div class="approval-card">
+                  <div class="approval-title"><div class="warn-icon">!</div><div><h3>终端打包验证</h3><div class="muted">预计 2–3 分钟</div></div></div>
+                  <p>将运行桌面构建脚本并导出 Windows 风格发布图。</p>
+                  <div class="button-row"><button class="action-btn">查看详情</button><button class="action-btn warn">稍后处理</button><button class="action-btn ok">立即批准</button></div>
+                </div>
+                <div class="approval-card neutral-card">
+                  <div class="approval-title"><div class="warn-icon alt">!</div><div><h3>发布到演示位</h3><div class="muted">会产生外部可访问链接</div></div></div>
+                  <p>把当前 HTML 原型推到公开演示地址供浏览器验证。</p>
+                  <div class="button-row"><button class="action-btn">查看详情</button><button class="action-btn warn">稍后处理</button><button class="action-btn ok">立即批准</button></div>
+                </div>
+              </div>
+              <div class="block"><h3>审批说明</h3><p>• 有副作用的动作统一进入这里，而不是只在聊天里一闪而过。</p><p>• 每个审批卡片都能直接看影响范围、预计耗时和产出物。</p><p>• 批准后，结果会回流到右侧产物区与运行时间线。</p></div>
+            </section>
+          </main>
+
+          <aside class="right">
+            <div class="page active right-col" id="right-home">
+              <div class="panel side-card"><div class="side-head"><h4>待审批动作</h4><div class="pill-btn warn">2 项等待</div></div><div class="action-row primary"><div><strong>终端打包验证</strong><div class="muted">等待批准后导出 Windows 构建截图</div></div><div class="open route-link" data-route="approval">批准 →</div></div><div class="action-row"><div>页面发布到演示位</div><div class="open route-link" data-route="approval">查看</div></div></div>
+              <div class="panel side-card"><div class="side-head"><h4>最新产物</h4></div><div class="artifact-row"><div><strong>首页产品稿 PNG</strong><div class="muted">刚刚生成 · 可直接预览</div></div><div class="open">打开 ↗</div></div><div class="artifact-row"><div><strong>Codex 骨架稿</strong><div class="muted">上一轮版本 · 供对照</div></div><div class="open">打开 ↗</div></div><div class="artifact-row"><div><strong>HTML 单页原型</strong><div class="muted">浏览器打开 · 继续拖改</div></div><div class="open">打开 ↗</div></div></div>
+              <div class="panel side-card"><div class="side-head"><h4>来源状态</h4></div><div class="source-row"><span class="source-dot green-dot"></span><span>GitHub 仓库</span><span style="color:#51c89c">已连接</span></div><div class="source-row"><span class="source-dot blue-dot"></span><span>Browser / 页面验证</span><span style="color:#9bc1ff">在线</span></div><div class="source-row"><span class="source-dot gray-dot"></span><span>本地文件系统</span><span>可读写</span></div><div class="source-row"><span class="source-dot violet-dot"></span><span>MCP 服务</span><span style="color:#d4c9ff">2 个可用</span></div></div>
+              <div class="panel side-card"><div class="side-head"><h4>当前焦点</h4></div><div class="focus-row"><span>会话</span><span>桌面首页产品化</span></div><div class="focus-row"><span>最新动作</span><span>已补齐右侧真实状态区</span></div><div class="focus-row"><span>下一步</span><span>继续做运行中与待审批页</span></div></div>
+            </div>
+
+            <div class="page right-col" id="right-running">
+              <div class="panel side-card"><div class="side-head"><h4>运行快照</h4></div><div class="focus-row"><span>模型</span><span>DeepSeek Chat</span></div><div class="focus-row"><span>模式</span><span>自动</span></div><div class="focus-row"><span>事件</span><span>24</span></div><div class="focus-row"><span>活动工具</span><span>terminal / vision</span></div></div>
+              <div class="panel side-card"><div class="side-head"><h4>当前工具执行</h4></div><div class="artifact-row"><div>write_file</div><div style="color:#51c89c">完成</div></div><div class="artifact-row"><div>terminal</div><div style="color:#9bc1ff">运行中</div></div><div class="artifact-row"><div>vision_analyze</div><div style="color:#ffd496">排队</div></div></div>
+              <div class="panel side-card"><div class="side-head"><h4>最近产物</h4></div><div class="artifact-row"><div>refined 首页 PNG</div><div class="open">打开 ↗</div></div><div class="artifact-row"><div>套图脚本已写入</div><div class="open">查看</div></div><div class="artifact-row"><div>待审批页正在渲染</div><div class="open route-link" data-route="approval">跳转</div></div></div>
+              <div class="panel side-card"><div class="side-head"><h4>操作入口</h4></div><div class="artifact-row"><div>查看完整时间线</div><div class="open">打开</div></div><div class="artifact-row"><div>打开最新 PNG</div><div class="open">打开</div></div><div class="artifact-row"><div>跳到审批页</div><div class="open route-link" data-route="approval">跳转</div></div></div>
+            </div>
+
+            <div class="page right-col" id="right-approval">
+              <div class="panel side-card"><div class="side-head"><h4>影响范围</h4></div><div class="focus-row"><span>文件写入</span><span>3 个目标</span></div><div class="focus-row"><span>本地构建</span><span>将启动</span></div><div class="focus-row"><span>外部链接</span><span>可能新增 1 个</span></div></div>
+              <div class="panel side-card"><div class="side-head"><h4>批准后产物</h4></div><div class="artifact-row"><div>Windows 构建截图</div><div class="open">预览</div></div><div class="artifact-row"><div>公开演示链接</div><div class="open">查看</div></div><div class="artifact-row"><div>新的运行事件</div><div class="open route-link" data-route="running">时间线</div></div></div>
+              <div class="panel side-card"><div class="side-head"><h4>来源与凭据</h4></div><div class="focus-row"><span>GitHub</span><span>已授权</span></div><div class="focus-row"><span>Browser</span><span>可用</span></div><div class="focus-row"><span>发布目标</span><span>待确认</span></div></div>
+              <div class="panel side-card"><div class="side-head"><h4>快捷操作</h4></div><div class="artifact-row"><div>先查看详情</div><div class="open">打开</div></div><div class="artifact-row"><div>批准并继续</div><div style="color:#51c89c">执行</div></div><div class="artifact-row"><div>拒绝并返回</div><div style="color:#ffb4b4">返回</div></div></div>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="./app.js"></script>
+</body>
+</html>

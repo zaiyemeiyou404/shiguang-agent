@@ -1,0 +1,52 @@
+In /home/ubuntu/shiguang-agent on feature/bootstrap, implement the production side of the new validation-loop slice so the tests just added pass.
+
+Important constraints:
+- Preserve all unrelated dirty changes.
+- Keep the patch narrow.
+- Edit only these files unless a tiny import/export adjustment is strictly required:
+  - src/tools/builtins/run-validation.ts (new)
+  - src/tools/index.ts
+  - electron/service.ts
+  - src/brain/planner.ts
+- Do not modify package.json or the new test file except if a minimal import path fix is strictly required.
+- Do not edit README/docs/UI/state files.
+
+Feature requirements:
+1. Add a builtin tool factory `createRunValidationTool(workspaceRoot)` in `src/tools/builtins/run-validation.ts`.
+2. Tool contract:
+   - descriptor name: `run_validation`
+   - accepts either a string mode or an object `{ mode }`
+   - supported modes: `typecheck`, `test`, `build`, `all`
+3. Behavior:
+   - read the workspace package.json scripts
+   - map modes to npm script execution:
+     - typecheck -> `npm run typecheck`
+     - test -> `npm run test`
+     - build -> `npm run build`
+     - all -> typecheck, then test, then build
+   - if mode unsupported, throw a validation-related error
+   - if a required script is missing in package.json, throw a validation-related error
+   - run commands sequentially in the workspace root
+   - stop `all` on first failure
+   - return structured output with at least:
+     - `ok`
+     - `mode`
+     - `commands` array with per-command `name`, `command`, `ok`, `exitCode`
+   - it is fine (preferred) to also include stdout/stderr/summary fields
+4. Wire the tool into desktop execution by adding it to the `tools` array in `electron/service.ts` next to read/search tools.
+5. Add a minimal RulePlanner heuristic in `src/brain/planner.ts` so that on the first turn it calls `run_validation` when the user clearly asks to validate/typecheck/test/build. Keep the heuristic conservative and simple.
+   - examples:
+     - contains `typecheck` -> mode `typecheck`
+     - contains `run tests` or `test` -> mode `test`
+     - contains `build` -> mode `build`
+     - contains `validate` or `validation` -> mode `all`
+   - preserve existing echo behavior and existing finish-after-tool behavior
+6. Export the new tool from `src/tools/index.ts`.
+
+After editing:
+1. run `npm test`
+2. run `npm run typecheck`
+3. run `npm run desktop:typecheck`
+4. summarize exactly what changed and the verification results
+
+Please keep the diff tight and do not touch unrelated dirty files.

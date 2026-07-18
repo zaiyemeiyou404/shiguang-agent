@@ -1,0 +1,74 @@
+{
+  "workspaceRoot": "/absolute/path/to/your/project",
+  "llm": {
+    "provider": "deepseek",
+    "model": "deepseek-chat",
+    "maxTokens": 4096
+  },
+  "providers": {
+    "deepseek": {
+      "type": "openai-compatible",
+      "authMode": "api_key",
+      "baseURL": "https://api.deepseek.com/v1",
+      "apiKeyEnv": "DEEPSEEK_API_KEY",
+      "model": "deepseek-chat",
+      "maxTokens": 4096
+    },
+    "openai": {
+      "type": "openai-compatible",
+      "authMode": "api_key",
+      "baseURL": "https://api.openai.com/v1",
+      "apiKeyEnv": "OPENAI_API_KEY",
+      "model": "gpt-5",
+      "maxTokens": 4096
+    },
+    "codex-api": {
+      "type": "openai-compatible",
+      "authMode": "api_key",
+      "baseURL": "https://api.openai.com/v1",
+      "apiKeyEnv": "OPENAI_API_KEY",
+      "model": "gpt-5",
+      "maxTokens": 4096
+    },
+    "openrouter": {
+      "type": "openai-compatible",
+      "authMode": "api_key",
+      "baseURL": "https://openrouter.ai/api/v1",
+      "apiKeyEnv": "OPENROUTER_API_KEY",
+      "model": "openai/gpt-5",
+      "maxTokens": 4096
+    },
+    "siliconflow": {
+      "type": "openai-compatible",
+      "authMode": "api_key",
+      "baseURL": "https://api.siliconflow.cn/v1",
+      "apiKeyEnv": "SILICONFLOW_API_KEY",
+      "model": "deepseek-ai/DeepSeek-V3",
+      "maxTokens": 4096
+    },
+    "ollama": {
+      "type": "openai-compatible",
+      "authMode": "none",
+      "baseURL": "http://127.0.0.1:11434/v1",
+      "apiKey": "ollama",
+      "model": "qwen2.5-coder:14b",
+      "maxTokens": 4096
+    },
+    "anthropic": {
+      "type": "anthropic",
+      "authMode": "api_key",
+      "baseURL": "https://api.anthropic.com/v1",
+      "apiKeyEnv": "ANTHROPIC_API_KEY",
+      "model": "claude-3-5-sonnet-latest",
+      "maxTokens": 4096
+    },
+    "gemini": {
+      "type": "gemini",
+      "authMode": "api_key",
+      "baseURL": "https://generativelanguage.googleapis.com/v1beta",
+      "apiKeyEnv": "GEMINI_API_KEY",
+      "model": "gemini-2.5-pro",
+      "maxTokens": 4096
+    }
+  }
+}

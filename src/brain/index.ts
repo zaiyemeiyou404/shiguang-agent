@@ -1,5 +1,6 @@
 export * from "./types.js";
 export * from "./planner.js";
+export * from "./model-types.js";
 export * from "./dummy-model.js";
 export * from "./policy.js";
 export * from "./evaluator.js";

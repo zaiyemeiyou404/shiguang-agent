@@ -1,3 +1,12 @@
+export interface DesktopSessionAttention {
+  latestRunStatus: DesktopRun["status"] | null;
+  hasRunningRun: boolean;
+  hasPendingApproval: boolean;
+  pendingApprovalCount: number;
+  hasFailedRun: boolean;
+  hasContextCompaction: boolean;
+}
+
 export interface DesktopSession {
   id: string;
   title: string;
@@ -5,6 +14,7 @@ export interface DesktopSession {
   createdAt: string;
   updatedAt: string;
   summary: string | null;
+  attention?: DesktopSessionAttention;
 }
 
 export interface DesktopRun {
@@ -17,30 +27,172 @@ export interface DesktopRun {
   summary: string | null;
 }
 
+export interface DesktopTurn {
+  id: string;
+  sessionId: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  createdAt: string;
+}
+
 export interface DesktopEvent {
   id: string;
   runId: string;
   seq: number;
-  kind: "thinking" | "message" | "tool_call" | "tool_result" | "error" | "system" | "approval_request" | "approval_granted" | "approval_denied";
+  kind: "thinking" | "message" | "tool_call" | "tool_result" | "error" | "system" | "approval_request" | "approval_granted" | "approval_denied" | "context_compacted";
   payload: unknown;
   createdAt: string;
+}
+
+export interface DesktopApproval {
+  id: string;
+  runId: string;
+  pluginId: string;
+  capability: string;
+  status: "pending" | "granted" | "denied" | "expired";
+  request: unknown;
+  decidedAt: string | null;
+}
+
+export interface DesktopArtifact {
+  id: string;
+  sessionId: string | null;
+  taskId: string | null;
+  runId: string | null;
+  kind: string;
+  uri: string;
+  title: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface ApprovalDecisionRequest {
+  approvalId: string;
+  decision: "granted" | "denied";
+}
+
+export interface RunActionRequest {
+  runId: string;
+}
+
+export interface SessionRenameRequest {
+  sessionId: string;
+  title: string;
+}
+
+export interface SessionStatusRequest {
+  sessionId: string;
+  status: DesktopSession["status"];
+}
+
+export interface SessionDeleteRequest {
+  sessionId: string;
+}
+
+export interface SessionBranchRequest {
+  runId: string;
+  title?: string;
+}
+
+export interface DesktopSessionBranchResult {
+  session: DesktopSession;
+  sourceSession: DesktopSession;
+  sourceRun: DesktopRun;
+  suggestedPrompt: string;
 }
 
 export interface DesktopSessionDetail {
   session: DesktopSession;
   runs: DesktopRun[];
+  turns: DesktopTurn[];
+}
+
+export interface DesktopWorkspaceSnapshot {
+  detail: DesktopSessionDetail;
+  pendingApprovals: DesktopApproval[];
+  artifacts: DesktopArtifact[];
 }
 
 export interface SendMessageRequest {
   sessionId: string;
   message: string;
+  attachments?: DesktopAttachment[];
+}
+
+export interface ArtifactActionRequest {
+  uri: string;
+}
+
+export interface ArtifactActionResult {
+  uri: string;
+  targetPath: string;
+}
+
+export interface DesktopAttachment {
+  name: string;
+  path: string;
+  uri: string;
+  size: number | null;
+}
+
+export interface DesktopProviderSettings {
+  type?: "openai-compatible" | "anthropic" | "gemini";
+  authMode?: "api_key" | "none";
+  baseURL?: string;
+  apiKey?: string;
+  apiKeyMasked?: string;
+  hasStoredApiKey?: boolean;
+  apiKeyEnv?: string;
+  model?: string;
+  maxTokens?: number;
+}
+
+export interface DesktopSettings {
+  configPath: string;
+  workspaceRoot: string;
+  llm: {
+    provider: string;
+    model?: string;
+    maxTokens?: number;
+  };
+  providers: Record<string, DesktopProviderSettings>;
+}
+
+export interface DesktopProviderConnectionRequest {
+  providerKey: string;
+  provider: DesktopProviderSettings;
+}
+
+export interface DesktopProviderConnectionResult {
+  ok: boolean;
+  providerKey: string;
+  providerType: "openai-compatible" | "anthropic" | "gemini";
+  authSource: "direct" | "env" | "none" | "missing";
+  detail: string;
+  checkedAt: string;
 }
 
 export interface ShiguangBridge {
   listSessions(): Promise<DesktopSession[]>;
+  getSettings(): Promise<DesktopSettings>;
+  saveSettings(settings: DesktopSettings): Promise<DesktopSettings>;
+  testProviderConnection(req: DesktopProviderConnectionRequest): Promise<DesktopProviderConnectionResult>;
   createSession(title?: string): Promise<DesktopSession>;
+  branchSession(req: SessionBranchRequest): Promise<DesktopSessionBranchResult>;
+  renameSession(req: SessionRenameRequest): Promise<DesktopSession>;
+  updateSessionStatus(req: SessionStatusRequest): Promise<DesktopSession>;
+  deleteSession(req: SessionDeleteRequest): Promise<{ sessionId: string }>;
   getSessionDetail(sessionId: string): Promise<DesktopSessionDetail>;
+  getWorkspaceSnapshot(sessionId: string): Promise<DesktopWorkspaceSnapshot>;
+  listArtifacts(sessionId: string, runId?: string): Promise<DesktopArtifact[]>;
+  openArtifact(req: ArtifactActionRequest): Promise<ArtifactActionResult>;
+  revealArtifact(req: ArtifactActionRequest): Promise<ArtifactActionResult>;
+  pickAttachments(): Promise<DesktopAttachment[]>;
   sendUserMessage(req: SendMessageRequest): Promise<DesktopRun>;
   getRunEvents(runId: string): Promise<DesktopEvent[]>;
+  listPendingApprovals(sessionId: string): Promise<DesktopApproval[]>;
+  decideApproval(req: ApprovalDecisionRequest): Promise<DesktopApproval>;
+  cancelRun(req: RunActionRequest): Promise<DesktopRun>;
+  retryRun(req: RunActionRequest): Promise<DesktopRun>;
   subscribeRunEvents(runId: string, callback: (event: DesktopEvent) => void): () => void;
 }

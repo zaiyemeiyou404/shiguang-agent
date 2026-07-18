@@ -1,0 +1,43 @@
+In /home/ubuntu/shiguang-agent on the existing feature/bootstrap branch, make a TEST-ONLY patch for a new validation-loop slice. Do NOT implement production code yet.
+
+Scope constraints:
+- Preserve all existing unrelated dirty changes.
+- Edit only these files unless a tiny import/export adjustment is strictly required:
+  - package.json
+  - src/tools/builtins/run-validation.test.ts (new)
+- Do not edit README, docs, Electron UI, or unrelated runtime files.
+
+Goal of the test slice:
+1. Replace the placeholder test script in package.json with a real Node test command that runs compiled test files from dist.
+2. Add focused failing tests for a new builtin tool named run_validation.
+
+Assumed intended production behavior for the future tool:
+- It lives at src/tools/builtins/run-validation.ts.
+- It accepts either a string mode or an object { mode }.
+- Supported modes should be enough for this test slice to cover:
+  - "typecheck"
+  - "test"
+  - "build"
+  - "all"
+- It runs workspace validation commands derived from package.json scripts under the workspace root.
+- It should return structured output including overall ok flag, selected mode, and per-command results.
+- For "all", it should run typecheck then test then build in that order, stopping on first failure.
+- If a required script is missing for the chosen mode, the tool should throw a clear validation-related error.
+
+Write tests first that prove at least these behaviors:
+- runs the correct single command for typecheck and reports success
+- stops the "all" sequence at the first failing command and does not run later commands
+- throws a clear error when the chosen validation mode is unsupported or unavailable in package.json
+
+Testing constraints:
+- Use node:test + node:assert/strict.
+- Use temporary workspaces and write minimal package.json fixtures inside them.
+- Execute the future tool by importing ./run-validation.js from the compiled dist path convention.
+- Keep the tests deterministic and self-contained.
+
+After editing tests only:
+1. run npm test
+2. expect it to fail because production code does not exist yet
+3. summarize exactly which failing expectations now define the feature
+
+Do not implement src/tools/builtins/run-validation.ts in this pass.

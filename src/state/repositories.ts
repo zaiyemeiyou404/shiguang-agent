@@ -1,6 +1,7 @@
 import type {
   Session,
   Task,
+  Turn,
   Run,
   RunEvent,
   Artifact,
@@ -20,6 +21,11 @@ export interface TaskRepository {
   get(id: string): Promise<Task | null>;
   update(id: string, patch: Partial<Task>): Promise<void>;
   listBySession(sessionId: string): Promise<Task[]>;
+}
+
+export interface TurnRepository {
+  create(turn: Turn): Promise<void>;
+  listBySession(sessionId: string, limit?: number): Promise<Turn[]>;
 }
 
 export interface RunRepository {
@@ -43,18 +49,23 @@ export interface ArtifactRepository {
 export interface MemoryRepository {
   create(memory: Memory): Promise<void>;
   get(id: string): Promise<Memory | null>;
+  update(id: string, patch: Partial<Memory>): Promise<void>;
   search(scope: string, query: string, limit?: number): Promise<Memory[]>;
+  listByWorkspace(workspaceScope: string, limit?: number): Promise<Memory[]>;
 }
 
 export interface ApprovalRepository {
   create(approval: Approval): Promise<void>;
+  get(id: string): Promise<Approval | null>;
   update(id: string, patch: Partial<Approval>): Promise<void>;
   listPending(runId: string): Promise<Approval[]>;
+  listBySession(sessionId: string): Promise<Approval[]>;
 }
 
 export interface Repositories {
   sessions: SessionRepository;
   tasks: TaskRepository;
+  turns: TurnRepository;
   runs: RunRepository;
   runEvents: RunEventRepository;
   artifacts: ArtifactRepository;

@@ -1,0 +1,35 @@
+Repo: /home/ubuntu/shiguang-agent
+Branch: feature/bootstrap
+
+Task: review and tighten the in-progress dual-layer context compression implementation that already exists in the working tree. Do NOT revert the compression architecture; refine it.
+
+Current implementation exists in:
+- src/context/prune.ts
+- src/context/compress.ts
+- src/context/llm-compactor.ts
+- src/context/service.ts
+- src/context/render.ts
+- src/memory/service.ts
+
+Goals for this Codex pass:
+1. Make pruning behavior more faithful to the intended design:
+   - preserve all stable items and user_turn
+   - dedupe live refs more robustly
+   - for run_summary items, keep the best/recent-looking few intact and shorten/truncate older noisy ones before compression when appropriate
+   - keep artifact/memory pruning deterministic and compact
+2. Improve compaction-pressure handling:
+   - avoid hand-assembling a fake pressure object in ContextService
+   - use helper(s) from llm-compactor.ts cleanly
+   - keep llm compactor optional and default no-op
+3. Improve service pipeline clarity and maintainability
+   - keep: memory retrieval -> build -> prune -> compress -> optional llm compact -> trim
+   - simplify code where obviously awkward
+4. Keep render output clean for digest items.
+5. Keep memory dedupe simple and safe.
+6. Run `npx tsc --noEmit` at the end.
+
+Important constraints:
+- Stay focused on context/memory compression files only unless a tiny adjacent change is required.
+- Do not rewrite unrelated planner/model code.
+- Prefer small, explicit TypeScript.
+- After edits, run `npx tsc --noEmit` and stop.

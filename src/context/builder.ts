@@ -1,4 +1,4 @@
-import type { ContextItem, ContextBundle } from "./types.js";
+import type { ContextItem, ContextBundle, ContextLayer } from "./types.js";
 import type { Task, Run, Artifact } from "../core/types.js";
 
 export interface ContextBuilderInput {
@@ -6,8 +6,9 @@ export interface ContextBuilderInput {
   task: Task;
   recentRuns: Run[];
   linkedArtifacts: Artifact[];
-  memories: { id: string; content: string; confidence: number }[];
+  memories: { id: string; content: string; summary?: string; confidence: number }[];
   systemInstructions?: string;
+  workspaceRoot?: string;
 }
 
 let seq = 0;
@@ -15,98 +16,167 @@ function nextId(): string {
   return `ctx_${Date.now()}_${++seq}`;
 }
 
+function makeItem(
+  kind: ContextItem["kind"],
+  layer: ContextLayer,
+  source: string,
+  content: string,
+  score: number,
+  method: ContextItem["provenance"]["method"],
+  metadata?: ContextItem["metadata"],
+): ContextItem {
+  return {
+    id: nextId(),
+    kind,
+    layer,
+    source,
+    content,
+    metadata,
+    provenance: { source, retrievedAt: new Date(), method },
+    score,
+    budget: estimateTokens(content),
+  };
+}
+
 export function buildContext(input: ContextBuilderInput): ContextBundle {
-  const items: ContextItem[] = [];
+  const stable: ContextItem[] = [];
+  const volatile: ContextItem[] = [];
+  const live: ContextItem[] = [];
   const now = new Date();
 
   if (input.systemInstructions) {
-    items.push({
-      id: nextId(),
-      kind: "system_instruction",
-      source: "system",
-      content: input.systemInstructions,
-      provenance: { source: "system", retrievedAt: now, method: "direct" },
-      score: 1,
-      budget: estimateTokens(input.systemInstructions),
-    });
+    stable.push(
+      makeItem("system_instruction", "stable", "system", input.systemInstructions, 1, "direct"),
+    );
   }
 
-  items.push({
-    id: nextId(),
-    kind: "user_turn",
-    source: "session",
-    content: input.userTurn,
-    provenance: { source: "user", retrievedAt: now, method: "direct" },
-    score: 1,
-    budget: estimateTokens(input.userTurn),
-  });
+  stable.push(
+    makeItem("task_state", "stable", `task:${input.task.id}`,
+      `[${input.task.status}] ${input.task.title}${input.task.description ? `\n${input.task.description}` : ""}`,
+      0.95, "direct"),
+  );
 
-  items.push({
-    id: nextId(),
-    kind: "task_state",
-    source: `task:${input.task.id}`,
-    content: `[${input.task.status}] ${input.task.title}${
-      input.task.description ? `\n${input.task.description}` : ""
-    }`,
-    provenance: { source: `task:${input.task.id}`, retrievedAt: now, method: "direct" },
-    score: 0.95,
-    budget: estimateTokens(input.task.title + (input.task.description ?? "")),
-  });
+  volatile.push(
+    makeItem("user_turn", "volatile", "session", input.userTurn, 1, "direct"),
+  );
 
   for (const run of input.recentRuns.slice(0, 5)) {
     if (!run.summary) continue;
-    items.push({
-      id: nextId(),
-      kind: "run_summary",
-      source: `run:${run.id}`,
-      content: `[${run.status}] ${run.summary}`,
-      provenance: { source: `run:${run.id}`, retrievedAt: now, method: "direct" },
-      score: 0.7,
-      budget: estimateTokens(run.summary),
-    });
+    const runScore = run.status === "failed"
+      ? 0.9
+      : run.status === "cancelled" || run.status === "needs_approval"
+        ? 0.8
+        : 0.7;
+    volatile.push(
+      makeItem("run_summary", "volatile", `run:${run.id}`,
+        `[${run.status}] ${run.summary}`, runScore, "direct", {
+          runId: run.id,
+          status: run.status,
+          startedAt: run.startedAt?.toISOString() ?? null,
+          endedAt: run.endedAt?.toISOString() ?? null,
+        }),
+    );
   }
 
   for (const art of input.linkedArtifacts.slice(0, 10)) {
-    items.push({
-      id: nextId(),
-      kind: "artifact",
-      source: art.uri,
-      content: `[${art.kind}] ${art.title ?? art.uri}`,
-      provenance: { source: art.uri, retrievedAt: now, method: "linked" },
-      score: 0.5,
-      budget: estimateTokens(art.title ?? art.uri),
-    });
+    volatile.push(
+      makeItem("artifact", "volatile", art.uri,
+        `[${art.kind}] ${art.title ?? art.uri}`, 0.5, "linked"),
+    );
   }
 
   for (const mem of input.memories.slice(0, 8)) {
-    items.push({
-      id: nextId(),
-      kind: "memory",
-      source: `memory:${mem.id}`,
-      content: mem.content,
-      provenance: { source: `memory:${mem.id}`, retrievedAt: now, method: "query" },
-      score: mem.confidence,
-      budget: estimateTokens(mem.content),
-    });
+    const label = mem.summary ?? mem.content.slice(0, 80);
+    volatile.push(
+      makeItem("memory", "volatile", `memory:${mem.id}`,
+        label, mem.confidence, "query"),
+    );
   }
 
-  items.sort((a, b) => b.score - a.score);
-  const totalBudget = items.reduce((s, i) => s + i.budget, 0);
+  if (input.workspaceRoot) {
+    live.push(
+      makeItem("file_ref", "live", input.workspaceRoot,
+        `workspace: ${input.workspaceRoot}`, 0.3, "direct"),
+    );
+  }
 
-  return { items, totalBudget, builtAt: now };
+  const all = [...stable, ...volatile, ...live];
+  const totalBudget = all.reduce((s, i) => s + i.budget, 0);
+
+  return { stable, volatile, live, totalBudget, builtAt: now };
 }
 
 export function trimToBudget(bundle: ContextBundle, maxBudget: number): ContextBundle {
-  if (bundle.totalBudget <= maxBudget) return bundle;
-  const kept: ContextItem[] = [];
-  let used = 0;
-  for (const item of bundle.items) {
+  const all = [...bundle.stable, ...bundle.volatile, ...bundle.live];
+  if (all.reduce((s, i) => s + i.budget, 0) <= maxBudget) return bundle;
+
+  const mustKeep = all.filter(i => i.layer === "stable" || i.kind === "user_turn");
+  const optional = all
+    .filter(i => !mustKeep.includes(i))
+    .sort(compareOptionalContextItems);
+
+  const kept: ContextItem[] = [...mustKeep];
+  let used = mustKeep.reduce((s, i) => s + i.budget, 0);
+  for (const item of optional) {
     if (used + item.budget <= maxBudget) {
       kept.push(item);
       used += item.budget;
     }
   }
-  return { items: kept, totalBudget: used, builtAt: bundle.builtAt };
+  const stable = kept.filter(i => i.layer === "stable");
+  const volatile = kept.filter(i => i.layer === "volatile");
+  const live = kept.filter(i => i.layer === "live");
+  return { stable, volatile, live, totalBudget: used, builtAt: bundle.builtAt };
+}
+
+const digestKinds = new Set<ContextItem["kind"]>([
+  "run_digest",
+  "memory_digest",
+  "artifact_digest",
+  "context_digest",
+]);
+
+function compareOptionalContextItems(a: ContextItem, b: ContextItem): number {
+  return compareNumber(optionalPriority(b), optionalPriority(a))
+    || compareNumber(runStatusBonus(b), runStatusBonus(a))
+    || compareNumber(runTimestamp(b), runTimestamp(a))
+    || compareNumber(b.score, a.score)
+    || compareText(a.kind, b.kind)
+    || compareText(a.source, b.source)
+    || compareText(a.content, b.content);
+}
+
+function optionalPriority(item: ContextItem): number {
+  if (digestKinds.has(item.kind)) return 4;
+  if (item.kind === "run_summary") return 3;
+  if (item.layer === "live" && item.kind === "file_ref") return 2;
+  return 1;
+}
+
+function runStatusBonus(item: ContextItem): number {
+  if (item.kind !== "run_summary") return 0;
+  const status = item.metadata?.status;
+  return status === "failed" || status === "cancelled" || status === "needs_approval" ? 1 : 0;
+}
+
+function runTimestamp(item: ContextItem): number {
+  if (item.kind !== "run_summary") return 0;
+  return Math.max(metadataTime(item, "endedAt"), metadataTime(item, "startedAt"));
+}
+
+function metadataTime(item: ContextItem, key: string): number {
+  const value = item.metadata?.[key];
+  if (typeof value !== "string") return 0;
+  const timestamp = Date.parse(value);
+  return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
+function compareNumber(a: number, b: number): number {
+  return a === b ? 0 : a - b;
+}
+
+function compareText(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 export function estimateTokens(text: string): number {
