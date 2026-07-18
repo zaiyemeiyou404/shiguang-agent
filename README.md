@@ -506,13 +506,13 @@ Current limitation: the planner currently speaks the **OpenAI-compatible chat co
 
 ## Current Status
 
-v0.2.0 — Framework skeleton with real TypeScript contracts, a composition root, SQLite migration strings, an in-memory event sink, a context builder with budget trimming, and a read-only example filesystem plugin.
+v0.2.1 — Desktop-ready agent baseline with real TypeScript runtime contracts, SQLite-backed session/run/approval state, context compaction, provider wiring, and packaged Electron delivery.
 
 ## Desktop Release Notes
 
 当前仓库已包含可打包的 Electron 桌面端，给 GitHub 下载用户时请优先发布这些产物：
 
-- Windows 安装版：`拾光 Agent Setup 0.2.0.exe`
+- Windows 安装版：`拾光 Agent Setup 0.2.1.exe`
 - Windows 免安装版：`win-unpacked` 压缩包（解压后运行 `拾光 Agent.exe`）
 - Linux 免安装版：`linux-unpacked` 压缩包（解压后运行 `./shiguang-agent`）
 
