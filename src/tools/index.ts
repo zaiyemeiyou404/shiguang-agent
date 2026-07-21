@@ -12,3 +12,6 @@ export { createStatPathTool } from "./builtins/stat-path.js";
 export { createCopyPathTool } from "./builtins/copy-path.js";
 export { createMovePathTool } from "./builtins/move-path.js";
 export { createDeletePathTool } from "./builtins/delete-path.js";
+export { createGitStatusTool } from "./builtins/git-status.js";
+export { createGitDiffTool } from "./builtins/git-diff.js";
+export { createInspectProjectTool } from "./builtins/inspect-project.js";

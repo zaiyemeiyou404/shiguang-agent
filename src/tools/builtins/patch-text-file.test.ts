@@ -15,6 +15,7 @@ type PatchTool = {
     requiresApproval?: boolean;
     capability?: string;
   };
+  previewApproval?(input: unknown): Promise<unknown> | unknown;
   execute(input: unknown): Promise<unknown>;
 };
 
@@ -86,4 +87,27 @@ test("patch_text_file requires replaceAll for multiple matches", async () => {
   assertOutput(result);
   assert.equal(result.replacements, 2);
   assert.equal(await readFile(filePath, "utf8"), "y\ny\n");
+});
+
+test("patch_text_file approval preview includes the proposed patch", async () => {
+  const { createPatchTextFileTool } = await loadModule();
+  const workspaceRoot = await makeWorkspace();
+  const filePath = join(workspaceRoot, "example.ts");
+  await writeFile(filePath, "const value = 1;\n", "utf8");
+  const tool = createPatchTextFileTool(workspaceRoot);
+
+  const preview = await tool.previewApproval?.({
+    path: "example.ts",
+    oldString: "const value = 1;",
+    newString: "const value = 2;",
+  });
+
+  assert.equal(typeof preview, "object");
+  assert.notEqual(preview, null);
+  const payload = preview as { kind?: string; diff?: string; additions?: number; deletions?: number };
+  assert.equal(payload.kind, "text_diff");
+  assert.match(payload.diff ?? "", /-const value = 1;/);
+  assert.match(payload.diff ?? "", /\+const value = 2;/);
+  assert.equal(payload.additions, 1);
+  assert.equal(payload.deletions, 1);
 });

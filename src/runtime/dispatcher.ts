@@ -189,6 +189,9 @@ export class ActionDispatcher {
         // needs_approval 不是普通失败；它要求上层 UI/runtime 暂停并等待人工决策。
         const approvalId = action.approvalId ?? `appr_${runId ?? "run"}_${Date.now()}`;
         const capability = action.capability ?? action.toolName ?? "unknown";
+        const preview = action.toolName
+          ? await this.previewApproval(action.toolName, action.toolInput, context)
+          : null;
         if (this.eventSink && runId) {
           await this.eventSink.record(runId, "approval_request", {
             approvalId,
@@ -198,6 +201,7 @@ export class ActionDispatcher {
               toolName: action.toolName,
               toolInput: action.toolInput,
               reason: action.reason,
+              ...(preview ? { preview } : {}),
             },
           });
         }
@@ -231,6 +235,21 @@ export class ActionDispatcher {
           },
         };
       }
+    }
+  }
+
+  private async previewApproval(toolName: string, input: unknown, context?: ToolExecutionContext): Promise<unknown | null> {
+    const tool = this.toolRegistry.get(toolName);
+    if (!tool?.previewApproval) return null;
+    try {
+      return await tool.previewApproval(input, context);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        kind: "summary",
+        title: `Preview unavailable for ${toolName}`,
+        warnings: [message],
+      };
     }
   }
 }

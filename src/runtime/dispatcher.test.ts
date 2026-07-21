@@ -30,6 +30,47 @@ test("ActionDispatcher emits approval_request for needs_approval actions", async
   assert.equal((approvalEvent?.payload as { capability?: string }).capability, "fs.write");
 });
 
+test("ActionDispatcher attaches tool approval previews", async () => {
+  const sink = new InMemoryEventSink();
+  const registry = new ToolRegistry();
+  registry.register({
+    descriptor: {
+      name: "preview_tool",
+      description: "Tool with approval preview",
+      inputSchema: {},
+      requiresApproval: true,
+      capability: "preview.write",
+    },
+    previewApproval() {
+      return {
+        kind: "summary",
+        title: "Preview title",
+      };
+    },
+    async execute() {
+      return { ok: true };
+    },
+  });
+  const dispatcher = new ActionDispatcher(registry, sink);
+
+  await dispatcher.dispatch({
+    action: {
+      kind: "needs_approval",
+      toolName: "preview_tool",
+      toolInput: { value: 1 },
+      capability: "preview.write",
+      approvalId: "appr_preview",
+      reason: "Approval required",
+    },
+    reasoning: "blocked by policy",
+  }, "run_preview");
+
+  const events = await sink.list("run_preview");
+  const approvalEvent = events.find((event) => event.kind === "approval_request");
+  const payload = approvalEvent?.payload as { request?: { preview?: { title?: string } } } | undefined;
+  assert.equal(payload?.request?.preview?.title, "Preview title");
+});
+
 test("ActionDispatcher tags tool_call and tool_result with the same toolCallId", async () => {
   const sink = new InMemoryEventSink();
   const registry = new ToolRegistry();

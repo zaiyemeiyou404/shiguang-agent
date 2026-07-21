@@ -1,6 +1,8 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve, normalize, relative } from "node:path";
 import type { Tool, ToolExecutionContext } from "../types.js";
+import { toPortablePath } from "./path-format.js";
+import { createTextDiffPreview } from "./approval-preview.js";
 
 export interface PatchTextFileInput {
   path: string;
@@ -87,6 +89,36 @@ export function createPatchTextFileTool(workspaceRoot: string): Tool {
       risk: "write",
       requiresApproval: true,
       capability: "fs.patch",
+    },
+    previewApproval(input: unknown): ReturnType<NonNullable<Tool["previewApproval"]>> {
+      const { path, oldString, newString, replaceAll } = resolveInput(input);
+      const fullPath = resolveWorkspacePath(workspaceRoot, path);
+      const relativePath = toPortablePath(relative(workspaceRoot, fullPath));
+      const before = readFileSync(fullPath, "utf8");
+      const occurrences = countOccurrences(before, oldString);
+      const warnings: string[] = [];
+
+      if (occurrences === 0) {
+        warnings.push("oldString was not found; approving this action will likely fail.");
+      }
+      if (!replaceAll && occurrences > 1) {
+        warnings.push(`oldString matched ${occurrences} times; execution requires replaceAll: true.`);
+      }
+
+      const shouldApplyPreview = occurrences > 0 && (replaceAll === true || occurrences === 1);
+      const after = shouldApplyPreview
+        ? replaceAll === true
+          ? before.split(oldString).join(newString)
+          : before.replace(oldString, newString)
+        : before;
+
+      return createTextDiffPreview({
+        path: relativePath,
+        before,
+        after,
+        operation: "patch",
+        warnings,
+      });
     },
     async execute(input: unknown, context?: ToolExecutionContext): Promise<PatchTextFileOutput> {
       // patch_text_file 强依赖“精确命中次数”，这样 planner 才能做可验证的最小补丁。

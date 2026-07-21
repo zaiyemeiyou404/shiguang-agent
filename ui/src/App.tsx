@@ -799,24 +799,58 @@ function summarizeToolBlockValue(value: unknown): string {
   return text ? text.slice(0, 96) : "空";
 }
 
+type ApprovalRequestPreview = {
+  kind: string;
+  title: string;
+  path: string | null;
+  operation: string | null;
+  diff: string | null;
+  additions: number | null;
+  deletions: number | null;
+  truncated: boolean;
+  warnings: string[];
+};
+
+function parseApprovalPreview(value: unknown): ApprovalRequestPreview | null {
+  if (!value || typeof value !== "object") return null;
+  const payload = value as Record<string, unknown>;
+  const warnings = Array.isArray(payload.warnings)
+    ? payload.warnings.filter((warning): warning is string => typeof warning === "string")
+    : [];
+  return {
+    kind: typeof payload.kind === "string" ? payload.kind : "summary",
+    title: typeof payload.title === "string" ? payload.title : "Approval preview",
+    path: typeof payload.path === "string" ? payload.path : null,
+    operation: typeof payload.operation === "string" ? payload.operation : null,
+    diff: typeof payload.diff === "string" ? payload.diff : null,
+    additions: typeof payload.additions === "number" ? payload.additions : null,
+    deletions: typeof payload.deletions === "number" ? payload.deletions : null,
+    truncated: payload.truncated === true,
+    warnings,
+  };
+}
+
 function summarizeApprovalRequest(request: unknown): {
   toolName: string | null;
   reason: string | null;
   toolInput: string;
+  preview: ApprovalRequestPreview | null;
 } {
   if (!request || typeof request !== "object") {
     return {
       toolName: null,
       reason: null,
       toolInput: formatPayload(request),
+      preview: null,
     };
   }
 
-  const payload = request as { toolName?: unknown; toolInput?: unknown; reason?: unknown };
+  const payload = request as { toolName?: unknown; toolInput?: unknown; reason?: unknown; preview?: unknown };
   return {
     toolName: typeof payload.toolName === "string" ? payload.toolName : null,
     reason: typeof payload.reason === "string" ? payload.reason : null,
     toolInput: formatPayload(payload.toolInput),
+    preview: parseApprovalPreview(payload.preview),
   };
 }
 
@@ -1850,6 +1884,34 @@ function ArtifactCard({
   );
 }
 
+function ApprovalPreviewBlock({ preview }: { preview: ApprovalRequestPreview }) {
+  const changeSummary = [
+    preview.operation,
+    preview.path,
+    preview.additions !== null || preview.deletions !== null
+      ? `+${preview.additions ?? 0} / -${preview.deletions ?? 0}`
+      : null,
+    preview.truncated ? "diff 已截断" : null,
+  ].filter(Boolean).join(" · ");
+
+  return (
+    <div className="approval-preview">
+      <div className="approval-preview-head">
+        <strong>{preview.title}</strong>
+        {changeSummary ? <span className="tiny">{changeSummary}</span> : null}
+      </div>
+      {preview.warnings.length > 0 ? (
+        <div className="approval-preview-warnings">
+          {preview.warnings.map((warning) => (
+            <span key={warning}>{warning}</span>
+          ))}
+        </div>
+      ) : null}
+      {preview.diff ? <pre className="approval-diff">{preview.diff}</pre> : null}
+    </div>
+  );
+}
+
 function ApprovalCard({
   approval,
   decisionState,
@@ -1886,6 +1948,7 @@ function ApprovalCard({
         能力 {approval.capability} · 运行 {approval.runId.slice(0, 18)} · 插件 {approval.pluginId}
       </p>
       {requestSummary.reason ? <p className="muted" style={{ marginBottom: 8 }}>{requestSummary.reason}</p> : null}
+      {requestSummary.preview ? <ApprovalPreviewBlock preview={requestSummary.preview} /> : null}
       {requestSummary.toolInput ? <pre className="tool-json">{requestSummary.toolInput.length > 320 ? requestSummary.toolInput.slice(0, 320) + "..." : requestSummary.toolInput}</pre> : null}
       {decisionState === "approved" ? <p className="muted" style={{ marginTop: 8, marginBottom: 0 }}>已通过，正在恢复运行…</p> : null}
       {decisionState === "denied" ? <p className="muted" style={{ marginTop: 8, marginBottom: 0 }}>已拒绝。</p> : null}

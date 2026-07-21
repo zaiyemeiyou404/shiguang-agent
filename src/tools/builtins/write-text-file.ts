@@ -1,6 +1,8 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, resolve, normalize, relative } from "node:path";
 import type { Tool, ToolExecutionContext } from "../types.js";
+import { toPortablePath } from "./path-format.js";
+import { createTextDiffPreview } from "./approval-preview.js";
 
 export interface WriteTextFileInput {
   path: string;
@@ -61,7 +63,43 @@ export function createWriteTextFileTool(workspaceRoot: string): Tool {
       requiresApproval: true,
       capability: "fs.write",
     },
+    previewApproval(input: unknown): ReturnType<NonNullable<Tool["previewApproval"]>> {
+      const { path, content } = resolveInput(input);
+      const fullPath = resolvePath(workspaceRoot, path);
+      const relativePath = toPortablePath(relative(workspaceRoot, fullPath));
+      const warnings: string[] = [];
+      let before = "";
+      let operation = "create";
+
+      if (existsSync(fullPath)) {
+        const stats = statSync(fullPath);
+        operation = "overwrite";
+        if (!stats.isFile()) {
+          return {
+            kind: "summary",
+            title: `Cannot preview write: ${relativePath}`,
+            path: relativePath,
+            operation,
+            warnings: [`Target exists but is not a file: ${relativePath}`],
+          };
+        }
+        if (stats.size > 1_048_576) {
+          warnings.push("Existing file is larger than 1MB; preview only compares against an empty baseline.");
+        } else {
+          before = readFileSync(fullPath, "utf8");
+        }
+      }
+
+      return createTextDiffPreview({
+        path: relativePath,
+        before,
+        after: content,
+        operation,
+        warnings,
+      });
+    },
     async execute(input: unknown, context?: ToolExecutionContext): Promise<WriteTextFileOutput> {
+      throwIfAborted(context?.signal);
       const { path, content } = resolveInput(input);
       const fullPath = resolvePath(workspaceRoot, path);
       mkdirSync(dirname(fullPath), { recursive: true });

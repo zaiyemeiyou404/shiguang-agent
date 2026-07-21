@@ -1438,6 +1438,49 @@ body {
   gap: 10px;
 }
 
+.approval-preview {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0;
+  padding: 12px;
+  border: 1px solid rgba(91, 165, 255, 0.22);
+  border-radius: 16px;
+  background: rgba(14, 21, 33, 0.72);
+}
+
+.approval-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.approval-preview-warnings {
+  display: grid;
+  gap: 5px;
+}
+
+.approval-preview-warnings span {
+  display: block;
+  color: #ffcf80;
+  font-size: 12px;
+}
+
+.approval-diff {
+  margin: 0;
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre;
+  word-break: normal;
+  color: #d7e7ff;
+  background: rgba(4, 8, 14, 0.72);
+  border: 1px solid rgba(122, 141, 168, 0.16);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .home-list-row {
   width: 100%;
   display: flex;

@@ -41,6 +41,9 @@ import { createStatPathTool } from "../dist/tools/builtins/stat-path.js";
 import { createCopyPathTool } from "../dist/tools/builtins/copy-path.js";
 import { createMovePathTool } from "../dist/tools/builtins/move-path.js";
 import { createDeletePathTool } from "../dist/tools/builtins/delete-path.js";
+import { createGitStatusTool } from "../dist/tools/builtins/git-status.js";
+import { createGitDiffTool } from "../dist/tools/builtins/git-diff.js";
+import { createInspectProjectTool } from "../dist/tools/builtins/inspect-project.js";
 import { createPlanner } from "./planner-factory.js";
 import { loadDesktopConfig, getDesktopSettings, saveDesktopSettings, getStoredProviderApiKey, type ToolApprovalMode } from "./config.js";
 import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
@@ -314,6 +317,9 @@ export class DesktopAppService {
     const tools = [
       createListDirectoryTool(workspaceRoot),
       createStatPathTool(workspaceRoot),
+      createInspectProjectTool(workspaceRoot),
+      createGitStatusTool(workspaceRoot),
+      createGitDiffTool(workspaceRoot),
       createReadTextFileTool(workspaceRoot),
       createSearchWorkspaceTool(workspaceRoot),
       createWriteTextFileTool(workspaceRoot),
@@ -680,6 +686,9 @@ export class DesktopAppService {
     const tools = [
       createListDirectoryTool(workspaceRoot),
       createStatPathTool(workspaceRoot),
+      createInspectProjectTool(workspaceRoot),
+      createGitStatusTool(workspaceRoot),
+      createGitDiffTool(workspaceRoot),
       createReadTextFileTool(workspaceRoot),
       createSearchWorkspaceTool(workspaceRoot),
       createWriteTextFileTool(workspaceRoot),

@@ -15,6 +15,7 @@ type WriteTextFileTool = {
     requiresApproval?: boolean;
     capability?: string;
   };
+  previewApproval?(input: unknown): Promise<unknown> | unknown;
   execute(input: unknown): Promise<unknown>;
 };
 
@@ -73,6 +74,24 @@ test("write_text_file rejects paths that escape the workspace root", async () =>
     () => tool.execute({ path: "../outside.ts", content: "nope\n" }),
     /workspace root/i,
   );
+});
+
+test("write_text_file approval preview includes a text diff", async () => {
+  const { createWriteTextFileTool } = await loadModule();
+  const workspaceRoot = await makeWorkspace();
+  await writeFile(join(workspaceRoot, "example.ts"), "const before = 1;\n", "utf8");
+  const tool = createWriteTextFileTool(workspaceRoot);
+
+  const preview = await tool.previewApproval?.({ path: "example.ts", content: "const after = 2;\n" });
+
+  assert.equal(typeof preview, "object");
+  assert.notEqual(preview, null);
+  const payload = preview as { kind?: string; diff?: string; additions?: number; deletions?: number };
+  assert.equal(payload.kind, "text_diff");
+  assert.match(payload.diff ?? "", /-const before = 1;/);
+  assert.match(payload.diff ?? "", /\+const after = 2;/);
+  assert.equal(payload.additions, 1);
+  assert.equal(payload.deletions, 1);
 });
 
 test("write_text_file requires both path and content", async () => {
