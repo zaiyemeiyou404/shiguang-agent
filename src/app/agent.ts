@@ -1,6 +1,7 @@
 import { ContextService } from "../context/service.js";
 import type { ContextBuildDiagnostics } from "../context/service.js";
 import type { ContextBuilderInput } from "../context/builder.js";
+import type { CompressionStats } from "../context/types.js";
 import type { Turn } from "../core/types.js";
 import { RulePlanner, type Planner } from "../brain/planner.js";
 import { ToolMetadataPolicy, type Policy } from "../brain/policy.js";
@@ -22,6 +23,7 @@ export interface AgentOptions {
   recentTurnLimit?: number;
   planner?: Planner;
   tools?: Tool[];
+  allowToolsWithoutApproval?: string[];
   memoryService?: MemoryService;
   workspaceRoot?: string;
 }
@@ -66,7 +68,9 @@ export class Agent {
     }
 
     this.planner = options.planner ?? new RulePlanner();
-    this.policy = new ToolMetadataPolicy(this.toolRegistry.all());
+    this.policy = new ToolMetadataPolicy(this.toolRegistry.all(), {
+      allowWithoutApproval: options.allowToolsWithoutApproval,
+    });
     this.evaluator = new BasicEvaluator();
     this.dispatcher = new ActionDispatcher(this.toolRegistry, options.eventSink);
     this.contextService = new ContextService({
@@ -214,8 +218,7 @@ export class Agent {
 
   private async emitContextCompactionEvent(runId: string, diagnostics: ContextBuildDiagnostics): Promise<void> {
     const { compression, usedLlmCompactor } = diagnostics;
-    const changed = compression.finalBudget < compression.originalBudget;
-    if (!changed || !this.options.eventSink) return;
+    if (!shouldEmitContextCompactionEvent(compression, usedLlmCompactor) || !this.options.eventSink) return;
 
     const finalItemEstimate = Math.max(
       0,
@@ -232,6 +235,17 @@ export class Agent {
       usedLlmCompactor,
     });
   }
+}
+
+function shouldEmitContextCompactionEvent(
+  compression: CompressionStats,
+  usedLlmCompactor: boolean,
+): boolean {
+  const savedBudget = compression.originalBudget - compression.finalBudget;
+  if (savedBudget <= 0) return false;
+  if (usedLlmCompactor) return true;
+  const savedRatio = compression.originalBudget > 0 ? savedBudget / compression.originalBudget : 0;
+  return savedBudget >= 128 || savedRatio >= 0.1;
 }
 
 function makeTurn(sessionId: string, role: Turn["role"], content: string): Turn {

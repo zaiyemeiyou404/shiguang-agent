@@ -46,3 +46,21 @@ test("ToolMetadataPolicy keeps explicit allow-without-approval exceptions", asyn
   assert.equal(result.action.kind, "tool_call");
   assert.equal(result.action.toolName, "run_validation");
 });
+
+test("ToolMetadataPolicy supports configured workspace edit exceptions", async () => {
+  const policy = new ToolMetadataPolicy([
+    { name: "write_text_file", description: "write", inputSchema: {}, risk: "write", requiresApproval: true, capability: "fs.write" },
+    { name: "patch_text_file", description: "patch", inputSchema: {}, risk: "write", requiresApproval: true, capability: "fs.write" },
+    { name: "delete_path", description: "delete", inputSchema: {}, risk: "write", requiresApproval: true, capability: "fs.delete" },
+  ], {
+    allowWithoutApproval: ["run_validation", "write_text_file", "patch_text_file"],
+  });
+
+  const writeResult = await policy.check(makeToolDecision("write_text_file"));
+  const patchResult = await policy.check(makeToolDecision("patch_text_file"));
+  const deleteResult = await policy.check(makeToolDecision("delete_path"));
+
+  assert.equal(writeResult.action.kind, "tool_call");
+  assert.equal(patchResult.action.kind, "tool_call");
+  assert.equal(deleteResult.action.kind, "needs_approval");
+});

@@ -5,9 +5,11 @@ import { dirname, join, normalize, resolve } from "node:path";
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_MODEL = "gpt-4o-mini";
 const DEFAULT_MAX_TOKENS = 2048;
+const DEFAULT_TOOL_APPROVAL_MODE = "ask";
 
 export type ProviderProtocol = "openai-compatible" | "anthropic" | "gemini";
 export type ProviderAuthMode = "api_key" | "none";
+export type ToolApprovalMode = "ask" | "workspace_edits";
 
 interface ProviderConfigFile {
   type?: ProviderProtocol;
@@ -25,6 +27,7 @@ interface LlmConfigFile extends ProviderConfigFile {
 
 interface DesktopConfigFile {
   workspaceRoot?: string;
+  toolApprovalMode?: ToolApprovalMode;
   llm?: LlmConfigFile;
   providers?: Record<string, ProviderConfigFile>;
 }
@@ -42,6 +45,7 @@ export interface ResolvedLlmConfig {
 export interface ResolvedDesktopConfig {
   configPath: string;
   workspaceRoot: string;
+  toolApprovalMode: ToolApprovalMode;
   llm: ResolvedLlmConfig;
 }
 
@@ -60,6 +64,7 @@ export interface DesktopProviderSettings {
 export interface DesktopSettings {
   configPath: string;
   workspaceRoot: string;
+  toolApprovalMode: ToolApprovalMode;
   llm: {
     provider: string;
     model?: string;
@@ -195,7 +200,12 @@ export function loadDesktopConfig(): ResolvedDesktopConfig {
     ?? process.cwd(),
   ));
 
-  return { configPath, workspaceRoot, llm };
+  return {
+    configPath,
+    workspaceRoot,
+    toolApprovalMode: normalizeToolApprovalMode(fileConfig.toolApprovalMode),
+    llm,
+  };
 }
 
 export function getDesktopSettings(): DesktopSettings {
@@ -204,6 +214,7 @@ export function getDesktopSettings(): DesktopSettings {
   return {
     configPath,
     workspaceRoot: fileConfig.workspaceRoot ?? process.cwd(),
+    toolApprovalMode: normalizeToolApprovalMode(fileConfig.toolApprovalMode),
     llm: {
       provider: fileConfig.llm?.provider ?? "openai",
       ...(fileConfig.llm?.model ? { model: fileConfig.llm.model } : {}),
@@ -219,6 +230,7 @@ export function saveDesktopSettings(settings: DesktopSettings): DesktopSettings 
   const previousConfig = readConfigFile(configPath);
   const nextConfig: DesktopConfigFile = {
     workspaceRoot: settings.workspaceRoot,
+    toolApprovalMode: normalizeToolApprovalMode(settings.toolApprovalMode),
     llm: {
       provider: settings.llm.provider,
       ...(settings.llm.model ? { model: settings.llm.model } : {}),
@@ -325,6 +337,10 @@ function normalizeMaxTokens(value: string | number): number {
   const parsed = typeof value === "number" ? value : Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_MAX_TOKENS;
   return Math.trunc(parsed);
+}
+
+function normalizeToolApprovalMode(value: unknown): ToolApprovalMode {
+  return value === "workspace_edits" ? "workspace_edits" : DEFAULT_TOOL_APPROVAL_MODE;
 }
 
 export function ensureDesktopConfigDirectory(): void {

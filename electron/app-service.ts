@@ -4,6 +4,7 @@ import type {
   DesktopSession,
   DesktopRun,
   DesktopTurn,
+  DesktopConversationEntry,
   DesktopEvent,
   DesktopSessionDetail,
   DesktopWorkspaceSnapshot,
@@ -41,7 +42,7 @@ import { createCopyPathTool } from "../dist/tools/builtins/copy-path.js";
 import { createMovePathTool } from "../dist/tools/builtins/move-path.js";
 import { createDeletePathTool } from "../dist/tools/builtins/delete-path.js";
 import { createPlanner } from "./planner-factory.js";
-import { loadDesktopConfig, getDesktopSettings, saveDesktopSettings, getStoredProviderApiKey } from "./config.js";
+import { loadDesktopConfig, getDesktopSettings, saveDesktopSettings, getStoredProviderApiKey, type ToolApprovalMode } from "./config.js";
 import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
 import { statSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -49,6 +50,14 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 let seqCounter = 0;
 function nextId(prefix: string): string {
   return `${prefix}_${Date.now()}_${++seqCounter}`;
+}
+
+function approvalAllowlistForMode(mode: ToolApprovalMode): string[] {
+  const allowed = ["run_validation"];
+  if (mode === "workspace_edits") {
+    allowed.push("write_text_file", "patch_text_file");
+  }
+  return allowed;
 }
 
 export class DesktopAppService {
@@ -200,10 +209,12 @@ export class DesktopAppService {
       this.runRepository.listBySession(sessionId),
       this.turnRepository.listBySession(sessionId, 200),
     ]);
+    const conversation = await this.buildSessionConversation(sessionId, turns, runs);
     return {
       session: await this.decorateSession(session),
       runs: runs.map(coreRunToDesktop),
       turns: turns.map(coreTurnToDesktop),
+      conversation,
     };
   }
 
@@ -317,6 +328,7 @@ export class DesktopAppService {
       eventSink: sink,
       planner,
       tools,
+      allowToolsWithoutApproval: approvalAllowlistForMode(desktopConfig.toolApprovalMode),
       turnRepository: this.turnRepository,
       memoryService: this.memoryService,
       workspaceRoot,
@@ -493,6 +505,7 @@ export class DesktopAppService {
   }
 
   async listPendingApprovals(sessionId: string): Promise<DesktopApproval[]> {
+    await this.syncApprovalsForSession(sessionId);
     return (await this.approvalRepository.listBySession(sessionId)).map(coreApprovalToDesktop);
   }
 
@@ -637,6 +650,7 @@ export class DesktopAppService {
   }
 
   private async decorateSession(session: DesktopSession): Promise<DesktopSession> {
+    await this.syncApprovalsForSession(session.id);
     const runs = (await this.runRepository.listBySession(session.id)).map(coreRunToDesktop);
     const latestRun = runs[0] ?? null;
     const pendingApprovals = await this.approvalRepository.listBySession(session.id);
@@ -680,6 +694,7 @@ export class DesktopAppService {
       eventSink: sink,
       planner,
       tools,
+      allowToolsWithoutApproval: approvalAllowlistForMode(desktopConfig.toolApprovalMode),
       turnRepository: this.turnRepository,
       memoryService: this.memoryService,
       workspaceRoot,
@@ -696,6 +711,25 @@ export class DesktopAppService {
       }
     }
     return task.description?.trim() || task.title;
+  }
+
+  private async buildSessionConversation(
+    sessionId: string,
+    turns: Turn[],
+    runs: Run[],
+  ): Promise<DesktopConversationEntry[]> {
+    const turnEntries = turns
+      .map(coreTurnToConversationEntry)
+      .filter((entry): entry is DesktopConversationEntry => entry !== null);
+    const eventEntryLists = await Promise.all(runs.map(async (run) => {
+      const events = await this.runEventRepository.listByRun(run.id);
+      return events
+        .map((event) => coreEventToConversationEntry(sessionId, event))
+        .filter((entry): entry is DesktopConversationEntry => entry !== null);
+    }));
+
+    return [...turnEntries, ...eventEntryLists.flat()]
+      .sort(compareConversationEntries);
   }
 
   private async resumeRunAfterApproval(approval: Approval): Promise<void> {
@@ -865,6 +899,14 @@ export class DesktopAppService {
     const existing = await this.sessionRepository.get(session.id);
     if (existing) return;
     await this.sessionRepository.create(desktopSessionToCore(session));
+  }
+
+  private async syncApprovalsForSession(sessionId: string): Promise<void> {
+    const runs = await this.runRepository.listBySession(sessionId);
+    for (const run of runs) {
+      const events = await this.runEventRepository.listByRun(run.id);
+      await this.persistApprovalsFromEvents(run.id, events);
+    }
   }
 
   private async persistApprovalsFromEvents(runId: string, events: RunEvent[]): Promise<void> {
@@ -1349,6 +1391,23 @@ function coreTurnToDesktop(turn: Turn): DesktopTurn {
   };
 }
 
+function coreTurnToConversationEntry(turn: Turn): DesktopConversationEntry | null {
+  const content = turn.content.trim();
+  if (!content) return null;
+  const role = turn.role;
+  return {
+    id: `turn:${turn.id}`,
+    sessionId: turn.sessionId,
+    runId: null,
+    source: "turn",
+    kind: role === "system" ? "system" : "message",
+    role,
+    from: role === "user" ? "你" : role === "system" ? "系统" : "拾光 Agent",
+    content,
+    createdAt: turn.createdAt.toISOString(),
+  };
+}
+
 function coreEventToDesktop(event: RunEvent): DesktopEvent {
   return {
     id: event.id,
@@ -1358,6 +1417,82 @@ function coreEventToDesktop(event: RunEvent): DesktopEvent {
     payload: event.payload,
     createdAt: event.createdAt.toISOString(),
   };
+}
+
+function coreEventToConversationEntry(sessionId: string, event: RunEvent): DesktopConversationEntry | null {
+  const payload = event.payload && typeof event.payload === "object"
+    ? event.payload as Record<string, unknown>
+    : undefined;
+
+  if (event.kind === "error") {
+    const content = typeof payload?.message === "string"
+      ? payload.message.trim()
+      : formatConversationPayload(payload);
+    if (!content) return null;
+    return {
+      id: `event:${event.id}`,
+      sessionId,
+      runId: event.runId,
+      source: "event",
+      kind: "error",
+      role: "system",
+      from: "系统",
+      content,
+      createdAt: event.createdAt.toISOString(),
+    };
+  }
+
+  if (
+    event.kind !== "system"
+    && event.kind !== "approval_request"
+    && event.kind !== "approval_granted"
+    && event.kind !== "approval_denied"
+  ) {
+    return null;
+  }
+
+  const title = event.kind === "approval_request"
+    ? "请求审批"
+    : event.kind === "approval_granted"
+      ? "审批通过"
+      : event.kind === "approval_denied"
+        ? "审批拒绝"
+        : "系统消息";
+  const body = typeof payload?.message === "string"
+    ? payload.message.trim()
+    : typeof payload?.content === "string"
+      ? payload.content.trim()
+      : "";
+  const content = body ? `${title}\n${body}` : title;
+  return {
+    id: `event:${event.id}`,
+    sessionId,
+    runId: event.runId,
+    source: "event",
+    kind: "system",
+    role: "system",
+    from: "系统",
+    content,
+    createdAt: event.createdAt.toISOString(),
+  };
+}
+
+function formatConversationPayload(payload: Record<string, unknown> | undefined): string {
+  if (!payload) return "";
+  try {
+    return JSON.stringify(payload, null, 2);
+  } catch {
+    return String(payload);
+  }
+}
+
+function compareConversationEntries(a: DesktopConversationEntry, b: DesktopConversationEntry): number {
+  const timeDiff = Date.parse(a.createdAt) - Date.parse(b.createdAt);
+  if (timeDiff !== 0) return timeDiff;
+  if (a.source !== b.source) {
+    return a.source === "turn" ? -1 : 1;
+  }
+  return a.id.localeCompare(b.id);
 }
 
 function coreApprovalToDesktop(approval: Approval): DesktopApproval {

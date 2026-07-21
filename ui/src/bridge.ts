@@ -35,6 +35,18 @@ export interface DesktopTurn {
   createdAt: string;
 }
 
+export interface DesktopConversationEntry {
+  id: string;
+  sessionId: string;
+  runId: string | null;
+  source: "turn" | "event";
+  kind: "message" | "system" | "error";
+  role: "user" | "assistant" | "system";
+  from: string;
+  content: string;
+  createdAt: string;
+}
+
 export interface DesktopEvent {
   id: string;
   runId: string;
@@ -105,6 +117,7 @@ export interface DesktopSessionDetail {
   session: DesktopSession;
   runs: DesktopRun[];
   turns: DesktopTurn[];
+  conversation: DesktopConversationEntry[];
 }
 
 export interface DesktopWorkspaceSnapshot {
@@ -147,9 +160,12 @@ export interface DesktopProviderSettings {
   maxTokens?: number;
 }
 
+export type ToolApprovalMode = "ask" | "workspace_edits";
+
 export interface DesktopSettings {
   configPath: string;
   workspaceRoot: string;
+  toolApprovalMode: ToolApprovalMode;
   llm: {
     provider: string;
     model?: string;

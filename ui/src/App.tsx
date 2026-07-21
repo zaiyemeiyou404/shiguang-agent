@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDesktopSessions, useRunEvents } from "./hooks/useDesktopSessions";
 import { getDesktopBridge, getDesktopBridgeErrorMessage, requireDesktopBridge } from "./bridge";
-import type { DesktopSession, DesktopRun, DesktopTurn, DesktopEvent, DesktopSettings, DesktopApproval, DesktopArtifact, DesktopProviderConnectionResult, DesktopAttachment } from "./bridge";
+import type { DesktopSession, DesktopRun, DesktopConversationEntry, DesktopEvent, DesktopSettings, DesktopApproval, DesktopArtifact, DesktopProviderConnectionResult, DesktopAttachment, ToolApprovalMode } from "./bridge";
 
 type PillVariant = "progress" | "safe" | "auto" | "todo";
 type BannerVariant = "info" | "warn" | "danger" | "success";
@@ -539,14 +539,12 @@ function LegacySimpleChatTranscript({ events }: { events: DesktopEvent[] }) {
       }];
     }
 
-    if (event.kind === "system" || event.kind === "context_compacted" || event.kind === "approval_granted" || event.kind === "approval_denied") {
+    if (event.kind === "system" || event.kind === "approval_granted" || event.kind === "approval_denied") {
       const title = event.kind === "approval_granted"
         ? "审批已通过"
         : event.kind === "approval_denied"
           ? "审批已拒绝"
-          : event.kind === "context_compacted"
-            ? "上下文已压缩"
-            : "系统消息";
+          : "系统消息";
       const body = typeof payload.message === "string"
         ? payload.message.trim()
         : typeof payload.content === "string"
@@ -613,13 +611,13 @@ function LegacySimpleChatTranscript({ events }: { events: DesktopEvent[] }) {
 }
 
 function SimpleChatTranscript({
-  turns,
-  events,
-  showRunEvents,
+  entries,
+  liveEvents,
+  showLiveEvents,
 }: {
-  turns: DesktopTurn[];
-  events: DesktopEvent[];
-  showRunEvents: boolean;
+  entries: DesktopConversationEntry[];
+  liveEvents: DesktopEvent[];
+  showLiveEvents: boolean;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   type ChatTranscriptItem = {
@@ -628,29 +626,41 @@ function SimpleChatTranscript({
     role?: "user" | "system";
     from: string;
     time: string;
+    createdAt?: string;
     content: string;
     duplicateCount?: number;
   };
 
-  const historyItems: ChatTranscriptItem[] = turns.flatMap((turn): ChatTranscriptItem[] => {
-    const content = typeof turn.content === "string" ? turn.content.trim() : "";
+  const historyItems: ChatTranscriptItem[] = entries.flatMap((entry): ChatTranscriptItem[] => {
+    const content = typeof entry.content === "string" ? entry.content.trim() : "";
     if (!content) return [];
+    const turn = { role: entry.role };
     return [{
-      id: `turn:${turn.id}`,
-      source: "turn",
-      role: turn.role === "user" ? "user" : turn.role === "system" ? "system" : undefined,
+      id: entry.id,
+      source: entry.source,
+      role: entry.role === "user" ? "user" : entry.role === "system" ? "system" : undefined,
       from: turn.role === "user" ? "你" : turn.role === "system" ? "系统" : "拾光 Agent",
-      time: new Date(turn.createdAt).toLocaleTimeString(),
+      ...(entry.from ? { from: entry.from } : {}),
+      time: new Date(entry.createdAt).toLocaleTimeString(),
+      createdAt: entry.createdAt,
       content,
     }];
   });
 
-  const liveItems: ChatTranscriptItem[] = !showRunEvents ? [] : events.flatMap((event): ChatTranscriptItem[] => {
+  const persistedEventIds = new Set(
+    historyItems
+      .filter((item) => item.source === "event")
+      .map((item) => item.id),
+  );
+
+  const liveItems: ChatTranscriptItem[] = !showLiveEvents ? [] : liveEvents.flatMap((event): ChatTranscriptItem[] => {
     const payload = eventPayloadRecord(event);
+    if (event.kind === "context_compacted") return [];
     if (event.kind === "message") {
       if (payload.role === "user") return [];
       const content = typeof payload.content === "string" ? payload.content.trim() : "";
       if (!content) return [];
+      if (persistedEventIds.has(`event:${event.id}`)) return [];
       return [{
         id: `event:${event.id}`,
         source: "event",
@@ -673,14 +683,12 @@ function SimpleChatTranscript({
       }];
     }
 
-    if (event.kind === "system" || event.kind === "context_compacted" || event.kind === "approval_granted" || event.kind === "approval_denied") {
+    if (event.kind === "system" || event.kind === "approval_granted" || event.kind === "approval_denied") {
       const title = event.kind === "approval_granted"
         ? "审批已通过"
         : event.kind === "approval_denied"
           ? "审批已拒绝"
-          : event.kind === "context_compacted"
-            ? "上下文已压缩"
-            : "系统消息";
+          : "系统消息";
       const body = typeof payload.message === "string"
         ? payload.message.trim()
         : typeof payload.content === "string"
@@ -763,6 +771,15 @@ function eventPayloadRecord(event: DesktopEvent): Record<string, unknown> {
   return (typeof event.payload === "object" && event.payload !== null)
     ? event.payload as Record<string, unknown>
     : {};
+}
+
+function isMeaningfulCompactionEvent(event: DesktopEvent): boolean {
+  const payload = eventPayloadRecord(event);
+  const originalBudget = typeof payload.originalBudget === "number" ? payload.originalBudget : 0;
+  const finalBudget = typeof payload.finalBudget === "number" ? payload.finalBudget : originalBudget;
+  const savedBudget = originalBudget - finalBudget;
+  const savedRatio = originalBudget > 0 ? savedBudget / originalBudget : 0;
+  return payload.usedLlmCompactor === true || savedBudget >= 128 || savedRatio >= 0.1;
 }
 
 function toolEventName(event: DesktopEvent): string | null {
@@ -1940,6 +1957,7 @@ function buildSettings(
   activeProvider: string,
   activeModel: string,
   maxTokens: string,
+  toolApprovalMode: ToolApprovalMode,
 ): DesktopSettings {
   const parsedMaxTokens = maxTokens.trim() ? Number.parseInt(maxTokens, 10) : undefined;
   const nextProviders = Object.fromEntries(
@@ -1949,6 +1967,7 @@ function buildSettings(
   return {
     ...base,
     workspaceRoot: workspaceRoot.trim(),
+    toolApprovalMode,
     llm: {
       provider: activeProvider.trim() || "openai",
       ...(activeModel.trim() ? { model: activeModel.trim() } : {}),
@@ -2004,6 +2023,10 @@ function formatSettingsValue(value: string | null | undefined): string {
   return normalized ? normalized : "—";
 }
 
+function toolApprovalModeLabel(mode: ToolApprovalMode | undefined): string {
+  return mode === "workspace_edits" ? "自动批准工作区文件编辑" : "写文件前需要审批";
+}
+
 function summarizeApiKeySource(draft: ProviderDraft): string {
   if (draft.authMode === "none") return "免鉴权";
   if (draft.apiKey.trim()) return "面板新 Key";
@@ -2027,6 +2050,7 @@ function SettingsDrawer({
   const [activeProvider, setActiveProvider] = useState("openai");
   const [activeModel, setActiveModel] = useState("");
   const [maxTokens, setMaxTokens] = useState("");
+  const [toolApprovalMode, setToolApprovalMode] = useState<ToolApprovalMode>("ask");
   const [providerCatalog, setProviderCatalog] = useState<Record<string, ProviderDraft>>({ openai: createProviderDraft("openai") });
   const [providerKeyInput, setProviderKeyInput] = useState("openai");
   const [providerJsonInput, setProviderJsonInput] = useState("");
@@ -2052,6 +2076,7 @@ function SettingsDrawer({
       : catalog[providerKey]?.maxTokens
         ? String(catalog[providerKey]?.maxTokens)
         : "");
+    setToolApprovalMode(settings.toolApprovalMode ?? "ask");
     setProviderCatalog(catalog);
     setProviderKeyInput(providerKey);
     setProviderJsonInput("");
@@ -2160,6 +2185,7 @@ function SettingsDrawer({
         workspaceRoot,
         model: activeModel,
         maxTokens,
+        toolApprovalMode,
       },
       provider: normalizeProviderDraftForCompare(providerDraft),
     }, null, 2);
@@ -2176,7 +2202,7 @@ function SettingsDrawer({
     try {
       const parsed = JSON.parse(providerJsonInput) as {
         activeProvider?: string;
-        runtime?: { workspaceRoot?: string; model?: string; maxTokens?: string | number };
+        runtime?: { workspaceRoot?: string; model?: string; maxTokens?: string | number; toolApprovalMode?: ToolApprovalMode };
         provider?: Partial<ProviderDraft>;
       };
       const targetKey = (parsed.activeProvider ?? parsed.provider?.key ?? activeProvider).trim();
@@ -2198,6 +2224,9 @@ function SettingsDrawer({
       if (typeof parsed.runtime?.workspaceRoot === "string") setWorkspaceRoot(parsed.runtime.workspaceRoot);
       if (typeof parsed.runtime?.model === "string") setActiveModel(parsed.runtime.model);
       if (parsed.runtime?.maxTokens !== undefined) setMaxTokens(String(parsed.runtime.maxTokens));
+      if (parsed.runtime?.toolApprovalMode === "ask" || parsed.runtime?.toolApprovalMode === "workspace_edits") {
+        setToolApprovalMode(parsed.runtime.toolApprovalMode);
+      }
       setSaveState(`已导入 ${targetKey} 配置 JSON，保存后写入配置文件。`);
     } catch (error) {
       setSaveState(error instanceof Error ? `导入失败：${error.message}` : `导入失败：${String(error)}`);
@@ -2306,7 +2335,7 @@ function SettingsDrawer({
     setTestingConnection(true);
     setConnectionResult(null);
     try {
-      const next = buildSettings(settings, providerCatalog, workspaceRoot, activeProvider, activeModel, maxTokens);
+      const next = buildSettings(settings, providerCatalog, workspaceRoot, activeProvider, activeModel, maxTokens, toolApprovalMode);
       const saved = await requireDesktopBridge().saveSettings(next);
       onSaved(saved);
       const testResult = await runConnectionTest();
@@ -2347,7 +2376,8 @@ function SettingsDrawer({
   const runtimeDirty = workspaceRoot.trim() !== (settings.workspaceRoot ?? "")
     || activeProvider !== (settings.llm.provider ?? "openai")
     || activeModel.trim() !== (settings.llm.model ?? "")
-    || maxTokens.trim() !== (settings.llm.maxTokens ? String(settings.llm.maxTokens) : "");
+    || maxTokens.trim() !== (settings.llm.maxTokens ? String(settings.llm.maxTokens) : "")
+    || toolApprovalMode !== (settings.toolApprovalMode ?? "ask");
   const effectiveModelSource = activeModel.trim()
     ? "当前配置 llm.model"
     : providerDraft.model.trim()
@@ -2372,6 +2402,7 @@ function SettingsDrawer({
     { label: "当前 Provider", current: activeProvider, saved: settings.llm.provider ?? "openai" },
     { label: "运行模型", current: formatSettingsValue(activeModel), saved: formatSettingsValue(settings.llm.model) },
     { label: "运行 maxTokens", current: formatSettingsValue(maxTokens), saved: formatSettingsValue(settings.llm.maxTokens ? String(settings.llm.maxTokens) : "") },
+    { label: "工具审批", current: toolApprovalModeLabel(toolApprovalMode), saved: toolApprovalModeLabel(settings.toolApprovalMode ?? "ask") },
   ].filter((item) => item.current !== item.saved);
 
   return (
@@ -2487,6 +2518,23 @@ function SettingsDrawer({
             <div>
               <label className="tiny">最大 Tokens</label>
               <input className="settings-input" value={maxTokens} onChange={(e) => setMaxTokens(e.target.value)} placeholder="4096" />
+            </div>
+          </div>
+          <div className="settings-inline-grid">
+            <div>
+              <label className="tiny">工具审批</label>
+              <select className="settings-input" value={toolApprovalMode} onChange={(e) => setToolApprovalMode(e.target.value as ToolApprovalMode)}>
+                <option value="ask">写文件前需要审批</option>
+                <option value="workspace_edits">自动批准工作区文件编辑</option>
+              </select>
+            </div>
+            <div>
+              <label className="tiny">自动批准范围</label>
+              <p className="muted" style={{ margin: 0 }}>
+                {toolApprovalMode === "workspace_edits"
+                  ? "只自动放行 write_text_file / patch_text_file；终端、删除、移动仍然需要审批。"
+                  : "写入、终端、删除、移动等高风险工具都会先生成审批卡片。"}
+              </p>
             </div>
           </div>
         </div>
@@ -2682,6 +2730,7 @@ export default function App() {
 
   const activeRun = detail?.runs?.find((r) => r.id === activeRunId) ?? null;
   const sessionTurns = detail?.turns ?? [];
+  const sessionConversation = detail?.conversation ?? [];
   const latestSessionRun = detail?.runs.length
     ? detail.runs.reduce((latest, run) => {
       const latestKey = latest.startedAt ?? latest.endedAt ?? latest.id;
@@ -2698,7 +2747,7 @@ export default function App() {
   const artifacts = workspaceSnapshot?.artifacts ?? [];
   const sortedEvents = [...events].sort((a, b) => a.seq - b.seq);
   const latestErrorEvent = [...sortedEvents].reverse().find((event) => event.kind === "error");
-  const latestCompactionEvent = [...sortedEvents].reverse().find((event) => event.kind === "context_compacted");
+  const latestCompactionEvent = [...sortedEvents].reverse().find((event) => event.kind === "context_compacted" && isMeaningfulCompactionEvent(event));
   const hasApprovedResume = Object.values(decisionState).includes("approved") && activeRun?.status === "running";
   const currentProvider = settings?.providers[settings?.llm.provider ?? ""];
   const providerLabel = settings?.llm.provider ?? "未设置";
@@ -3458,9 +3507,9 @@ export default function App() {
                     </section>
                   ) : null}
                   <SimpleChatTranscript
-                    turns={sessionTurns}
-                    events={sortedEvents}
-                    showRunEvents={showActiveRunTranscript}
+                    entries={sessionConversation}
+                    liveEvents={sortedEvents}
+                    showLiveEvents={showActiveRunTranscript}
                   />
                 </section>
 
