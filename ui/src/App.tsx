@@ -775,6 +775,7 @@ function eventPayloadRecord(event: DesktopEvent): Record<string, unknown> {
 
 function isMeaningfulCompactionEvent(event: DesktopEvent): boolean {
   const payload = eventPayloadRecord(event);
+  if (payload.compressionTriggered !== true) return false;
   const originalBudget = typeof payload.originalBudget === "number" ? payload.originalBudget : 0;
   const finalBudget = typeof payload.finalBudget === "number" ? payload.finalBudget : originalBudget;
   const savedBudget = originalBudget - finalBudget;

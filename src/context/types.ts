@@ -20,12 +20,16 @@ export interface CompressionStats {
   prunedCount: number;
   compressedCount: number;
   finalBudget: number;
+  compressionTriggered?: boolean;
+  budgetPressure?: number;
+  maxBudget?: number;
 }
 
 export interface CompressionOptions {
   maxRunSummaryItems?: number;
   maxMemoryItems?: number;
   maxArtifactItems?: number;
+  minBudgetPressure?: number;
 }
 
 export interface Provenance {

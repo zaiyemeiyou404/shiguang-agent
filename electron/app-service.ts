@@ -670,7 +670,7 @@ export class DesktopAppService {
         hasPendingApproval: pendingApprovals.length > 0,
         pendingApprovalCount: pendingApprovals.length,
         hasFailedRun: latestRun?.status === "failed",
-        hasContextCompaction: latestRunEvents.some((event) => event.kind === "context_compacted"),
+        hasContextCompaction: latestRunEvents.some(isMeaningfulContextCompactionEvent),
       },
     };
   }
@@ -1426,6 +1426,21 @@ function coreEventToDesktop(event: RunEvent): DesktopEvent {
     payload: event.payload,
     createdAt: event.createdAt.toISOString(),
   };
+}
+
+function isMeaningfulContextCompactionEvent(event: RunEvent): boolean {
+  if (event.kind !== "context_compacted") return false;
+  const payload = event.payload && typeof event.payload === "object"
+    ? event.payload as Record<string, unknown>
+    : {};
+  if (payload.compressionTriggered !== true) return false;
+  const originalBudget = typeof payload.originalBudget === "number" ? payload.originalBudget : 0;
+  const finalBudget = typeof payload.finalBudget === "number" ? payload.finalBudget : originalBudget;
+  const savedBudget = originalBudget - finalBudget;
+  if (savedBudget <= 0) return false;
+  if (payload.usedLlmCompactor === true) return true;
+  const savedRatio = originalBudget > 0 ? savedBudget / originalBudget : 0;
+  return savedBudget >= 128 || savedRatio >= 0.1;
 }
 
 function coreEventToConversationEntry(sessionId: string, event: RunEvent): DesktopConversationEntry | null {

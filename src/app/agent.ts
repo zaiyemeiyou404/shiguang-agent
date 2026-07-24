@@ -232,6 +232,9 @@ export class Agent {
       finalItemEstimate,
       originalBudget: compression.originalBudget,
       finalBudget: compression.finalBudget,
+      compressionTriggered: compression.compressionTriggered === true,
+      budgetPressure: compression.budgetPressure,
+      maxBudget: compression.maxBudget,
       usedLlmCompactor,
     });
   }
@@ -241,6 +244,7 @@ function shouldEmitContextCompactionEvent(
   compression: CompressionStats,
   usedLlmCompactor: boolean,
 ): boolean {
+  if (compression.compressionTriggered !== true) return false;
   const savedBudget = compression.originalBudget - compression.finalBudget;
   if (savedBudget <= 0) return false;
   if (usedLlmCompactor) return true;

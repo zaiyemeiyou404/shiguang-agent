@@ -9,8 +9,11 @@ import { compressContextBundle, type CompressionOptions } from "./compress.js";
 import {
   computeCompactionPressure,
   shouldUseLlmCompaction,
+  type ContextCompactionPressure,
   type LlmCompactor,
 } from "./llm-compactor.js";
+
+const DEFAULT_MIN_COMPRESSION_BUDGET_PRESSURE = 0.75;
 
 export interface ContextServiceOptions {
   memoryService?: MemoryService;
@@ -77,7 +80,14 @@ export class ContextService {
 
     let bundle = pruneContextBundle(initialBundle);
     const prunedItems = [...bundle.stable, ...bundle.volatile, ...bundle.live];
-    bundle = compressContextBundle(bundle, this.compressionOptions);
+    const deterministicCompressionTriggered = shouldUseDeterministicCompression(
+      bundle,
+      this.maxBudget,
+      this.compressionOptions,
+    );
+    if (deterministicCompressionTriggered) {
+      bundle = compressContextBundle(bundle, this.compressionOptions);
+    }
     const compressedItems = [...bundle.stable, ...bundle.volatile, ...bundle.live];
 
     const pressure = computeCompactionPressure(bundle, this.maxBudget);
@@ -101,6 +111,9 @@ export class ContextService {
           prunedCount: Math.max(0, originalItems.length - prunedItems.length),
           compressedCount: Math.max(0, prunedItems.length - compressedItems.length),
           finalBudget: finalBundle.totalBudget,
+          compressionTriggered: deterministicCompressionTriggered || usedLlmCompactor,
+          budgetPressure: this.maxBudget > 0 ? initialBundle.totalBudget / this.maxBudget : 1,
+          maxBudget: this.maxBudget,
         },
         usedLlmCompactor,
       },
@@ -120,4 +133,21 @@ export class ContextService {
     const prompt = this.render(bundle);
     return { bundle, prompt, diagnostics };
   }
+}
+
+function shouldUseDeterministicCompression(
+  bundle: ContextBundle,
+  maxBudget: number,
+  options?: CompressionOptions,
+  pressure: ContextCompactionPressure = computeCompactionPressure(bundle, maxBudget),
+): boolean {
+  if (pressure.budgetExcess > 0) return true;
+  const threshold = normalizeCompressionThreshold(options?.minBudgetPressure);
+  const budgetPressure = maxBudget > 0 ? bundle.totalBudget / maxBudget : 1;
+  return budgetPressure >= threshold;
+}
+
+function normalizeCompressionThreshold(value: number | undefined): number {
+  if (!Number.isFinite(value)) return DEFAULT_MIN_COMPRESSION_BUDGET_PRESSURE;
+  return Math.min(1, Math.max(0, value ?? DEFAULT_MIN_COMPRESSION_BUDGET_PRESSURE));
 }
