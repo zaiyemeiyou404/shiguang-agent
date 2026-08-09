@@ -43,6 +43,14 @@ $env:GEMINI_API_KEY="你的 key"
 
 本项目不会把 API Key 提交到仓库。请不要把真实密钥写入 README、issue、commit 或截图里。
 
+如果你使用 Clash Verge、Mihomo 等代理工具，但 Electron/Node 请求没有被 TUN 正确接管，可以显式设置代理：
+
+```powershell
+$env:SHIGUANG_PROXY_URL="http://127.0.0.1:7897"
+```
+
+未设置时，桌面端会自动探测常见本地代理端口，例如 `7897`、`7890`、`7891`。本地 Ollama、localhost 和局域网地址不会走代理。
+
 ## 能做什么
 
 - 会话管理：新建、切换、重命名、归档会话。
@@ -86,6 +94,10 @@ release/win-unpacked/拾光 Agent.exe
 ### 提示缺少 API Key 怎么办？
 
 进入“设置”，选择 provider，填写 API Key、Base URL 和模型名，然后保存。也可以设置对应环境变量后重启应用。
+
+### 开了 TUN 还是 fetch failed 怎么办？
+
+如果错误里出现 `198.18.x.x` 或 `fetch failed`，说明请求可能解析到了代理 Fake-IP，但没有被 TUN 正确接管。新版会自动尝试本地代理端口；如果仍失败，请在代理软件里确认对应域名走代理规则，或设置 `SHIGUANG_PROXY_URL`。
 
 ### 文件已经创建了，为什么之前还显示运行失败？
 

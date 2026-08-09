@@ -44,6 +44,7 @@ import { createDeletePathTool } from "../dist/tools/builtins/delete-path.js";
 import { createGitStatusTool } from "../dist/tools/builtins/git-status.js";
 import { createGitDiffTool } from "../dist/tools/builtins/git-diff.js";
 import { createInspectProjectTool } from "../dist/tools/builtins/inspect-project.js";
+import { fetchWithNetworkProxy } from "../dist/brain/providers/network.js";
 import { createPlanner } from "./planner-factory.js";
 import { loadDesktopConfig, getDesktopSettings, saveDesktopSettings, getStoredProviderApiKey, type ToolApprovalMode } from "./config.js";
 import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
@@ -1496,7 +1497,7 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 1200
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    return await fetchWithNetworkProxy(url, { ...init, signal: controller.signal });
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       throw new Error(`请求超时（>${timeoutMs}ms）`);

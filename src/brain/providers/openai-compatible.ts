@@ -7,6 +7,7 @@ import {
   tryParseProviderDecision,
   type ProviderMessage,
 } from "./shared.js";
+import { fetchWithNetworkProxy } from "./network.js";
 
 export interface OpenAIModelConfig {
   baseURL?: string;
@@ -138,7 +139,7 @@ export class OpenAICompatibleModel implements LlmPlannerModel {
           : {}),
     };
 
-    const response = await fetch(`${this.baseURL}/chat/completions`, {
+    const response = await fetchWithNetworkProxy(`${this.baseURL}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
