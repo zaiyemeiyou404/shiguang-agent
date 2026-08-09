@@ -631,6 +631,97 @@ test("runLoop stops duplicate approved workspace mutation instead of requesting 
   assert.match(String(state.lastResult?.output), /Skipped duplicate write_text_file/);
 });
 
+test("runLoop validates instead of repeating a model-emitted approval request", async () => {
+  const duplicateApproval: BrainDecision = {
+    action: {
+      kind: "needs_approval",
+      toolName: "write_text_file",
+      toolInput: { path: "christmas_tree.py", content: "print('ok')\n" },
+      reason: "Model requested approval for the same write again.",
+    },
+    reasoning: "The model repeated a previous approval request.",
+  };
+
+  const seededWrite: ActionResult = {
+    action: { kind: "tool_call", toolName: "write_text_file", toolInput: { path: "christmas_tree.py", content: "print('ok')\n" } },
+    ok: true,
+    output: { path: "christmas_tree.py", bytes: 12 },
+    metadata: {
+      category: "tool_observation",
+      summary: "File written.",
+      retryable: false,
+      toolName: "write_text_file",
+    },
+  };
+
+  let policyCalls = 0;
+  let dispatcherCalls = 0;
+
+  const state = await runLoop(
+    {
+      context: makeContext("create christmas_tree.py"),
+      runId: "run_duplicate_model_approval",
+      priorTurns: [],
+      history: [seededWrite],
+      workingMemory: {
+        step: 1,
+        lastActionKind: "tool_call",
+        lastToolName: "write_text_file",
+      },
+      availableTools: [
+        { name: "write_text_file", description: "write", inputSchema: {}, risk: "write", requiresApproval: true, capability: "fs.write", effects: { workspaceMutation: true, validationMode: "all" } },
+        { name: "run_validation", description: "validate", inputSchema: {}, risk: "execute", requiresApproval: false, capability: "process.validate" },
+      ],
+    },
+    {
+      planner: {
+        async decide(): Promise<BrainDecision> {
+          return duplicateApproval;
+        },
+      },
+      policy: {
+        async check(next: BrainDecision): Promise<BrainDecision> {
+          policyCalls += 1;
+          assert.equal(next.action.kind, "tool_call");
+          assert.equal(next.action.toolName, "run_validation");
+          return next;
+        },
+      },
+      dispatcher: {
+        async dispatch(decision): Promise<ActionResult> {
+          dispatcherCalls += 1;
+          assert.equal(decision.action.kind, "tool_call");
+          assert.equal(decision.action.toolName, "run_validation");
+          return {
+            action: decision.action,
+            ok: true,
+            output: { ok: true, mode: "all", summary: "Validation passed." },
+            metadata: {
+              category: "tool_observation",
+              summary: "Validation passed.",
+              retryable: false,
+              toolName: "run_validation",
+            },
+          };
+        },
+      },
+      evaluator: {
+        async evaluate(decision) {
+          assert.equal(decision.action.kind, "tool_call");
+          assert.equal(decision.action.toolName, "run_validation");
+          return { kind: "stop", reason: "finish" } as const;
+        },
+      },
+    },
+    3,
+  );
+
+  assert.equal(policyCalls, 1);
+  assert.equal(dispatcherCalls, 1);
+  assert.equal(state.stopReason, "finish");
+  assert.equal(state.lastDecision?.action.toolName, "run_validation");
+});
+
 test("runLoop extracts TypeScript paren-format diagnostics from validation output", async () => {
   const decision: BrainDecision = {
     action: { kind: "tool_call", toolName: "run_validation", toolInput: { mode: "typecheck" } },

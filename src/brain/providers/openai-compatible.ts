@@ -197,7 +197,7 @@ function buildToolDescription(tool: ToolDescriptor): string {
   const effects = tool.effects
     ? ` Effects: workspaceMutation=${tool.effects.workspaceMutation === true}, validationMode=${tool.effects.validationMode ?? "none"}.`
     : "";
-  const approval = tool.requiresApproval ? " Requires approval before execution." : "";
+  const approval = tool.requiresApproval ? " Runtime policy may pause this tool call for user approval." : "";
   return `${tool.description}${effects}${approval}`.trim().slice(0, 1024);
 }
 

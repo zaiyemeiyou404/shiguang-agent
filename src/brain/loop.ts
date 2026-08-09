@@ -1022,7 +1022,7 @@ function rewriteDuplicateWorkspaceMutation(
   history: ActionResult[],
   availableTools: BrainInput["availableTools"],
 ): BrainDecision {
-  const duplicate = findDuplicateSuccessfulWorkspaceMutation(decision, history);
+  const duplicate = findDuplicateSuccessfulWorkspaceMutation(decision, history, availableTools);
   if (!duplicate) return decision;
 
   const hasValidationTool = availableTools.some((tool) => tool.name === "run_validation");
@@ -1059,16 +1059,18 @@ function rewriteDuplicateWorkspaceMutation(
 function findDuplicateSuccessfulWorkspaceMutation(
   decision: BrainDecision,
   history: ActionResult[],
+  availableTools: BrainInput["availableTools"],
 ): { index: number; result: ActionResult } | null {
   const signature = toolActionSignature(decision.action);
   if (!signature) return null;
+  if (!isRepeatProtectedWorkspaceAction(decision.action, availableTools)) return null;
 
   for (let index = history.length - 1; index >= 0; index--) {
     const result = history[index];
     if (!result) continue;
     if (
       result.ok === true
-      && result.metadata?.workspaceMutation === true
+      && isRepeatProtectedWorkspaceAction(result.action, availableTools)
       && toolActionSignature(result.action) === signature
     ) {
       return { index, result };
@@ -1079,8 +1081,27 @@ function findDuplicateSuccessfulWorkspaceMutation(
 }
 
 function toolActionSignature(action: BrainDecision["action"]): string | null {
-  if (action.kind !== "tool_call" || !action.toolName) return null;
+  if ((action.kind !== "tool_call" && action.kind !== "needs_approval") || !action.toolName) return null;
   return `${action.toolName}:${stableJson(action.toolInput ?? null)}`;
+}
+
+const REPEAT_PROTECTED_WORKSPACE_TOOLS = new Set([
+  "copy_path",
+  "delete_path",
+  "move_path",
+  "patch_text_file",
+  "write_text_file",
+]);
+
+function isRepeatProtectedWorkspaceAction(
+  action: BrainDecision["action"],
+  availableTools: BrainInput["availableTools"],
+): boolean {
+  if ((action.kind !== "tool_call" && action.kind !== "needs_approval") || !action.toolName) return false;
+  if (REPEAT_PROTECTED_WORKSPACE_TOOLS.has(action.toolName)) return true;
+
+  const descriptor = availableTools.find((tool) => tool.name === action.toolName);
+  return descriptor?.effects?.workspaceMutation === true;
 }
 
 function stableJson(value: unknown): string {

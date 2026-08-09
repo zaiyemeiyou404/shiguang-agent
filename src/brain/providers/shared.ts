@@ -11,7 +11,8 @@ const REPAIR_INSTRUCTION = [
   "Your previous reply did not match the agent runtime contract.",
   "Return exactly one valid JSON object and no other text.",
   "Do not use markdown code fences.",
-  'Allowed shapes: {"kind":"respond","content":"..."}, {"kind":"finish","content":"..."}, {"kind":"fail","reason":"..."}, {"kind":"tool_call","toolName":"...","toolInput":...}, {"kind":"needs_approval","toolName":"...","toolInput":...,"reason":"..."}.',
+  'Allowed shapes: {"kind":"respond","content":"..."}, {"kind":"finish","content":"..."}, {"kind":"fail","reason":"..."}, {"kind":"tool_call","toolName":"...","toolInput":...}.',
+  "Do not emit needs_approval; runtime policy handles approval.",
 ].join(" ");
 
 export interface ProviderMessage {

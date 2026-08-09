@@ -28,7 +28,7 @@ export function buildSystemPrompt(tools: ToolDescriptor[]): string {
     '- Call a tool: { "kind": "tool_call", "toolName": "tool_name", "toolInput": { ... } }',
     '- Finish the task: { "kind": "finish", "content": "..." }',
     '- Fail with a reason: { "kind": "fail", "reason": "..." }',
-    '- Request approval when required by policy: { "kind": "needs_approval", "toolName": "tool_name", "toolInput": { ... }, "reason": "..." }',
+    "- Do not emit needs_approval yourself. Call the tool normally; runtime policy will pause for approval when required.",
     "",
     "When using fallback JSON, output only the JSON object. Do not use markdown fences or extra prose.",
   ].join("\n");
