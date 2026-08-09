@@ -33,6 +33,11 @@ pnpm-debug.log*
 .cache/
 .tmp/
 tmp/
+worktest/
+
+# Local agent notes / prompts
+.codex-*.txt
+.opencode-*.txt
 
 # Tooling
 .DS_Store
@@ -40,7 +45,5 @@ tmp/
 .vscode/
 
 # Package manager artifacts
-package-lock.json
 yarn.lock
 pnpm-lock.yaml
-

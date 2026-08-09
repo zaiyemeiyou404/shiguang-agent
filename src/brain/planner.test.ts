@@ -236,6 +236,69 @@ test("RulePlanner uses search_workspace first for read-only lookup requests", as
   assert.match(decision.reasoning ?? "", /Phase investigate/);
 });
 
+test("RulePlanner inspects projects for Chinese project lookup requests", async () => {
+  const planner = new RulePlanner();
+  const availableTools: ToolDescriptor[] = [
+    {
+      name: "inspect_project",
+      description: "Inspects the project",
+      inputSchema: { type: "object" },
+    },
+  ];
+
+  const decision = await planner.decide(makeInput([], availableTools, "看一下这个项目"));
+
+  assert.deepEqual(decision.action, {
+    kind: "tool_call",
+    toolName: "inspect_project",
+    toolInput: {},
+  });
+  assert.match(decision.reasoning ?? "", /inspect_project/);
+});
+
+test("RulePlanner runs validation for Chinese runnable-project requests", async () => {
+  const planner = new RulePlanner();
+  const availableTools: ToolDescriptor[] = [
+    {
+      name: "run_validation",
+      description: "Runs validation scripts",
+      inputSchema: { type: "object" },
+    },
+  ];
+
+  const decision = await planner.decide(makeInput([], availableTools, "看一下这个项目能不能跑"));
+
+  assert.deepEqual(decision.action, {
+    kind: "tool_call",
+    toolName: "run_validation",
+    toolInput: { mode: "all" },
+  });
+});
+
+test("LlmPlanner falls back to safe deterministic tools when the model only responds", async () => {
+  const model = new RecordingModel({ kind: "respond", content: "I can look at it." });
+  const planner = new LlmPlanner(model);
+  const availableTools: ToolDescriptor[] = [
+    {
+      name: "inspect_project",
+      description: "Inspects the project",
+      inputSchema: { type: "object" },
+      requiresApproval: false,
+      risk: "read",
+    },
+  ];
+
+  const decision = await planner.decide(makeInput([], availableTools, "看一下这个项目"));
+
+  assert.equal(model.calls, 1);
+  assert.deepEqual(decision.action, {
+    kind: "tool_call",
+    toolName: "inspect_project",
+    toolInput: {},
+  });
+  assert.match(decision.reasoning ?? "", /safe-tool fallback/);
+});
+
 test("RulePlanner falls back to list_directory after an empty search result", async () => {
   const planner = new RulePlanner();
   const availableTools: ToolDescriptor[] = [

@@ -44,12 +44,180 @@ test("OpenAIModel includes tool effects in the system prompt", async () => {
     const result = await model.generateDecision(makeRequest());
     assert.equal(result.action.kind, "finish");
 
-    const parsed = JSON.parse(capturedBody) as { messages: Array<{ role: string; content: string }> };
+    const parsed = JSON.parse(capturedBody) as {
+      messages: Array<{ role: string; content: string }>;
+      response_format?: unknown;
+      tool_choice?: string;
+      tools?: Array<{ function?: { name?: string; parameters?: Record<string, unknown> } }>;
+    };
     const systemPrompt = parsed.messages.find((message) => message.role === "system")?.content ?? "";
+    if (!/You are Shiguang Agent/.test(systemPrompt)) {
     assert.match(systemPrompt, /你是一个有帮助的 AI 代理/);
     assert.match(systemPrompt, /write_text_file/);
     assert.match(systemPrompt, /workspaceMutation=true/);
     assert.match(systemPrompt, /validationMode=all/);
+    }
+    assert.match(systemPrompt, /You are Shiguang Agent/);
+    assert.match(systemPrompt, /write_text_file/);
+    assert.match(systemPrompt, /workspaceMutation=true/);
+    assert.match(systemPrompt, /validationMode=all/);
+    assert.equal(parsed.response_format, undefined);
+    assert.equal(parsed.tool_choice, "auto");
+    assert.ok(parsed.tools?.some((tool) => tool.function?.name === "write_text_file"));
+    assert.ok(parsed.tools?.some((tool) => tool.function?.name === "run_validation"));
+    assert.equal(
+      parsed.tools?.find((tool) => tool.function?.name === "write_text_file")?.function?.parameters?.type,
+      "object",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("OpenAIModel parses native tool calls from compatible providers", async () => {
+  const model = new OpenAIModel({ apiKey: "test-key", baseURL: "https://example.invalid/v1", model: "fake-model" });
+  let capturedBody = "";
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    capturedBody = String(init?.body ?? "");
+    return new Response(JSON.stringify({
+      choices: [{
+        message: {
+          content: null,
+          tool_calls: [{
+            id: "call_1",
+            type: "function",
+            function: {
+              name: "run_validation",
+              arguments: JSON.stringify({ mode: "all" }),
+            },
+          }],
+        },
+      }],
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  try {
+    const result = await model.generateDecision(makeRequest());
+    assert.equal(result.action.kind, "tool_call");
+    if (result.action.kind !== "tool_call") {
+      assert.fail("expected tool_call action");
+    }
+    assert.equal(result.action.toolName, "run_validation");
+    assert.deepEqual(result.action.toolInput, { mode: "all" });
+
+    const parsed = JSON.parse(capturedBody) as {
+      response_format?: unknown;
+      tool_choice?: string;
+      tools?: Array<{ function?: { name?: string } }>;
+    };
+    assert.equal(parsed.response_format, undefined);
+    assert.equal(parsed.tool_choice, "auto");
+    assert.ok(parsed.tools?.some((tool) => tool.function?.name === "run_validation"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("OpenAIModel falls back to JSON mode when native tools are unsupported", async () => {
+  const model = new OpenAIModel({ apiKey: "test-key", baseURL: "https://example.invalid/v1", model: "fake-model" });
+  const requestBodies: string[] = [];
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    requestBodies.push(String(init?.body ?? ""));
+    if (requestBodies.length === 1) {
+      return new Response("tools are not supported by this endpoint", { status: 400 });
+    }
+
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ kind: "finish", content: "done" }) } }] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  try {
+    const result = await model.generateDecision(makeRequest());
+    assert.equal(result.action.kind, "finish");
+    assert.equal(requestBodies.length, 2);
+
+    const nativeRequest = JSON.parse(requestBodies[0] ?? "{}") as { tools?: unknown; response_format?: unknown };
+    const fallbackRequest = JSON.parse(requestBodies[1] ?? "{}") as { tools?: unknown; response_format?: { type?: string } };
+    assert.ok(Array.isArray(nativeRequest.tools));
+    assert.equal(nativeRequest.response_format, undefined);
+    assert.equal(fallbackRequest.tools, undefined);
+    assert.equal(fallbackRequest.response_format?.type, "json_object");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("OpenAIModel falls back to JSON mode when native tools return an empty message", async () => {
+  const model = new OpenAIModel({ apiKey: "test-key", baseURL: "https://example.invalid/v1", model: "fake-model" });
+  const requestBodies: string[] = [];
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    requestBodies.push(String(init?.body ?? ""));
+    const body = requestBodies.length === 1
+      ? { choices: [{ message: { content: "" } }] }
+      : { choices: [{ message: { content: JSON.stringify({ kind: "finish", content: "done" }) } }] };
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  try {
+    const result = await model.generateDecision(makeRequest());
+    assert.equal(result.action.kind, "finish");
+    assert.equal(requestBodies.length, 2);
+
+    const nativeRequest = JSON.parse(requestBodies[0] ?? "{}") as { tools?: unknown; response_format?: unknown };
+    const fallbackRequest = JSON.parse(requestBodies[1] ?? "{}") as { tools?: unknown; response_format?: { type?: string } };
+    assert.ok(Array.isArray(nativeRequest.tools));
+    assert.equal(nativeRequest.response_format, undefined);
+    assert.equal(fallbackRequest.tools, undefined);
+    assert.equal(fallbackRequest.response_format?.type, "json_object");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("OpenAIModel falls back to plain JSON prompting when json_object mode is empty", async () => {
+  const model = new OpenAIModel({ apiKey: "test-key", baseURL: "https://example.invalid/v1", model: "fake-model" });
+  const requestBodies: string[] = [];
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    requestBodies.push(String(init?.body ?? ""));
+    const body = requestBodies.length < 3
+      ? { choices: [{ message: { content: "" } }] }
+      : { choices: [{ message: { content: JSON.stringify({ kind: "finish", content: "done" }) } }] };
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  try {
+    const result = await model.generateDecision(makeRequest());
+    assert.equal(result.action.kind, "finish");
+    assert.equal(requestBodies.length, 3);
+
+    const nativeRequest = JSON.parse(requestBodies[0] ?? "{}") as { tools?: unknown; response_format?: unknown };
+    const jsonRequest = JSON.parse(requestBodies[1] ?? "{}") as { tools?: unknown; response_format?: { type?: string } };
+    const plainRequest = JSON.parse(requestBodies[2] ?? "{}") as { tools?: unknown; response_format?: unknown };
+    assert.ok(Array.isArray(nativeRequest.tools));
+    assert.equal(nativeRequest.response_format, undefined);
+    assert.equal(jsonRequest.tools, undefined);
+    assert.equal(jsonRequest.response_format?.type, "json_object");
+    assert.equal(plainRequest.tools, undefined);
+    assert.equal(plainRequest.response_format, undefined);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -78,8 +246,12 @@ test("OpenAIModel retries once with a repair prompt after malformed output", asy
 
     const repairedRequest = JSON.parse(requestBodies[1] ?? "{}") as { messages: Array<{ role: string; content: string }> };
     const lastMessage = repairedRequest.messages.at(-1)?.content ?? "";
+    if (!/Return exactly one valid JSON object/.test(lastMessage)) {
     assert.match(lastMessage, /请只返回一个合法的 JSON 对象/);
     assert.match(lastMessage, /上一条回复不符合 agent 运行时要求/);
+    }
+    assert.match(lastMessage, /Return exactly one valid JSON object/);
+    assert.match(lastMessage, /previous reply did not match the agent runtime contract/);
   } finally {
     globalThis.fetch = originalFetch;
   }

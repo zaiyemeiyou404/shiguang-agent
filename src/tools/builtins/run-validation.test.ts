@@ -31,6 +31,7 @@ type ValidationOutput = {
   ok: boolean;
   mode: string;
   commands: ValidationCommandResult[];
+  summary: string;
 };
 
 async function loadRunValidationModule(): Promise<RunValidationModule> {
@@ -43,6 +44,14 @@ async function makeWorkspace(scripts: Record<string, string>): Promise<string> {
   await writeFile(
     join(workspaceRoot, "package.json"),
     JSON.stringify({ name: "validation-fixture", private: true, scripts }, null, 2),
+  );
+  return workspaceRoot;
+}
+
+async function makeLooseWorkspace(files: Record<string, string>): Promise<string> {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "run-validation-"));
+  await Promise.all(
+    Object.entries(files).map(([name, content]) => writeFile(join(workspaceRoot, name), content)),
   );
   return workspaceRoot;
 }
@@ -72,6 +81,7 @@ function assertValidationOutput(value: unknown): asserts value is ValidationOutp
   assert.equal(typeof output.ok, "boolean");
   assert.equal(typeof output.mode, "string");
   assert.ok(Array.isArray(output.commands));
+  assert.equal(typeof output.summary, "string");
 }
 
 async function assertRejectsWithValidationMessage(action: () => Promise<unknown>): Promise<void> {
@@ -162,4 +172,65 @@ test("run_validation rejects unavailable validation scripts with a clear error",
   const tool = createRunValidationTool(workspaceRoot);
 
   await assertRejectsWithValidationMessage(() => tool.execute("build"));
+});
+
+test("run_validation validates JavaScript syntax without package.json", async () => {
+  const { createRunValidationTool } = await loadRunValidationModule();
+  const workspaceRoot = await makeLooseWorkspace({
+    "hello.js": "console.log('hello');\n",
+  });
+  const tool = createRunValidationTool(workspaceRoot);
+
+  const result = await tool.execute("all");
+
+  assertValidationOutput(result);
+  assert.equal(result.ok, true);
+  assert.equal(result.mode, "all");
+  assert.equal(result.commands[0]?.name, "javascript");
+  assert.match(result.summary, /Fallback validation passed/);
+});
+
+test("run_validation reports JSON syntax errors without package.json", async () => {
+  const { createRunValidationTool } = await loadRunValidationModule();
+  const workspaceRoot = await makeLooseWorkspace({
+    "bad.json": "{ missing: true }\n",
+  });
+  const tool = createRunValidationTool(workspaceRoot);
+
+  const result = await tool.execute("all");
+
+  assertValidationOutput(result);
+  assert.equal(result.ok, false);
+  assert.equal(result.commands[0]?.name, "json");
+  assert.match(result.commands[0]?.stderr ?? "", /bad\.json/);
+});
+
+test("run_validation does not fail empty non-Node workspaces", async () => {
+  const { createRunValidationTool } = await loadRunValidationModule();
+  const workspaceRoot = await makeLooseWorkspace({
+    "README.md": "# Loose workspace\n",
+  });
+  const tool = createRunValidationTool(workspaceRoot);
+
+  const result = await tool.execute({ mode: "all" });
+
+  assertValidationOutput(result);
+  assert.equal(result.ok, true);
+  assert.equal(result.commands[0]?.name, "detect");
+  assert.match(result.summary, /skipped/i);
+});
+
+test("run_validation recognizes Python files without package.json", async () => {
+  const { createRunValidationTool } = await loadRunValidationModule();
+  const workspaceRoot = await makeLooseWorkspace({
+    "hello.py": "print('hello')\n",
+  });
+  const tool = createRunValidationTool(workspaceRoot);
+
+  const result = await tool.execute("all");
+
+  assertValidationOutput(result);
+  assert.equal(result.ok, true);
+  assert.equal(result.commands[0]?.name, "python");
+  assert.match(result.summary, /Fallback validation passed/);
 });

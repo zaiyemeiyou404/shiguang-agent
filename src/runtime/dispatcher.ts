@@ -52,6 +52,12 @@ function throwIfAborted(signal?: AbortSignal): void {
   }
 }
 
+function createApprovalId(runId: string | undefined, toolName: string | undefined): string {
+  const safeRunId = (runId ?? "run").replace(/[^A-Za-z0-9_-]/g, "_");
+  const safeToolName = (toolName ?? "tool").replace(/[^A-Za-z0-9_-]/g, "_");
+  return `appr_${safeRunId}_${safeToolName}_${Date.now()}_${randomUUID().slice(0, 8)}`;
+}
+
 export class ActionDispatcher {
   constructor(
     private toolRegistry: ToolRegistry,
@@ -187,7 +193,7 @@ export class ActionDispatcher {
       }
       case "needs_approval": {
         // needs_approval 不是普通失败；它要求上层 UI/runtime 暂停并等待人工决策。
-        const approvalId = action.approvalId ?? `appr_${runId ?? "run"}_${Date.now()}`;
+        const approvalId = action.approvalId ?? createApprovalId(runId, action.toolName);
         const capability = action.capability ?? action.toolName ?? "unknown";
         const preview = action.toolName
           ? await this.previewApproval(action.toolName, action.toolInput, context)

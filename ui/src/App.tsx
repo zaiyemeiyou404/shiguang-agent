@@ -2811,7 +2811,10 @@ export default function App() {
   const artifacts = workspaceSnapshot?.artifacts ?? [];
   const sortedEvents = [...events].sort((a, b) => a.seq - b.seq);
   const latestErrorEvent = [...sortedEvents].reverse().find((event) => event.kind === "error");
-  const latestCompactionEvent = [...sortedEvents].reverse().find((event) => event.kind === "context_compacted" && isMeaningfulCompactionEvent(event));
+  const canShowCompactionBanner = activeRun?.status === "running" || activeRun?.status === "needs_approval";
+  const latestCompactionEvent = canShowCompactionBanner
+    ? [...sortedEvents].reverse().find((event) => event.kind === "context_compacted" && isMeaningfulCompactionEvent(event))
+    : undefined;
   const hasApprovedResume = Object.values(decisionState).includes("approved") && activeRun?.status === "running";
   const currentProvider = settings?.providers[settings?.llm.provider ?? ""];
   const providerLabel = settings?.llm.provider ?? "未设置";

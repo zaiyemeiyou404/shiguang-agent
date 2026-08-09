@@ -47,7 +47,7 @@ import { createInspectProjectTool } from "../dist/tools/builtins/inspect-project
 import { createPlanner } from "./planner-factory.js";
 import { loadDesktopConfig, getDesktopSettings, saveDesktopSettings, getStoredProviderApiKey, type ToolApprovalMode } from "./config.js";
 import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
-import { statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 let seqCounter = 0;
@@ -307,9 +307,19 @@ export class DesktopAppService {
     const controller = new AbortController();
     this.activeRunControllers.set(runId, controller);
 
-    const sink = new RepositoryEventSink(this.runEventRepository, (event) => {
-      this.broadcastEvent(coreEventToDesktop(event));
-    });
+    const sink = this.createRunEventSink();
+    const workspaceCommandTarget = parseWorkspaceRootCommand(message);
+    if (workspaceCommandTarget) {
+      void this.handleWorkspaceRootCommand({
+        sessionId,
+        task,
+        runId,
+        message,
+        targetPath: workspaceCommandTarget,
+        sink,
+      });
+      return coreRunToDesktop(run);
+    }
 
     const desktopConfig = loadDesktopConfig();
     const { planner, label } = createPlanner(desktopConfig.llm);
@@ -555,9 +565,7 @@ export class DesktopAppService {
       }
     }
 
-    const sink = new RepositoryEventSink(this.runEventRepository, (event) => {
-      this.broadcastEvent(coreEventToDesktop(event));
-    });
+    const sink = this.createRunEventSink();
     const event = await sink.record(
       approval.runId,
       decision === "granted" ? "approval_granted" : "approval_denied",
@@ -608,9 +616,7 @@ export class DesktopAppService {
       });
     }
 
-    const sink = new RepositoryEventSink(this.runEventRepository, (event) => {
-      this.broadcastEvent(coreEventToDesktop(event));
-    });
+    const sink = this.createRunEventSink();
     await sink.record(runId, "system", {
       message: run.status === "running" ? "run cancellation requested by user" : "run cancelled by user",
     });
@@ -653,6 +659,13 @@ export class DesktopAppService {
     for (const listener of Array.from(this.listeners)) {
       listener(event);
     }
+  }
+
+  private createRunEventSink(): RepositoryEventSink {
+    return new RepositoryEventSink(this.runEventRepository, async (event) => {
+      await this.persistApprovalsFromEvents(event.runId, [event]);
+      this.broadcastEvent(coreEventToDesktop(event));
+    });
   }
 
   private async decorateSession(session: DesktopSession): Promise<DesktopSession> {
@@ -712,6 +725,98 @@ export class DesktopAppService {
     return { agent, label, workspaceRoot };
   }
 
+  private async handleWorkspaceRootCommand(input: {
+    sessionId: string;
+    task: Task;
+    runId: string;
+    message: string;
+    targetPath: string;
+    sink: RepositoryEventSink;
+  }): Promise<void> {
+    const startedAt = new Date();
+    const model = "desktop:workspace";
+    await this.runRepository.update(input.runId, {
+      status: "running",
+      startedAt,
+      model,
+    });
+    await input.sink.record(input.runId, "message", { role: "user", content: input.message, attachments: [] });
+    await this.turnRepository.create({
+      id: nextId("turn"),
+      sessionId: input.sessionId,
+      role: "user",
+      content: input.message,
+      createdAt: startedAt,
+    });
+
+    try {
+      const workspaceRoot = resolve(normalize(input.targetPath));
+      assertUsableWorkspaceRoot(workspaceRoot);
+      const currentSettings = getDesktopSettings();
+      saveDesktopSettings({
+        ...currentSettings,
+        workspaceRoot,
+      });
+
+      const completedAt = new Date();
+      const assistantMessage = [
+        `工作区已切换到：${workspaceRoot}`,
+        "后续新运行会在这个目录里调用 read/search/write/validation 工具。",
+      ].join("\n");
+      await input.sink.record(input.runId, "message", { role: "assistant", content: assistantMessage });
+      await this.turnRepository.create({
+        id: nextId("turn"),
+        sessionId: input.sessionId,
+        role: "assistant",
+        content: assistantMessage,
+        createdAt: completedAt,
+      });
+      await this.runRepository.update(input.runId, {
+        status: "completed",
+        endedAt: completedAt,
+        summary: `Workspace switched to ${workspaceRoot}`,
+        reason: null,
+      });
+      await this.taskRepository.update(input.task.id, {
+        status: "completed",
+        updatedAt: completedAt,
+      });
+      await this.persistRunMemory({
+        runId: input.runId,
+        task: input.task,
+        workspaceRoot,
+        kind: "preference",
+        summary: `Workspace root set to ${workspaceRoot}`,
+        content: assistantMessage,
+        salience: 0.76,
+        confidence: 0.95,
+      });
+    } catch (error) {
+      const failedAt = new Date();
+      const reason = error instanceof Error ? error.message : String(error);
+      await input.sink.record(input.runId, "error", { message: reason });
+      await this.turnRepository.create({
+        id: nextId("turn"),
+        sessionId: input.sessionId,
+        role: "assistant",
+        content: `工作区切换失败：${reason}`,
+        createdAt: failedAt,
+      });
+      await this.runRepository.update(input.runId, {
+        status: "failed",
+        endedAt: failedAt,
+        reason,
+      });
+      await this.taskRepository.update(input.task.id, {
+        status: "failed",
+        updatedAt: failedAt,
+      });
+    } finally {
+      this.activeRunControllers.delete(input.runId);
+      await this.refreshSessionSummary(input.sessionId);
+    }
+  }
+
   private async loadLatestUserMessage(sessionId: string, task: Task): Promise<string> {
     const turns = await this.turnRepository.listBySession(sessionId, 50);
     for (let i = turns.length - 1; i >= 0; i--) {
@@ -762,9 +867,7 @@ export class DesktopAppService {
       return;
     }
 
-    const sink = new RepositoryEventSink(this.runEventRepository, (event) => {
-      this.broadcastEvent(coreEventToDesktop(event));
-    });
+    const sink = this.createRunEventSink();
     const { agent, label, workspaceRoot } = this.createAgentRuntime(sink);
     const userMessage = await this.loadLatestUserMessage(run.sessionId, task);
     const controller = new AbortController();
@@ -1175,6 +1278,49 @@ function summarizeRequest(request: unknown): string {
     return str.length > 200 ? str.slice(0, 200) + "..." : str;
   }
   return String(request).slice(0, 200);
+}
+
+function parseWorkspaceRootCommand(message: string): string | null {
+  const text = message.trim();
+  if (!text) return null;
+
+  const patterns = [
+    /^(?:请)?(?:把|将)?(?:当前)?(?:工作区|工作目录|workspace)(?:路径)?(?:改到|改为|改成|切到|切换到|设置到|设置为|设为|换到|换成)\s*[:：]?\s*(.+)$/i,
+    /^(?:请)?(?:切换|更换|设置|修改)(?:当前)?(?:工作区|工作目录|workspace)(?:到|为|成)\s*[:：]?\s*(.+)$/i,
+    /^(?:workspace|cwd)\s*[:=]\s*(.+)$/i,
+  ];
+
+  for (const pattern of patterns) {
+    const candidate = cleanWorkspacePathCandidate(pattern.exec(text)?.[1]);
+    if (candidate && looksLikeWorkspacePath(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function cleanWorkspacePathCandidate(raw: string | undefined): string | null {
+  if (!raw) return null;
+  let value = raw.trim().split(/\r?\n/)[0]?.trim() ?? "";
+  value = value.replace(/^<(.+)>$/, "$1").trim();
+  value = value.replace(/^["'`“”‘’]+|["'`“”‘’]+$/g, "").trim();
+  value = value.replace(/[。；;，,]+$/g, "").trim();
+  return value || null;
+}
+
+function looksLikeWorkspacePath(value: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(value) || /^\\\\/.test(value) || /^[/~.][^/\\]*/.test(value);
+}
+
+function assertUsableWorkspaceRoot(workspaceRoot: string): void {
+  if (!existsSync(workspaceRoot)) {
+    throw new Error(`工作区路径不存在：${workspaceRoot}`);
+  }
+  const stats = statSync(workspaceRoot);
+  if (!stats.isDirectory()) {
+    throw new Error(`工作区路径不是目录：${workspaceRoot}`);
+  }
 }
 
 async function testDesktopProviderConnection(req: DesktopProviderConnectionRequest): Promise<DesktopProviderConnectionResult> {

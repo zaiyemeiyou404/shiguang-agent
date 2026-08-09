@@ -30,6 +30,39 @@ test("ActionDispatcher emits approval_request for needs_approval actions", async
   assert.equal((approvalEvent?.payload as { capability?: string }).capability, "fs.write");
 });
 
+test("ActionDispatcher generates unique approval ids for repeated tool approvals", async () => {
+  const sink = new InMemoryEventSink();
+  const dispatcher = new ActionDispatcher(new ToolRegistry(), sink);
+
+  await dispatcher.dispatch({
+    action: {
+      kind: "needs_approval",
+      toolName: "write_text_file",
+      toolInput: { path: "a.ts", content: "x" },
+      capability: "fs.write",
+      reason: "Approval required",
+    },
+    reasoning: "blocked by policy",
+  }, "run_1");
+  await dispatcher.dispatch({
+    action: {
+      kind: "needs_approval",
+      toolName: "write_text_file",
+      toolInput: { path: "b.ts", content: "y" },
+      capability: "fs.write",
+      reason: "Approval required",
+    },
+    reasoning: "blocked by policy",
+  }, "run_1");
+
+  const events = (await sink.list("run_1")).filter((event) => event.kind === "approval_request");
+  const ids = events.map((event) => (event.payload as { approvalId?: unknown }).approvalId);
+  assert.equal(events.length, 2);
+  assert.equal(typeof ids[0], "string");
+  assert.equal(typeof ids[1], "string");
+  assert.notEqual(ids[0], ids[1]);
+});
+
 test("ActionDispatcher attaches tool approval previews", async () => {
   const sink = new InMemoryEventSink();
   const registry = new ToolRegistry();

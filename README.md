@@ -1,546 +1,182 @@
-# 拾光 (shiguang-agent)
+# 拾光 Agent
 
-拾光 is a lightweight hybrid agent runtime: part personal workflow agent, part extensible tool orchestrator, and part durable memory layer.
+拾光 Agent 是一个轻量级桌面 AI Agent。它把对话、工作区文件操作、工具调用、审批、运行记录和上下文压缩放在一个 Electron 桌面界面里，目标是做成一个下载后即可配置使用的小型个人工作台。
 
-This repo is a **TypeScript framework skeleton** — ready to wire in a model, CLI, or UI. All public contracts and module boundaries are concrete code, not just stubs.
+当前版本：`0.2.0`
 
-## 模块结构（中文）
+## 下载使用
 
-> 这一节按“目录是干什么的、关键文件在哪、应该从哪里读起”来写，方便第一次进仓库时快速定位。
+在 GitHub Releases 页面下载 Windows 版本：
 
-```
-src/
-├── core/        # 核心领域模型：Session / Task / Run / Artifact / Memory / Approval 等基础类型
-├── context/     # 上下文构建与压缩：buildContext、prune、digest 压缩、预算裁剪、prompt 渲染
-├── brain/       # Agent 决策大脑：planner、loop、workingMemory、validation failure 提炼、LLM prompt 组装
-├── tools/       # 工具抽象与内置工具：Tool 接口、注册表、run_validation、write_text_file 等
-├── runtime/     # 运行时调度：ActionDispatcher、事件输出、工具调用结果到运行状态的桥接
-├── plugins/     # 插件协议层：PluginManifest、PluginRegistry、PluginAdapter 与示例适配器
-├── state/       # 持久化层：SQLite schema、各类 repository 接口与 sqlite 实现
-├── memory/      # 长期记忆子系统：检索、排序、去重、作用域过滤（workspace/task/global）
-├── kernel/      # Kernel 组合根：把 runtime、plugins、repositories 等基础设施装起来
-├── app/         # Agent 入口：把 ContextService、Planner、Evaluator、Dispatcher 串成一次完整 run
-└── index.ts     # 对外导出
-```
+- 安装包：`拾光 Agent Setup 0.2.0.exe`
+- 免安装版：`win-unpacked.zip`
 
-### 推荐阅读顺序
-
-如果你想快速理解“用户一句话进来后，系统到底怎么跑”，建议按这个顺序看：
-
-1. `src/app/agent.ts`
-   - 总入口。一次 run 从这里开始。
-   - 负责加载历史 turn、构建上下文、调用 `runLoop()`。
-
-2. `src/context/service.ts`
-   - 上下文装配总入口。
-   - 负责：召回记忆 → buildContext → prune → compress → trimToBudget。
-
-3. `src/context/builder.ts`
-   - 定义 `stable / volatile / live` 三层上下文。
-   - 这里能看到哪些信息会进 prompt，以及预算不足时优先保什么。
-
-4. `src/brain/loop.ts`
-   - Agent 主循环。
-   - 负责 planner 决策、工具执行、workingMemory 更新、validation 失败线索提炼。
-
-5. `src/brain/openai-model.ts`
-   - 把上下文、workingMemory、validation repair guidance 组装成真正发给模型的消息。
-
----
-
-### 关键目录详解
-
-#### `src/core/`
-定义全局通用的数据模型。
-
-重点文件：
-- `src/core/types.ts`
-  - 定义 `Session`、`Task`、`Run`、`RunEvent`、`Artifact`、`Memory`、`Approval` 等结构。
-  - 这是整个仓库的数据地基；很多别的模块都依赖这里的类型。
-
-#### `src/context/`
-负责“要把哪些信息喂给模型”。这是上下文工程核心。
-
-重点文件：
-- `src/context/service.ts`
-  - 上下文主入口。调用顺序就是：
-    `memory recall -> buildContext -> prune -> compress -> trimToBudget`
-- `src/context/builder.ts`
-  - 把输入转成 `ContextBundle`。
-  - 其中：
-    - `stable`：稳定必须保留的信息（system instruction、task state）
-    - `volatile`：本轮易变信息（user turn、recent runs、memory、artifacts）
-    - `live`：当前环境引用（workspace file ref）
-- `src/context/prune.ts`
-  - 去重，防止重复 run summary / memory / artifact 占预算。
-- `src/context/compress.ts`
-  - 摘要压缩，把多条 `run_summary` / `memory` / `artifact` 合并成 digest。
-- `src/context/llm-compactor.ts`
-  - LLM 压缩扩展点。当前主要是阈值判断与接口，默认 compactor 是 noop。
-- `src/context/render.ts`
-  - 把 `ContextBundle` 渲染成最终 prompt 文本。
-- `src/context/types.ts`
-  - 定义 `ContextItem`、`ContextBundle`、compression 相关类型。
-
-#### `src/brain/`
-负责“模型怎么想、怎么决定下一步做什么”。
-
-重点文件：
-- `src/brain/types.ts`
-  - 定义 `BrainInput`、`BrainAction`、`ActionResult`、`WorkingMemorySnapshot`。
-- `src/brain/loop.ts`
-  - Agent 主循环。
-  - 这里会把工具结果转成 `history` 和 `workingMemory`。
-  - validation 失败时，也是在这里提取：
-    - failing test
-    - suspect file / line
-    - `assertExpected / assertActual`
-    - `assertDiffSummary`
-- `src/brain/planner.ts`
-  - 规则 planner 和 LLM planner。
-  - 还负责一些自动策略，比如改完文件后自动补跑 validation。
-- `src/brain/openai-model.ts`
-  - OpenAI-compatible 模型适配层。
-  - 会把 `workingMemory.validationFailure` 变成 repair guidance 注入给模型。
-- `src/brain/evaluator.ts`
-  - 判断循环该继续、停止还是失败。
-
-#### `src/tools/`
-工具系统抽象层。
-
-重点文件：
-- `src/tools/types.ts`
-  - 工具接口、tool descriptor、validation mode 等定义。
-- `src/tools/index.ts`
-  - 工具导出入口。
-- `src/tools/builtins/run-validation.ts`
-  - 内置 validation 工具，负责跑 test/typecheck/build 等。
-- `src/tools/builtins/write-text-file.ts`
-  - 受控文件写入工具。
-
-#### `src/runtime/`
-连接 brain 和 tools 的中间层。
-
-重点文件：
-- `src/runtime/dispatcher.ts`
-  - `ActionDispatcher` 在这里。
-  - 负责真正分发 tool call，并把结果标准化成 `ActionResult`。
-- `src/runtime/event-sink.ts`
-  - 运行期事件输出接口。
-
-#### `src/state/`
-持久化层，负责把状态落地到 SQLite。
-
-重点文件：
-- `src/state/schema.ts`
-  - 所有 SQLite 表结构与 migration 字符串。
-- `src/state/repositories.ts`
-  - repository 接口定义。
-- `src/state/sqlite-memory-repository.ts`
-  - memory 的 SQLite 实现。
-- `src/state/sqlite-run-repository.ts`
-  - run 持久化。
-- `src/state/sqlite-approval-repository.ts`
-  - approval 持久化。
-- `src/state/sqlite-artifact-repository.ts`
-  - artifact 持久化。
-- `src/state/sqlite-turn-repository.ts`
-  - 历史对话 turn 持久化。
-
-#### `src/memory/`
-长期记忆系统，负责“记什么、怎么查回来”。
-
-重点文件：
-- `src/memory/service.ts`
-  - 记忆应用层。
-  - 负责 save / search / updateAccess / local index search。
-- `src/memory/ranker.ts`
-  - 记忆排序器。
-  - 现在用的是轻量文本相关度 + salience 排序，不是 embedding。
-- `src/memory/types.ts`
-  - 记忆查询、排序结果、索引接口定义。
-
-#### `src/app/`
-实际 agent 运行入口。
-
-重点文件：
-- `src/app/agent.ts`
-  - 最值得优先读。
-  - 一次用户消息进来后，会从这里开始串起：
-    `load turns -> build context -> runLoop -> persist assistant turn`
-
----
-
-### 两条最重要的源码链
-
-#### 1. 记忆召回链
-
-```txt
-userTurn
-→ ContextService.build()
-→ memoryService.search()
-→ sqlite-memory-repository 查询 memories
-→ rankMemories 排序
-→ 注入 ContextBundle.volatile
-```
-
-#### 2. 上下文压缩链
-
-```txt
-buildContext
-→ pruneContextBundle
-→ compressContextBundle
-→ shouldUseLlmCompaction
-→ trimToBudget
-→ renderPrompt
-```
-
-如果你只想看这次新加的“记忆 + 上下文压缩”能力，最值得直接打开的文件就是：
-
-- `src/context/service.ts`
-- `src/context/builder.ts`
-- `src/context/compress.ts`
-- `src/memory/service.ts`
-- `src/memory/ranker.ts`
-- `src/state/sqlite-memory-repository.ts`
-
-## How to Extend
-
-| Goal | What to do |
-|---|---|
-| Add a new domain type | Add interface in `src/core/types.ts`, add table in `src/state/schema.ts`, add a repository interface in `src/state/repositories.ts` |
-| Add a plugin | Create a new adapter in `src/plugins/` following the `PluginAdapter` interface, register it in `PluginRegistry` |
-| Wire SQLite | Implement `Repositories` from `src/state/repositories.ts` using better-sqlite3 or libsql |
-| Add a model loop | Import `ContextBundle`, build it with `buildContext()`, feed to a model, call `RuntimeCoordinator.handle()` for each event |
-| Use an LLM planner | Inject `LlmPlanner` (with your `LlmPlannerModel` implementation) via `AgentOptions.planner` instead of the default `RulePlanner` |
-| Build a CLI | Import `Kernel` from `src/kernel/`, inject repositories and plugin registry |
-
-## Quick Start
-
-```bash
-npm install
-npm run build        # compiles src/ → dist/
-npm run typecheck    # type-check without emitting
-```
-
-No runtime dependencies for the library. Only `typescript` as a dev dependency.
-
-## Desktop App
-
-A Vite + React + Electron desktop shell is provided alongside the library:
-
-```
-electron/          # Electron main process / preload / IPC / desktop app service
-ui/                # Vite + React renderer
-  index.html       # Entry HTML
-  src/
-    main.tsx       # React mount
-    App.tsx        # Desktop operator workbench（会话 / 运行 / 审批 / 产物）
-    styles.css     # All styling for the desktop shell
-tsconfig.electron.json  # TypeScript config for electron/
-tsconfig.ui.json        # TypeScript config for ui/src (type-check only; Vite handles build)
-```
-
-### 当前桌面 UI 已接通的主链路
-
-这套桌面 UI 现在不是静态壳子，下面这些入口已经是真逻辑：
-
-- **会话列表 / 新建会话**：直接走 Electron bridge → IPC → `DesktopAppService`
-- **发送消息并启动 run**：会创建真实 run，并在右侧看到运行状态与时间线
-- **审批流**：待审批 run 可以在 UI 里直接批准 / 拒绝 / 恢复
-- **自动入口**：顶部“自动”按钮已接成真行为
-  - 有待审批时优先跳到审批面板
-  - 没有会话时自动创建“自动会话”
-  - 会切到运行视图，并在输入框为空时预填继续任务提示
-- **运行产物（Artifacts）**：右侧面板会显示当前 session 的真实产物
-  - 目前优先展示 summary 类产物
-  - 支持“定位运行”“复制摘要”
-- **模型 / provider 设置**：通过桌面 bridge 读取与保存本地配置
-
-> 注意：桌面 renderer 依赖 preload 注入的 `window.shiguang` bridge，因此它是 **Electron 内 UI**，不是普通浏览器里独立可用的纯网页。
-
-### Commands
-
-| Script | What it does |
-|---|---|
-| `npm run desktop:dev` | Build core library + Electron main process, then start Vite dev server + Electron together (concurrently) |
-| `npm run desktop:vite` | Vite dev server on port 5173 |
-| `npm run desktop:electron` | Launch Electron pointing at dev server (ELECTRON_DEV set automatically) |
-| `npm run desktop:build` | Build core library, compile Electron main process, then build UI with Vite |
-| `npm run desktop:typecheck` | Build core library (for type declarations), then type-check both electron/ and ui/ without emitting |
-| `npm run desktop:package` | Build + package for Linux as an unpacked directory (no Wine required) |
-| `npm run desktop:package:linux` | Build + package for Linux as a full distributable (AppImage/deb/etc.) |
-| `npm run desktop:package:win` | Build + package for Windows (nsis/x64) via electron-builder |
-
-To run the desktop app in development:
-```bash
-npm install
-npm run desktop:dev
-```
-
-To package for the current Linux host (recommended for CI/validation):
-```bash
-npm run desktop:package
-```
-
-To package for Windows (requires a Windows environment or Wine):
-```bash
-npm run desktop:package:win
-```
-
-### Current packaged desktop artifact
-
-The latest validated Linux desktop bundle is produced locally by:
-
-```bash
-npm run desktop:package
-```
-
-Output path:
+如果使用免安装版，解压后运行：
 
 ```text
-release/linux-unpacked/shiguang-agent
+win-unpacked/拾光 Agent.exe
 ```
 
-This `release/` directory is intentionally gitignored, so packaged binaries are **not committed into the repo**. If you want to hand the build to someone else, archive the unpacked folder and upload it to a GitHub Release or workflow artifact instead of committing it:
+首次启动后，进入左侧或顶部的“设置”，配置模型服务后即可开始新会话。
+
+## 支持的模型服务
+
+桌面端内置了多个 provider 配置入口：
+
+| Provider | 类型 | 默认模型 |
+|---|---|---|
+| DeepSeek | OpenAI-compatible | `deepseek-chat` |
+| OpenAI / Codex API | OpenAI-compatible | `gpt-5` |
+| OpenRouter | OpenAI-compatible | `openai/gpt-5` |
+| Anthropic | Anthropic Messages API | `claude-3-5-sonnet-latest` |
+| Gemini | Gemini API | `gemini-2.5-pro` |
+| Ollama | 本地 OpenAI-compatible | `qwen2.5-coder:14b` |
+
+API Key 可以在设置里直接填写，也可以通过环境变量提供，例如：
+
+```powershell
+$env:DEEPSEEK_API_KEY="你的 key"
+$env:OPENAI_API_KEY="你的 key"
+$env:ANTHROPIC_API_KEY="你的 key"
+$env:GEMINI_API_KEY="你的 key"
+```
+
+本项目不会把 API Key 提交到仓库。请不要把真实密钥写入 README、issue、commit 或截图里。
+
+## 能做什么
+
+- 会话管理：新建、切换、重命名、归档会话。
+- 桌面 UI：深色工作台界面，接近 Codex/Craft 一类 Agent 产品的布局。
+- 工具调用：支持读写文件、搜索工作区、运行终端命令、校验项目等内置工具。
+- 审批机制：高风险工具可进入审批流，用户确认后继续运行。
+- 工作区切换：可以在对话中要求切换工作区，也可以通过设置调整。
+- 上下文管理：保留关键运行记录，在上下文压力较高时进行压缩。
+- 多语言轻量校验：没有 `package.json` 的工作区也能识别并校验常见文件。
+
+当前 `run_validation` 支持：
+
+| 类型 | 行为 |
+|---|---|
+| Node 项目 | 优先运行 `package.json` 里的 `typecheck`、`test`、`build` 脚本 |
+| Python | 读取源码做语法检查，不写 `__pycache__` |
+| JavaScript | 使用 Node 做语法检查 |
+| JSON | 直接解析 JSON |
+| Go | 根目录存在 `go.mod` 时运行 `go test ./...` |
+| Rust | 根目录存在 `Cargo.toml` 时运行 `cargo check` |
+| 其他常见文件 | 可识别但无校验器时安全跳过，不把任务误判为失败 |
+
+## 常见问题
+
+### 直接用浏览器打开 Vite 页面为什么不能用？
+
+桌面 UI 依赖 Electron preload bridge，也就是 `window.shiguang`。请使用桌面应用启动，不要直接在 Chrome/Edge 里打开 Vite 页面。
+
+开发模式：
 
 ```bash
-cd release
-tar -czf shiguang-agent-linux-x64.tar.gz linux-unpacked
-```
-
-Recommended delivery pattern:
-
-1. keep source/code on the feature branch
-2. run `npm run desktop:package`
-3. archive `release/linux-unpacked/`
-4. upload the archive to GitHub Releases / Actions artifacts
-
-### Windows Run Guide
-
-Yes — the **project can run on Windows**, but the current checked build artifact in this repo is Linux-only (`release/linux-unpacked/`). On a real Windows machine, use the source tree and run/build there.
-
-#### Prerequisites
-
-- Node.js 20+
-- npm 10+
-- Windows 10/11 x64
-
-#### Run in development on Windows
-
-Open PowerShell in the repo root:
-
-```powershell
-npm install
-$env:SHIGUANG_WORKSPACE_ROOT = "C:\\path\\to\\your\\project"
 npm run desktop:dev
 ```
 
-If you want a no-key local setup, switch the selected provider to something like `ollama` (`authMode: "none"`).
-The desktop app no longer silently falls back to `RulePlanner` when an API-key provider is selected without credentials — it keeps the LLM planner path and surfaces a real configuration error instead.
+打包后的应用：
 
-To enable a real OpenAI-compatible model in PowerShell:
+```text
+release/win-unpacked/拾光 Agent.exe
+```
 
-```powershell
-$env:SHIGUANG_LLM_API_KEY = "sk-..."
-$env:SHIGUANG_LLM_MODEL = "deepseek-chat"
-$env:SHIGUANG_LLM_BASE_URL = "https://api.deepseek.com/v1"
-$env:SHIGUANG_WORKSPACE_ROOT = "C:\\path\\to\\your\\project"
+### 提示缺少 API Key 怎么办？
+
+进入“设置”，选择 provider，填写 API Key、Base URL 和模型名，然后保存。也可以设置对应环境变量后重启应用。
+
+### 文件已经创建了，为什么之前还显示运行失败？
+
+早期版本在文件写入后会自动运行 `run_validation`，而旧逻辑默认读取 `package.json`。如果当前工作区只是一个普通目录，例如只创建了 `hello.py`，就会因为找不到 `package.json` 把任务标成失败。
+
+现在已经改成 fallback validation：没有 `package.json` 时会按文件类型做轻量校验，无法校验的类型会跳过，不再把成功的文件写入误判为失败。
+
+### Windows 提示应用不受信任怎么办？
+
+当前安装包没有代码签名，Windows 可能弹出安全提示。确认来源是本仓库 Release 后，可以选择继续运行。正式公开分发前建议补代码签名。
+
+## 开发
+
+要求：
+
+- Node.js `>=20`
+- npm
+
+安装依赖：
+
+```bash
+npm install
+```
+
+运行测试：
+
+```bash
+npm test
+```
+
+桌面端类型检查：
+
+```bash
+npm run desktop:typecheck
+```
+
+开发模式启动桌面端：
+
+```bash
 npm run desktop:dev
 ```
 
-#### Build a Windows installer
+打包 Windows 桌面版：
 
-```powershell
-npm install
+```bash
 npm run desktop:package:win
 ```
 
-This produces an NSIS x64 installer under `release/`. The installer will be **unsigned** — Windows SmartScreen and antivirus may flag it on first run. This is expected for local/development builds. To produce a signed installer later, add a code-signing certificate configuration (for example `win.certificateFile` / `win.certificatePassword`) and re-enable executable signing in `package.json`.
+输出目录：
 
-##### Known issues
-
-- **winCodeSign / sign-edit-executable**: electron-builder's Windows packaging pipeline attempts to run executable-edit/sign steps by default. This configuration sets `win.signAndEditExecutable = false` so packaging works without a code-signing setup. Trade-off: the resulting `.exe` is unsigned, so Windows may warn "Windows protected your PC" (click "More info" → "Run anyway").
-- **Cross-compilation**: Windows packaging from Linux/macOS requires Wine. On a native Windows host these steps work without Wine.
-
-#### CMD equivalents
-
-If you use `cmd.exe` instead of PowerShell:
-
-```cmd
-set SHIGUANG_WORKSPACE_ROOT=C:\path\to\your\project
-npm run desktop:dev
+```text
+release/
+├── 拾光 Agent Setup 0.2.0.exe
+└── win-unpacked/
+    └── 拾光 Agent.exe
 ```
 
-With LLM credentials:
+## 项目结构
 
-```cmd
-set SHIGUANG_LLM_API_KEY=sk-...
-set SHIGUANG_LLM_MODEL=deepseek-chat
-set SHIGUANG_LLM_BASE_URL=https://api.deepseek.com/v1
-set SHIGUANG_WORKSPACE_ROOT=C:\path\to\your\project
-npm run desktop:dev
+```text
+electron/          Electron 主进程、preload、IPC、桌面服务
+ui/                React + Vite 桌面界面
+src/               Agent 核心：上下文、planner、tools、runtime、state、memory
+docs/              架构和开发文档
+examples/          示例配置
+.github/workflows/ GitHub Actions 打包发布流程
 ```
 
-#### Notes
+## 发布
 
-- `npm run desktop:package` is intentionally Linux-only in this repo now.
-- For Windows packaging, use `npm run desktop:package:win`.
-- Windows packaging is configured to produce **unsigned** installers (see "Known issues" above). This avoids the winCodeSign/signtool dependency for local builds. To enable signing, provide a code-signing certificate and re-enable `win.signAndEditExecutable` in `package.json`.
-- Windows packaging has been fixed to include the compiled core library (`dist/`). Tested to work on Windows 11 x64.
+本仓库包含 GitHub Actions workflow：`.github/workflows/desktop-release.yml`。
 
-### Environment Configuration
+推送 tag 后会自动构建 Release：
 
-The desktop app now supports **two configuration modes**:
-
-1. **JSON config file** (recommended for desktop use)
-2. **Environment variables** (override the file at runtime)
-
-#### Config file location
-
-- Default: Electron `userData` directory + `shiguang.config.json`
-- Windows typically looks like: `%APPDATA%/shiguang-agent/shiguang.config.json`
-- macOS typically looks like: `~/Library/Application Support/shiguang-agent/shiguang.config.json`
-- Linux typically looks like: `~/.config/shiguang-agent/shiguang.config.json`
-- Override path: `SHIGUANG_CONFIG_PATH=/absolute/path/to/shiguang.config.json`
-
-Example file: `examples/shiguang.config.example.json`
-
-Example:
-
-```json
-{
-  "workspaceRoot": "/absolute/path/to/your/project",
-  "llm": {
-    "provider": "deepseek",
-    "model": "deepseek-chat",
-    "maxTokens": 2048
-  },
-  "providers": {
-    "deepseek": {
-      "baseURL": "https://api.deepseek.com/v1",
-      "apiKeyEnv": "DEEPSEEK_API_KEY",
-      "model": "deepseek-chat"
-    },
-    "openrouter": {
-      "baseURL": "https://openrouter.ai/api/v1",
-      "apiKeyEnv": "OPENROUTER_API_KEY",
-      "model": "deepseek/deepseek-chat"
-    },
-    "local-ollama-proxy": {
-      "baseURL": "http://127.0.0.1:11434/v1",
-      "apiKey": "ollama",
-      "model": "qwen2.5-coder:14b"
-    }
-  }
-}
-```
-
-This is intentionally **Hermes-like**: keep a provider registry, then switch `llm.provider` instead of rewriting the whole runtime every time.
-
-#### Environment variables
-
-The desktop app reads these environment variables at runtime:
-
-| Variable | Default | Description |
-|---|---|---|
-| `SHIGUANG_LLM_BASE_URL` | `https://api.openai.com/v1` | Base URL for OpenAI-compatible chat completions endpoint |
-| `SHIGUANG_LLM_API_KEY` | *(none)* | API key for the selected provider when that provider uses `authMode: api_key`. Missing credentials surface as a configuration/runtime error instead of silently falling back to `RulePlanner`. |
-| `SHIGUANG_LLM_MODEL` | `gpt-4o-mini` | Model name to use (e.g. `deepseek-chat`, `gpt-4o`) |
-| `SHIGUANG_LLM_PROVIDER` | `openai` | Provider key inside `providers` from the JSON config |
-| `SHIGUANG_LLM_MAX_TOKENS` | `2048` | Max completion tokens for the planner call |
-| `SHIGUANG_WORKSPACE_ROOT` | `process.cwd()` | Root directory for `read_text_file` and `search_workspace` tools; all paths are constrained under this root |
-| `SHIGUANG_CONFIG_PATH` | *(none)* | Absolute path to a custom JSON config file |
-
-Environment variables override the file. Set them before launching the desktop app:
 ```bash
-export SHIGUANG_LLM_API_KEY="sk-..."
-export SHIGUANG_LLM_MODEL="deepseek-chat"
-export SHIGUANG_LLM_BASE_URL="https://api.deepseek.com/v1"
-export SHIGUANG_WORKSPACE_ROOT="/path/to/project"
-npm run desktop:dev
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
-If `SHIGUANG_LLM_API_KEY` is not set and the selected provider also cannot resolve an API key (for example via `apiKeyEnv`), the desktop runtime does **not** silently switch to `RulePlanner`. Instead it keeps the planner path explicit and fails with a credential/configuration error so the operator can see the real problem. For a true local/no-key run, choose a provider configured with `authMode: "none"` (for example `ollama`).
+Release 会上传：
 
-#### Adding more Hermes-style choices
+- Windows 安装包 `.exe`
+- Windows 免安装包 `win-unpacked.zip`
+- Linux 免安装包 `linux-unpacked.zip`
 
-Hermes supports many providers because it separates:
+## 当前状态
 
-- provider identity
-- base URL
-- API key source
-- model name
+这是一个可运行的早期桌面 Agent 产品原型。核心文件工具、模型 provider、审批流、上下文压缩和桌面打包已经接通，但仍建议在公开大范围使用前继续完善：
 
-Shiguang now follows the same minimal pattern for **OpenAI-compatible** backends. To add another provider, add one more entry under `providers`, then switch `llm.provider`.
-
-Example:
-
-```json
-{
-  "providers": {
-    "together": {
-      "baseURL": "https://api.together.xyz/v1",
-      "apiKeyEnv": "TOGETHER_API_KEY",
-      "model": "deepseek-ai/DeepSeek-V3"
-    }
-  },
-  "llm": {
-    "provider": "together"
-  }
-}
-```
-
-Current limitation: the planner currently speaks the **OpenAI-compatible chat completions** protocol only. So Hermes-style providers that expose different native APIs (for example non-OpenAI Anthropic direct protocol) still need either:
-
-1. an OpenAI-compatible proxy/base URL, or
-2. a new planner/model adapter in code.
-
-## Design
-
-- **Small core, strong boundaries**: orchestration, context, state, and plugins remain separate.
-- **Durable by default**: every state transition is persisted.
-- **Human steerable**: every run is inspectable, interruptible, and resumable.
-- **Tool agnostic**: plugins only know contracts defined in `src/plugins/types.ts`.
-- **Context is a product surface**: typed items with provenance, score, and budget.
-
-## Current Status
-
-v0.2.0 — Framework skeleton with real TypeScript contracts, a composition root, SQLite migration strings, an in-memory event sink, a context builder with budget trimming, and a read-only example filesystem plugin.
-
-## Desktop Release Notes
-
-当前仓库已包含可打包的 Electron 桌面端，给 GitHub 下载用户时请优先发布这些产物：
-
-- Windows 安装版：`拾光 Agent Setup 0.2.0.exe`
-- Windows 免安装版：`win-unpacked` 压缩包（解压后运行 `拾光 Agent.exe`）
-- Linux 免安装版：`linux-unpacked` 压缩包（解压后运行 `./shiguang-agent`）
-
-### 首次启动后需要配置
-
-应用会在 Electron `userData` 目录写入 `shiguang.config.json`，建议用户至少配置：
-
-1. `workspaceRoot`
-2. 一个可用的 provider API Key
-3. 对应 `provider` 和 `model`
-
-内置 provider 目录当前包括：`deepseek`、`openai`、`codex-api`、`openrouter`、`siliconflow`、`ollama`、`anthropic`、`gemini`。
-
-### 本轮已修复的发布阻塞项
-
-- Electron 已升级到 `^43.1.0`
-- 修复了旧版 Electron 运行时不支持 `node:sqlite`，导致桌面包启动即崩的问题
-- 已验证 `linux-unpacked` 可重新打包
-- 已验证 `win-unpacked` 可重新打包
-
-### 当前环境下未覆盖的最后一步
-
-- Linux 服务器环境没有图形桌面，无法在这里完成 GUI 点击冒烟
-- Windows NSIS 安装包在 Linux 上继续构建需要 `wine`；但 `win-unpacked` 已成功产出，说明应用本体打包链路已通
-
-### GitHub 自动打包
-
-仓库现已添加 `.github/workflows/desktop-release.yml`：
-
-- push 到 `main` / `feature/**` / `fix/**` / `ci/**` 时自动构建 Windows + Linux 桌面产物并上传 Actions artifacts
-- 打 `v*` tag 时，会自动把 Windows 安装包、Windows 免安装 zip、Linux 免安装 zip 挂到 GitHub Release
+- 增加正式应用图标和代码签名。
+- 增加更完整的首次启动引导。
+- 增加更多工具卡片和运行过程可视化。
+- 增加自动更新能力。
+- 明确开源许可证。

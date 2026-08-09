@@ -23,7 +23,9 @@ export class LlmPlanner implements Planner {
 
     const request = this.buildRequest(input);
     const response = await this.model.generateDecision(request, context);
-    return { action: response.action, reasoning: response.reasoning };
+    const decision = { action: response.action, reasoning: response.reasoning };
+    const fallback = await inferDeterministicToolFallback(input, decision, context);
+    return fallback ?? decision;
   }
 
   private buildRequest(input: BrainInput): LlmPlannerModelRequest {
@@ -37,6 +39,34 @@ export class LlmPlanner implements Planner {
       workingMemory: input.workingMemory,
     };
   }
+}
+
+async function inferDeterministicToolFallback(
+  input: BrainInput,
+  modelDecision: BrainDecision,
+  context?: PlannerContext,
+): Promise<BrainDecision | null> {
+  if (modelDecision.action.kind !== "respond" && modelDecision.action.kind !== "fail") {
+    return null;
+  }
+
+  const fallback = await new RulePlanner().decide(input, context);
+  if (fallback.action.kind !== "tool_call" || !fallback.action.toolName) {
+    return null;
+  }
+
+  const descriptor = input.availableTools.find((tool) => tool.name === fallback.action.toolName);
+  if (!descriptor || descriptor.requiresApproval === true) {
+    return null;
+  }
+
+  return {
+    action: fallback.action,
+    reasoning: [
+      `Model returned ${modelDecision.action.kind}; using deterministic safe-tool fallback.`,
+      fallback.reasoning,
+    ].filter(Boolean).join(" "),
+  };
 }
 
 export class RulePlanner implements Planner {
@@ -192,6 +222,16 @@ function decideByPhase(
 
       const exhaustedSearchDecision = inferExhaustedRepairSearchDecision(input);
       if (exhaustedSearchDecision) return exhaustedSearchDecision;
+
+      const projectInspection = input.history.length === 0
+        ? inferInitialProjectInspection(message, input.availableTools)
+        : null;
+      if (projectInspection) {
+        return {
+          action: { kind: "tool_call", toolName: "inspect_project", toolInput: {} },
+          reasoning: "Phase investigate: starting unfamiliar project work with inspect_project.",
+        };
+      }
 
       const followupRead = inferFollowupRead(lastResult, input.availableTools);
       if (followupRead) {
@@ -366,12 +406,19 @@ function inferExhaustedRepairSuspectPaths(workingMemory: WorkingMemorySnapshot |
 function inferValidationMode(message: string): "typecheck" | "test" | "build" | "all" | null {
   const text = message.toLowerCase();
 
-  if (text.includes("typecheck")) return "typecheck";
-  if (text.includes("run tests") || /\btests?\b/.test(text)) return "test";
-  if (/\bbuild\b/.test(text)) return "build";
-  if (text.includes("validate") || text.includes("validation")) return "all";
+  if (text.includes("typecheck") || /类型检查|类型|tsc/.test(message)) return "typecheck";
+  if (text.includes("run tests") || /\btests?\b/.test(text) || /测试|单测/.test(message)) return "test";
+  if (/\bbuild\b/.test(text) || /构建|编译|打包/.test(message)) return "build";
+  if (text.includes("validate") || text.includes("validation") || /验证|检查|能不能跑|能否运行|跑一下|能跑吗/.test(message)) return "all";
 
   return null;
+}
+
+function inferInitialProjectInspection(message: string, availableTools: ToolDescriptor[]): boolean {
+  if (!hasTool(availableTools, "inspect_project")) return false;
+  const text = message.toLowerCase();
+  return /\b(project|repo|repository|workspace|codebase)\b/.test(text)
+    || /项目|仓库|工程|代码库/.test(message);
 }
 
 function inferAutomaticValidationMode(
@@ -415,7 +462,8 @@ function inferInitialSearchQuery(message: string, availableTools: ToolDescriptor
 }
 
 function needsInvestigation(message: string): boolean {
-  return /\b(fix|debug|investigate|inspect|update|change|modify|edit|repair|error|failure|bug|find|search|read|show|list|open|locate|lookup|trace|explore)\b/i.test(message);
+  return /\b(fix|debug|investigate|inspect|update|change|modify|edit|repair|error|failure|bug|find|search|read|show|list|open|locate|lookup|trace|explore)\b/i.test(message)
+    || /修|改|看一下|检查|排查|调试|找|搜索|读取|打开|列出|项目|仓库|工程|报错|错误|失败|不能跑|能不能跑|测试|验证/.test(message);
 }
 
 function inferEmptySearchFallback(

@@ -40,7 +40,6 @@ export class ToolMetadataPolicy implements Policy {
         kind: "needs_approval",
         toolName: descriptor.name,
         toolInput: decision.action.toolInput,
-        approvalId: `appr_${descriptor.name}`,
         capability,
         reason: `Tool requires approval before execution: ${descriptor.name} [${capability}]`,
       },

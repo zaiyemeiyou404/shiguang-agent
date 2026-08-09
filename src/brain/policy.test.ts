@@ -33,6 +33,7 @@ test("ToolMetadataPolicy blocks tools marked as requiring approval", async () =>
   assert.equal(result.action.kind, "needs_approval");
   assert.equal(result.action.toolName, "write_text_file");
   assert.equal(result.action.capability, "fs.write");
+  assert.equal(result.action.approvalId, undefined);
   assert.match(result.action.reason ?? "", /write_text_file/);
   assert.match(result.action.reason ?? "", /fs\.write/);
 });
