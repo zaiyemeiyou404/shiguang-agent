@@ -5,7 +5,6 @@ import {
   parseProviderDecision,
   tryParseProviderDecision,
 } from "./shared.js";
-import { fetchWithNetworkProxy } from "./network.js";
 
 export interface GeminiModelConfig {
   baseURL?: string;
@@ -110,7 +109,7 @@ export class GeminiModel implements LlmPlannerModel {
     const url = new URL(`${this.baseURL}/models/${this.model}:generateContent`);
     url.searchParams.set("key", this.apiKey);
 
-    const response = await fetchWithNetworkProxy(url, {
+    const response = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

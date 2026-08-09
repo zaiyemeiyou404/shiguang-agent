@@ -5,7 +5,6 @@ import {
   parseProviderDecision,
   tryParseProviderDecision,
 } from "./shared.js";
-import { fetchWithNetworkProxy } from "./network.js";
 
 export interface AnthropicModelConfig {
   baseURL?: string;
@@ -101,7 +100,7 @@ export class AnthropicModel implements LlmPlannerModel {
       temperature: 0.1,
     };
 
-    const response = await fetchWithNetworkProxy(`${this.baseURL}/messages`, {
+    const response = await fetch(`${this.baseURL}/messages`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

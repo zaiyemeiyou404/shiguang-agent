@@ -44,8 +44,7 @@
     "files": [
       "desktop-build/**/*",
       "ui/dist/**/*",
-      "dist/**/*",
-      "node_modules/undici/**/*"
+      "dist/**/*"
     ],
     "linux": {
       "target": [
@@ -68,9 +67,6 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
     }
-  },
-  "dependencies": {
-    "undici": "^7.28.0"
   },
   "devDependencies": {
     "@types/node": "^26.0.1",
