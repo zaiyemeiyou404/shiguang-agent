@@ -992,7 +992,8 @@ export async function runLoop(
     throwIfAborted(context?.signal);
     state.steps++;
 
-    const decision = await deps.planner.decide(input, { signal: context?.signal });
+    const rawDecision = await deps.planner.decide(input, { signal: context?.signal });
+    const decision = rewriteDuplicateWorkspaceMutation(rawDecision, state.history, input.availableTools);
     const approved = await deps.policy.check(decision);
     state.lastDecision = approved;
 
@@ -1014,4 +1015,81 @@ export async function runLoop(
   }
 
   return state;
+}
+
+function rewriteDuplicateWorkspaceMutation(
+  decision: BrainDecision,
+  history: ActionResult[],
+  availableTools: BrainInput["availableTools"],
+): BrainDecision {
+  const duplicate = findDuplicateSuccessfulWorkspaceMutation(decision, history);
+  if (!duplicate) return decision;
+
+  const hasValidationTool = availableTools.some((tool) => tool.name === "run_validation");
+  const hasValidationAfterMutation = history
+    .slice(duplicate.index + 1)
+    .some((result) => result.action.kind === "tool_call" && result.action.toolName === "run_validation");
+
+  if (hasValidationTool && !hasValidationAfterMutation) {
+    return {
+      action: {
+        kind: "tool_call",
+        toolName: "run_validation",
+        toolInput: { mode: duplicate.result.metadata?.validationMode ?? "all" },
+      },
+      reasoning: [
+        decision.reasoning,
+        "Duplicate workspace mutation already executed; validating instead of requesting the same approval again.",
+      ].filter(Boolean).join(" "),
+    };
+  }
+
+  return {
+    action: {
+      kind: "finish",
+      content: `Skipped duplicate ${decision.action.toolName ?? "tool"} call because the same workspace mutation already completed in this run.`,
+    },
+    reasoning: [
+      decision.reasoning,
+      "Duplicate workspace mutation already executed and validation has already run; stopping instead of requesting the same approval again.",
+    ].filter(Boolean).join(" "),
+  };
+}
+
+function findDuplicateSuccessfulWorkspaceMutation(
+  decision: BrainDecision,
+  history: ActionResult[],
+): { index: number; result: ActionResult } | null {
+  const signature = toolActionSignature(decision.action);
+  if (!signature) return null;
+
+  for (let index = history.length - 1; index >= 0; index--) {
+    const result = history[index];
+    if (!result) continue;
+    if (
+      result.ok === true
+      && result.metadata?.workspaceMutation === true
+      && toolActionSignature(result.action) === signature
+    ) {
+      return { index, result };
+    }
+  }
+
+  return null;
+}
+
+function toolActionSignature(action: BrainDecision["action"]): string | null {
+  if (action.kind !== "tool_call" || !action.toolName) return null;
+  return `${action.toolName}:${stableJson(action.toolInput ?? null)}`;
+}
+
+function stableJson(value: unknown): string {
+  if (typeof value === "undefined") return "undefined";
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "undefined";
+  if (Array.isArray(value)) return `[${value.map((item) => stableJson(item)).join(",")}]`;
+
+  const entries = Object.entries(value as Record<string, unknown>)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, nested]) => `${JSON.stringify(key)}:${stableJson(nested)}`);
+  return `{${entries.join(",")}}`;
 }

@@ -614,20 +614,28 @@ function SimpleChatTranscript({
   entries,
   liveEvents,
   showLiveEvents,
+  pendingApprovals,
+  decisionState,
+  onApprovalDecision,
 }: {
   entries: DesktopConversationEntry[];
   liveEvents: DesktopEvent[];
   showLiveEvents: boolean;
+  pendingApprovals: DesktopApproval[];
+  decisionState: Record<string, "approving" | "approved" | "denied" | undefined>;
+  onApprovalDecision: (approvalId: string, decision: "granted" | "denied") => void;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   type ChatTranscriptItem = {
     id: string;
     source: "turn" | "event";
+    kind?: DesktopConversationEntry["kind"] | DesktopEvent["kind"];
     role?: "user" | "system";
     from: string;
     time: string;
     createdAt?: string;
     content: string;
+    payload?: unknown;
     duplicateCount?: number;
   };
 
@@ -638,12 +646,14 @@ function SimpleChatTranscript({
     return [{
       id: entry.id,
       source: entry.source,
+      kind: entry.kind,
       role: entry.role === "user" ? "user" : entry.role === "system" ? "system" : undefined,
       from: turn.role === "user" ? "你" : turn.role === "system" ? "系统" : "拾光 Agent",
       ...(entry.from ? { from: entry.from } : {}),
       time: new Date(entry.createdAt).toLocaleTimeString(),
       createdAt: entry.createdAt,
       content,
+      payload: entry.payload,
     }];
   });
 
@@ -676,19 +686,23 @@ function SimpleChatTranscript({
       return [{
         id: `event:${event.id}`,
         source: "event",
+        kind: event.kind,
         role: "system" as const,
         from: "系统",
         time: new Date(event.createdAt).toLocaleTimeString(),
         content,
+        payload: event.payload,
       }];
     }
 
-    if (event.kind === "system" || event.kind === "approval_granted" || event.kind === "approval_denied") {
+    if (event.kind === "system" || event.kind === "approval_request" || event.kind === "approval_granted" || event.kind === "approval_denied") {
       const title = event.kind === "approval_granted"
         ? "审批已通过"
         : event.kind === "approval_denied"
           ? "审批已拒绝"
-          : "系统消息";
+          : event.kind === "approval_request"
+            ? "请求审批"
+            : "系统消息";
       const body = typeof payload.message === "string"
         ? payload.message.trim()
         : typeof payload.content === "string"
@@ -697,10 +711,12 @@ function SimpleChatTranscript({
       return [{
         id: `event:${event.id}`,
         source: "event",
+        kind: event.kind,
         role: "system" as const,
         from: "系统",
         time: new Date(event.createdAt).toLocaleTimeString(),
         content: body ? `${title}\n${body}` : title,
+        payload: event.payload,
       }];
     }
 
@@ -711,6 +727,8 @@ function SimpleChatTranscript({
     const prev = acc[acc.length - 1];
     const canCollapse = prev
       && item.role !== "user"
+      && item.kind !== "approval_request"
+      && prev.kind !== "approval_request"
       && prev.role === item.role
       && prev.from === item.from
       && prev.content === item.content
@@ -742,16 +760,40 @@ function SimpleChatTranscript({
 
   return (
     <div className="chat-transcript" ref={scrollRef}>
-      {items.map((item) => (
-        <Message
-          key={item.id}
-          role={item.role}
-          from={item.from}
-          time={item.duplicateCount && item.duplicateCount > 1 ? `${item.time} x${item.duplicateCount}` : item.time}
-        >
-          <p className="message-text">{item.content}</p>
-        </Message>
-      ))}
+      {items.map((item) => {
+        if (item.kind === "approval_request") {
+          const payload = item.payload && typeof item.payload === "object" ? item.payload as { approvalId?: unknown } : {};
+          const approvalId = typeof payload.approvalId === "string" ? payload.approvalId : undefined;
+          const approval = approvalId ? pendingApprovals.find((candidate) => candidate.id === approvalId) : undefined;
+          if (approval) {
+            return (
+              <Message
+                key={item.id}
+                role="system"
+                from="审批"
+                time={item.duplicateCount && item.duplicateCount > 1 ? `${item.time} x${item.duplicateCount}` : item.time}
+              >
+                <ApprovalCard
+                  approval={approval}
+                  decisionState={decisionState[approval.id]}
+                  onDecision={onApprovalDecision}
+                />
+              </Message>
+            );
+          }
+        }
+
+        return (
+          <Message
+            key={item.id}
+            role={item.role}
+            from={item.from}
+            time={item.duplicateCount && item.duplicateCount > 1 ? `${item.time} x${item.duplicateCount}` : item.time}
+          >
+            <p className="message-text">{item.content}</p>
+          </Message>
+        );
+      })}
     </div>
   );
 }
@@ -1940,7 +1982,7 @@ function ApprovalCard({
                 ? "已过期"
                 : approval.status;
   return (
-    <div className="event-card action-card warn-card">
+    <div className="event-card action-card warn-card approval-card">
       <div className="message-meta" style={{ marginBottom: 6 }}>
         <span>{requestSummary.toolName ?? approval.capability}</span>
         <span>{statusLabel}</span>
@@ -1953,7 +1995,7 @@ function ApprovalCard({
       {requestSummary.toolInput ? <pre className="tool-json">{requestSummary.toolInput.length > 320 ? requestSummary.toolInput.slice(0, 320) + "..." : requestSummary.toolInput}</pre> : null}
       {decisionState === "approved" ? <p className="muted" style={{ marginTop: 8, marginBottom: 0 }}>已通过，正在恢复运行…</p> : null}
       {decisionState === "denied" ? <p className="muted" style={{ marginTop: 8, marginBottom: 0 }}>已拒绝。</p> : null}
-      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+      <div className="approval-actions">
         <button className="tool-btn" type="button" disabled={deciding} onClick={() => onDecision(approval.id, "denied")}>拒绝</button>
         <button className="tool-btn primary" type="button" disabled={deciding} onClick={() => onDecision(approval.id, "granted")}>{deciding ? "处理中..." : "通过"}</button>
       </div>
@@ -3491,7 +3533,7 @@ export default function App() {
               {actionError ? (
                 <GlobalBanner variant="danger" title="桌面动作失败" detail={actionError} />
               ) : null}
-              {pendingApprovals.length > 0 ? (
+              {!showChatView && pendingApprovals.length > 0 ? (
                 <GlobalBanner
                   variant="warn"
                   title={`待审批动作：${pendingApprovals.length}`}
@@ -3555,28 +3597,13 @@ export default function App() {
             ) : (
               <>
                 <section className="chat-surface">
-                  {pendingApprovals.length > 0 ? (
-                    <section className="detail-block chat-inline-block">
-                      <div className="section-title">
-                        <h3>待审批动作</h3>
-                        <span className="tiny">{pendingApprovals.length} 个</span>
-                      </div>
-                      <div className="chat-approval-list">
-                        {pendingApprovals.map((approval) => (
-                          <ApprovalCard
-                            key={approval.id}
-                            approval={approval}
-                            decisionState={decisionState[approval.id]}
-                            onDecision={handleApprovalDecision}
-                          />
-                        ))}
-                      </div>
-                    </section>
-                  ) : null}
                   <SimpleChatTranscript
                     entries={sessionConversation}
                     liveEvents={sortedEvents}
                     showLiveEvents={showActiveRunTranscript}
+                    pendingApprovals={pendingApprovals}
+                    decisionState={decisionState}
+                    onApprovalDecision={handleApprovalDecision}
                   />
                 </section>
 
@@ -3765,7 +3792,7 @@ export default function App() {
             {actionError ? (
               <GlobalBanner variant="danger" title="桌面动作失败" detail={actionError} />
             ) : null}
-            {pendingApprovals.length > 0 ? (
+            {surface !== "running" && pendingApprovals.length > 0 ? (
               <GlobalBanner
                 variant="warn"
                 title={`待审批动作：${pendingApprovals.length}`}

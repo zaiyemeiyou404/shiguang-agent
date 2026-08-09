@@ -1608,6 +1608,7 @@ function coreEventToConversationEntry(sessionId: string, event: RunEvent): Deskt
       role: "system",
       from: "系统",
       content,
+      payload: event.payload,
       createdAt: event.createdAt.toISOString(),
     };
   }
@@ -1639,10 +1640,11 @@ function coreEventToConversationEntry(sessionId: string, event: RunEvent): Deskt
     sessionId,
     runId: event.runId,
     source: "event",
-    kind: "system",
+    kind: event.kind,
     role: "system",
     from: "系统",
     content,
+    payload: event.payload,
     createdAt: event.createdAt.toISOString(),
   };
 }

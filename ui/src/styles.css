@@ -1432,10 +1432,22 @@ body {
   gap: 12px;
 }
 
+.approval-main {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
 .home-list,
 .approval-main-list {
   display: grid;
   gap: 10px;
+  min-height: 0;
+}
+
+.approval-main-list .approval-card {
+  max-height: min(58vh, 700px);
 }
 
 .approval-preview {
@@ -1443,6 +1455,7 @@ body {
   gap: 8px;
   margin: 10px 0;
   padding: 12px;
+  min-height: 0;
   border: 1px solid rgba(91, 165, 255, 0.22);
   border-radius: 16px;
   background: rgba(14, 21, 33, 0.72);
@@ -1468,8 +1481,9 @@ body {
 
 .approval-diff {
   margin: 0;
-  max-height: 360px;
+  max-height: min(34vh, 360px);
   overflow: auto;
+  overscroll-behavior: contain;
   white-space: pre;
   word-break: normal;
   color: #d7e7ff;
@@ -1544,6 +1558,28 @@ body {
 
 .action-card {
   padding: 12px;
+}
+
+.approval-card {
+  display: flex;
+  flex-direction: column;
+  max-height: min(62vh, 680px);
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.approval-actions {
+  position: sticky;
+  bottom: -12px;
+  z-index: 2;
+  display: flex;
+  gap: 8px;
+  margin: 10px -12px -12px;
+  padding: 10px 12px 12px;
+  border-top: 1px solid rgba(122, 141, 168, 0.12);
+  background: linear-gradient(180deg, rgba(14, 19, 27, 0.84), rgba(14, 19, 27, 0.98));
+  backdrop-filter: blur(16px);
 }
 
 .success-card {
@@ -2665,6 +2701,7 @@ body::before {
 
 .chat-pane {
   padding: 0;
+  min-height: 0;
 }
 
 .chat-pane-header {
@@ -2693,6 +2730,7 @@ body::before {
   display: grid;
   gap: 10px;
   padding: 12px 20px 0;
+  flex: 0 0 auto;
 }
 
 .chat-home {
@@ -2723,26 +2761,36 @@ body::before {
 
 .chat-surface {
   display: grid;
+  flex: 1 1 auto;
+  align-content: start;
   gap: 12px;
   min-height: 0;
-  padding: 16px 20px 0;
-  overflow: hidden;
+  padding: 16px 20px 20px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .chat-inline-block {
+  order: 2;
   padding: 14px;
+  min-height: 0;
 }
 
 .chat-approval-list {
   display: grid;
   gap: 10px;
+  min-height: 0;
+}
+
+.chat-approval-list .approval-card {
+  max-height: min(44vh, 520px);
 }
 
 .chat-transcript {
+  order: 1;
   min-height: 0;
-  min-height: 0;
-  height: 100%;
-  overflow: auto;
+  height: auto;
+  overflow: visible;
   padding: 8px 4px 8px 0;
   display: grid;
   align-content: start;
@@ -2827,5 +2875,439 @@ body::before {
   .session-pane,
   .chat-pane {
     min-height: 0;
+  }
+}
+
+/* Craft-style desktop shell override. The backend stays Shiguang; this layer only changes the app chrome. */
+:root {
+  --bg: #080a0f;
+  --bg-elev: #0d1017;
+  --bg-panel: #10141b;
+  --bg-soft: rgba(255, 255, 255, 0.04);
+  --bg-hover: rgba(255, 255, 255, 0.075);
+  --border: rgba(255, 255, 255, 0.085);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --text: #f4f4f5;
+  --text-soft: rgba(244, 244, 245, 0.74);
+  --text-dim: rgba(244, 244, 245, 0.44);
+  --accent: #8b5cf6;
+  --accent-soft: rgba(139, 92, 246, 0.16);
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --shadow: none;
+  --radius-xl: 12px;
+  --radius-lg: 10px;
+  --radius-md: 8px;
+  --radius-sm: 6px;
+}
+
+body {
+  background: #080a0f;
+}
+
+body::before,
+.ambient,
+.grid,
+.noise {
+  display: none;
+}
+
+.shell {
+  padding: 0;
+  background: #080a0f;
+}
+
+.app.simple-layout {
+  grid-template-columns: 56px 252px minmax(0, 1fr);
+  gap: 0;
+  height: 100vh;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.panel,
+.app-nav-panel,
+.session-pane,
+.chat-pane {
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.app-nav-panel {
+  padding: 10px 6px;
+  background: #0b0e14;
+  border: 0;
+  border-right: 1px solid var(--border);
+}
+
+.brand-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: linear-gradient(135deg, #9f7aea, #7c3aed);
+  color: #fff;
+  box-shadow: none;
+  font-size: 12px;
+}
+
+.app-nav-copy,
+.app-nav-status small,
+.app-nav-text {
+  display: none;
+}
+
+.app-nav-top,
+.app-nav-group,
+.app-nav-footer {
+  gap: 8px;
+}
+
+.app-nav-btn {
+  min-height: 38px;
+  width: 38px;
+  padding: 0;
+  border-radius: 9px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.app-nav-btn:hover {
+  background: var(--bg-hover);
+  border-color: transparent;
+  color: var(--text);
+  transform: none;
+}
+
+.app-nav-btn.active {
+  background: rgba(139, 92, 246, 0.18);
+  border-color: rgba(139, 92, 246, 0.24);
+  color: #fff;
+}
+
+.app-nav-btn.secondary {
+  min-height: 38px;
+}
+
+.app-nav-glyph {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.app-nav-status {
+  width: 38px;
+  min-height: 38px;
+  padding: 4px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: transparent;
+  border-color: transparent;
+}
+
+.app-nav-status span {
+  font-size: 10px;
+  line-height: 1.1;
+}
+
+.app-nav-status.warn {
+  background: rgba(245, 158, 11, 0.14);
+  border-color: rgba(245, 158, 11, 0.22);
+  color: #fbbf24;
+}
+
+.session-pane {
+  gap: 8px;
+  padding: 10px;
+  background: #10141b;
+  border: 0;
+  border-right: 1px solid var(--border);
+}
+
+.session-pane-header {
+  padding: 2px 4px 8px;
+}
+
+.session-pane-header h2 {
+  margin-top: 4px;
+  font-size: 21px;
+  letter-spacing: -0.025em;
+}
+
+.session-pane-header p,
+.chat-pane-title p {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.session-pane-header-actions .icon-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+}
+
+.session-controls-card {
+  padding: 8px;
+  border-radius: 12px;
+  background: #151922;
+  border-color: var(--border);
+}
+
+.session-controls-card .settings-input {
+  height: 36px;
+  border-radius: 9px;
+  background: #0c1017;
+}
+
+.session-filter-row {
+  gap: 6px;
+}
+
+.session-filter-chip,
+.chip,
+.tool-btn,
+.composer-action,
+.send-btn,
+.icon-btn {
+  min-height: 30px;
+  border-radius: 8px;
+  background: #151922;
+  border-color: var(--border);
+  color: var(--text-soft);
+  box-shadow: none;
+}
+
+.session-filter-chip:hover,
+.chip:hover,
+.tool-btn:hover,
+.composer-action:hover,
+.send-btn:hover,
+.icon-btn:hover {
+  transform: none;
+  background: #1b202a;
+  border-color: var(--border-strong);
+}
+
+.session-filter-chip.active {
+  background: rgba(139, 92, 246, 0.18);
+  border-color: rgba(139, 92, 246, 0.28);
+  color: #fff;
+}
+
+.session-action-row {
+  display: none;
+}
+
+.session-pane-list {
+  padding-right: 2px;
+}
+
+.session-card {
+  padding: 10px;
+  border-radius: 10px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.session-card:hover {
+  transform: none;
+  background: rgba(255, 255, 255, 0.045);
+  border-color: transparent;
+}
+
+.session-card.active {
+  background: rgba(139, 92, 246, 0.16);
+  border-color: rgba(139, 92, 246, 0.22);
+  box-shadow: inset 2px 0 0 #8b5cf6;
+}
+
+.session-name {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.session-preview,
+.session-card-meta,
+.session-card-status {
+  font-size: 11px;
+}
+
+.chat-pane {
+  background: #080a0f;
+  border: 0;
+}
+
+.chat-pane-header {
+  min-height: 56px;
+  padding: 10px 16px;
+  align-items: center;
+  background: rgba(8, 10, 15, 0.92);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(12px);
+}
+
+.chat-pane-title h2 {
+  margin-top: 1px;
+  font-size: 16px;
+  letter-spacing: -0.01em;
+}
+
+.chat-pane-title .tiny {
+  display: none;
+}
+
+.chat-pane .toolbar {
+  gap: 7px;
+}
+
+.chat-pane .toolbar .tool-btn {
+  min-height: 34px;
+  padding: 0 11px;
+}
+
+.chat-banner-stack {
+  padding: 8px 16px 0;
+}
+
+.global-banner {
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #151922;
+  border-color: var(--border);
+}
+
+.chat-surface {
+  padding: 12px 16px 12px;
+  gap: 10px;
+}
+
+.chat-transcript {
+  max-width: 900px;
+  width: 100%;
+  justify-self: center;
+  gap: 12px;
+}
+
+.timeline-node {
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.timeline-rail::after {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.timeline-dot {
+  width: 11px;
+  height: 11px;
+  border-color: #080a0f;
+  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.12);
+}
+
+.message,
+.event-card {
+  border-radius: 12px;
+  background: #11161f;
+  border-color: var(--border);
+}
+
+.message {
+  max-width: 72%;
+  padding: 12px 13px;
+}
+
+.message.user {
+  background: rgba(37, 99, 235, 0.18);
+  border-color: rgba(96, 165, 250, 0.24);
+}
+
+.message.system {
+  max-width: min(860px, 100%);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.message-meta {
+  margin-bottom: 6px;
+  font-size: 11px;
+}
+
+.message .approval-card {
+  max-height: min(48vh, 520px);
+  margin: 0;
+  border: 1px solid rgba(139, 92, 246, 0.22);
+  background: #111827;
+}
+
+.approval-preview {
+  border-radius: 10px;
+  background: #0b1018;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.approval-diff,
+.tool-json {
+  border-radius: 8px;
+  background: #070a10;
+  color: rgba(244, 244, 245, 0.78);
+}
+
+.approval-actions {
+  bottom: -12px;
+  background: linear-gradient(180deg, rgba(17, 24, 39, 0.84), #111827 42%);
+}
+
+.composer-dock {
+  position: relative;
+  margin: 0 16px 16px;
+  align-self: center;
+  width: min(900px, calc(100% - 32px));
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #11161f;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28);
+}
+
+.composer {
+  padding: 12px;
+}
+
+.composer textarea {
+  min-height: 72px;
+  font-size: 13px;
+}
+
+.composer-hint-row {
+  margin-bottom: 6px;
+}
+
+.composer-hint-row .muted {
+  font-size: 12px;
+}
+
+.composer-footer {
+  margin-top: 6px;
+}
+
+.send-btn {
+  min-width: 70px;
+  min-height: 36px;
+  background: #8b5cf6;
+  border-color: #8b5cf6;
+}
+
+.chat-empty {
+  background: #11161f;
+  border-color: var(--border);
+}
+
+.chat-empty h3 {
+  font-size: 28px;
+}
+
+@media (max-width: 1120px) {
+  .app.simple-layout {
+    grid-template-columns: 52px 232px minmax(0, 1fr);
   }
 }

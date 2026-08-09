@@ -40,10 +40,11 @@ export interface DesktopConversationEntry {
   sessionId: string;
   runId: string | null;
   source: "turn" | "event";
-  kind: "message" | "system" | "error";
+  kind: "message" | "system" | "error" | "approval_request" | "approval_granted" | "approval_denied";
   role: "user" | "assistant" | "system";
   from: string;
   content: string;
+  payload?: unknown;
   createdAt: string;
 }
 
