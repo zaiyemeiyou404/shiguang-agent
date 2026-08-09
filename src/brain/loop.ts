@@ -139,6 +139,14 @@ function inferNextPhase(
     return result.ok ? "summarize" : "validate";
   }
 
+  if (toolName === "completion_check") {
+    const output = result.output as { status?: unknown } | null;
+    if (output?.status === "needs_repair") {
+      return validationFailure?.suspectFile ? "edit" : "investigate";
+    }
+    return "summarize";
+  }
+
   if (result.metadata?.workspaceMutation === true) {
     return "validate";
   }
@@ -993,7 +1001,17 @@ export async function runLoop(
     state.steps++;
 
     const rawDecision = await deps.planner.decide(input, { signal: context?.signal });
-    const decision = rewriteDuplicateWorkspaceMutation(rawDecision, state.history, input.availableTools);
+    const duplicateResolution = resolveDuplicateWorkspaceMutation(rawDecision, state.history, input.availableTools);
+    if (duplicateResolution.kind === "observation") {
+      state.lastDecision = duplicateResolution.decision;
+      state.lastResult = duplicateResolution.result;
+      state.history.push(duplicateResolution.result);
+      state.workingMemory = updateWorkingMemory(state.workingMemory, state.steps, duplicateResolution.result);
+      input = { ...input, history: state.history, workingMemory: state.workingMemory };
+      continue;
+    }
+
+    const decision = duplicateResolution.decision;
     const approved = await deps.policy.check(decision);
     state.lastDecision = approved;
 
@@ -1017,21 +1035,25 @@ export async function runLoop(
   return state;
 }
 
-function rewriteDuplicateWorkspaceMutation(
+type DuplicateWorkspaceMutationResolution =
+  | { kind: "decision"; decision: BrainDecision }
+  | { kind: "observation"; decision: BrainDecision; result: ActionResult };
+
+function resolveDuplicateWorkspaceMutation(
   decision: BrainDecision,
   history: ActionResult[],
   availableTools: BrainInput["availableTools"],
-): BrainDecision {
+): DuplicateWorkspaceMutationResolution {
   const duplicate = findDuplicateSuccessfulWorkspaceMutation(decision, history, availableTools);
-  if (!duplicate) return decision;
+  if (!duplicate) return { kind: "decision", decision };
 
   const hasValidationTool = availableTools.some((tool) => tool.name === "run_validation");
-  const hasValidationAfterMutation = history
-    .slice(duplicate.index + 1)
-    .some((result) => result.action.kind === "tool_call" && result.action.toolName === "run_validation");
+  const latestValidationAfterMutation = findLatestValidationAfterMutation(history, duplicate.index);
 
-  if (hasValidationTool && !hasValidationAfterMutation) {
+  if (hasValidationTool && !latestValidationAfterMutation) {
     return {
+      kind: "decision",
+      decision: {
       action: {
         kind: "tool_call",
         toolName: "run_validation",
@@ -1041,19 +1063,191 @@ function rewriteDuplicateWorkspaceMutation(
         decision.reasoning,
         "Duplicate workspace mutation already executed; validating instead of requesting the same approval again.",
       ].filter(Boolean).join(" "),
+      },
     };
   }
 
+  const signature = toolActionSignature(decision.action);
+  if (signature && hasCompletionCheckAfterMutation(history, duplicate.index, signature)) {
+    const feedback = buildDuplicateWorkspaceMutationFeedback(decision, duplicate.result, latestValidationAfterMutation);
+    return {
+      kind: "decision",
+      decision: {
+        action: latestValidationAfterMutation && validationDidFail(latestValidationAfterMutation)
+          ? { kind: "fail", reason: feedback }
+          : { kind: "respond", content: feedback },
+        reasoning: [
+          decision.reasoning,
+          "Planner repeated the same workspace mutation after a completion check; returning the final completion judgment as a safety stop.",
+        ].filter(Boolean).join(" "),
+      },
+    };
+  }
+
+  const completionCheck = buildCompletionCheckResult(decision, duplicate.result, latestValidationAfterMutation, signature);
   return {
+    kind: "observation",
+    decision: completionCheck.decision,
+    result: completionCheck.result,
+  };
+}
+
+function buildCompletionCheckResult(
+  decision: BrainDecision,
+  completedResult: ActionResult,
+  latestValidation: ActionResult | null,
+  duplicateSignature: string | null,
+): { decision: BrainDecision; result: ActionResult } {
+  const toolName = decision.action.toolName ?? completedResult.action.toolName ?? "tool";
+  const target = inferWorkspaceActionTarget(decision.action)
+    ?? inferWorkspaceActionTarget(completedResult.action)
+    ?? inferOutputPath(completedResult.output);
+  const validationFailed = latestValidation ? validationDidFail(latestValidation) : false;
+  const validationSummary = latestValidation ? summarizeValidationResult(latestValidation) : null;
+  const status = validationFailed ? "needs_repair" : "ready_for_final_feedback";
+  const output = {
+    status,
+    repeatedActionPrevented: true,
+    duplicateSignature,
     action: {
-      kind: "finish",
-      content: `Skipped duplicate ${decision.action.toolName ?? "tool"} call because the same workspace mutation already completed in this run.`,
+      toolName,
+      target,
+      label: labelWorkspaceAction(toolName),
+    },
+    validation: latestValidation
+      ? {
+          ok: !validationFailed,
+          summary: validationSummary,
+        }
+      : null,
+    instruction: validationFailed
+      ? "The repeated mutation was blocked. Use the validation result and history to choose a different repair or explain the failure; do not repeat the same tool input."
+      : "The mutation and validation are complete. Decide whether the user's task is satisfied, then respond with final user-facing feedback; do not repeat the same tool input.",
+  };
+  const checkDecision: BrainDecision = {
+    action: {
+      kind: "tool_call",
+      toolName: "completion_check",
+      toolInput: output,
     },
     reasoning: [
       decision.reasoning,
-      "Duplicate workspace mutation already executed and validation has already run; stopping instead of requesting the same approval again.",
+      "Duplicate workspace mutation was converted into a completion check so the planner can make the final judgment.",
     ].filter(Boolean).join(" "),
   };
+
+  return {
+    decision: checkDecision,
+    result: {
+      action: checkDecision.action,
+      ok: true,
+      output,
+      metadata: {
+        category: "tool_observation",
+        summary: validationFailed
+          ? "Completion check: previous mutation exists, but validation failed; choose a different repair or report failure."
+          : "Completion check: previous mutation and validation are complete; produce final user feedback.",
+        retryable: false,
+        toolName: "completion_check",
+      },
+    },
+  };
+}
+
+function hasCompletionCheckAfterMutation(
+  history: ActionResult[],
+  mutationIndex: number,
+  duplicateSignature: string,
+): boolean {
+  for (let index = history.length - 1; index > mutationIndex; index--) {
+    const result = history[index];
+    if (result?.action.kind !== "tool_call" || result.action.toolName !== "completion_check") continue;
+    const output = result.output as { duplicateSignature?: unknown } | null;
+    if (output?.duplicateSignature === duplicateSignature) return true;
+  }
+  return false;
+}
+
+function findLatestValidationAfterMutation(history: ActionResult[], mutationIndex: number): ActionResult | null {
+  for (let index = history.length - 1; index > mutationIndex; index--) {
+    const result = history[index];
+    if (result?.action.kind === "tool_call" && result.action.toolName === "run_validation") {
+      return result;
+    }
+  }
+  return null;
+}
+
+function buildDuplicateWorkspaceMutationFeedback(
+  decision: BrainDecision,
+  completedResult: ActionResult,
+  latestValidation: ActionResult | null,
+): string {
+  const toolName = decision.action.toolName ?? completedResult.action.toolName ?? "tool";
+  const target = inferWorkspaceActionTarget(decision.action)
+    ?? inferWorkspaceActionTarget(completedResult.action)
+    ?? inferOutputPath(completedResult.output);
+  const actionLabel = labelWorkspaceAction(toolName);
+
+  if (latestValidation && validationDidFail(latestValidation)) {
+    const validationSummary = summarizeValidationResult(latestValidation) ?? "验证未通过。";
+    return target
+      ? `文件已${actionLabel}：${target}，但验证未通过：${validationSummary} 我已停止重复执行同一个写入动作，请根据验证错误继续修复。`
+      : `工具动作已经执行，但验证未通过：${validationSummary} 我已停止重复执行同一个写入动作，请根据验证错误继续修复。`;
+  }
+
+  const validationSummary = latestValidation
+    ? summarizeValidationResult(latestValidation) ?? "验证已完成。"
+    : "没有检测到额外验证步骤。";
+
+  return target
+    ? `已完成：${target} 已${actionLabel}。${validationSummary} 无需再次执行同一个写入动作。`
+    : `已完成：${toolName} 动作已经执行。${validationSummary} 无需再次执行同一个工具动作。`;
+}
+
+function validationDidFail(result: ActionResult): boolean {
+  if (result.ok === false) return true;
+  if (!result.output || typeof result.output !== "object") return false;
+  return (result.output as { ok?: unknown }).ok === false;
+}
+
+function summarizeValidationResult(result: ActionResult): string | null {
+  if (!result.output || typeof result.output !== "object") {
+    return result.metadata?.summary ?? null;
+  }
+
+  const output = result.output as { ok?: unknown; summary?: unknown; mode?: unknown };
+  const summary = typeof output.summary === "string" && output.summary.trim()
+    ? output.summary.trim()
+    : result.metadata?.summary;
+
+  if (output.ok === true) return summary ?? "验证已通过。";
+  if (output.ok === false) return summary ?? "验证未通过。";
+  return summary ?? null;
+}
+
+function labelWorkspaceAction(toolName: string): string {
+  if (toolName === "delete_path") return "删除";
+  if (toolName === "move_path") return "移动";
+  if (toolName === "copy_path") return "复制";
+  if (toolName === "patch_text_file") return "修改";
+  if (toolName === "write_text_file") return "写入/更新";
+  return "处理";
+}
+
+function inferWorkspaceActionTarget(action: BrainDecision["action"]): string | null {
+  if (!action.toolInput || typeof action.toolInput !== "object") return null;
+  const input = action.toolInput as Record<string, unknown>;
+  for (const key of ["path", "destinationPath", "sourcePath"]) {
+    if (typeof input[key] === "string" && input[key].length > 0) return input[key] as string;
+  }
+  return null;
+}
+
+function inferOutputPath(output: unknown): string | null {
+  if (!output || typeof output !== "object") return null;
+  const value = (output as Record<string, unknown>).path;
+  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 function findDuplicateSuccessfulWorkspaceMutation(

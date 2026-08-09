@@ -568,6 +568,7 @@ test("runLoop stops duplicate approved workspace mutation instead of requesting 
 
   let policyCalls = 0;
   let dispatcherCalls = 0;
+  let plannerCalls = 0;
 
   const state = await runLoop(
     {
@@ -587,14 +588,22 @@ test("runLoop stops duplicate approved workspace mutation instead of requesting 
     },
     {
       planner: {
-        async decide(): Promise<BrainDecision> {
+        async decide(input): Promise<BrainDecision> {
+          plannerCalls += 1;
+          const lastResult = input.history[input.history.length - 1];
+          if (lastResult?.action.kind === "tool_call" && lastResult.action.toolName === "completion_check") {
+            return {
+              action: { kind: "respond", content: "工作已完成：christmas_tree.py 已写入，并且验证已通过。" },
+              reasoning: "Planner made a final completion judgment from completion_check.",
+            };
+          }
           return duplicateWrite;
         },
       },
       policy: {
         async check(next: BrainDecision): Promise<BrainDecision> {
           policyCalls += 1;
-          assert.equal(next.action.kind, "finish");
+          assert.equal(next.action.kind, "respond");
           assert.notEqual(next.action.kind, "needs_approval");
           return next;
         },
@@ -602,14 +611,14 @@ test("runLoop stops duplicate approved workspace mutation instead of requesting 
       dispatcher: {
         async dispatch(decision): Promise<ActionResult> {
           dispatcherCalls += 1;
-          assert.equal(decision.action.kind, "finish");
+          assert.equal(decision.action.kind, "respond");
           return {
             action: decision.action,
             ok: true,
             output: decision.action.content ?? "done",
             metadata: {
-              category: "agent_finish",
-              summary: "Duplicate mutation skipped.",
+              category: "assistant_response",
+              summary: "Completion feedback sent.",
               retryable: false,
             },
           };
@@ -617,18 +626,22 @@ test("runLoop stops duplicate approved workspace mutation instead of requesting 
       },
       evaluator: {
         async evaluate(decision) {
-          assert.equal(decision.action.kind, "finish");
-          return { kind: "stop", reason: "finish" } as const;
+          assert.equal(decision.action.kind, "respond");
+          return { kind: "stop", reason: "respond" } as const;
         },
       },
     },
-    3,
+    5,
   );
 
+  assert.equal(plannerCalls, 2);
   assert.equal(policyCalls, 1);
   assert.equal(dispatcherCalls, 1);
-  assert.equal(state.stopReason, "finish");
-  assert.match(String(state.lastResult?.output), /Skipped duplicate write_text_file/);
+  assert.equal(state.stopReason, "respond");
+  assert.match(String(state.lastResult?.output), /已完成/);
+  assert.match(String(state.lastResult?.output), /christmas_tree\.py/);
+  assert.doesNotMatch(String(state.lastResult?.output), /Skipped duplicate/);
+  assert.equal(state.history.some((result) => result.action.kind === "tool_call" && result.action.toolName === "completion_check"), true);
 });
 
 test("runLoop validates instead of repeating a model-emitted approval request", async () => {

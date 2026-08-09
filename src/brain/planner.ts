@@ -1091,6 +1091,10 @@ function summarizeObservation(lastResult: ActionResult | null, message: string):
   if (!lastResult || !lastResult.ok) return null;
   if (lastResult.action.kind !== "tool_call") return null;
 
+  if (lastResult.action.toolName === "completion_check") {
+    return summarizeCompletionCheck(lastResult.output);
+  }
+
   if (lastResult.action.toolName === "read_text_file") {
     const output = lastResult.output as { path?: unknown; content?: unknown; truncated?: unknown } | null;
     const requestedAnswer = inferRequestedFileValueAnswer(lastResult, message, output);
@@ -1116,6 +1120,34 @@ function summarizeObservation(lastResult: ActionResult | null, message: string):
   }
 
   return null;
+}
+
+function summarizeCompletionCheck(output: unknown): string | null {
+  if (!output || typeof output !== "object") return null;
+  const data = output as {
+    status?: unknown;
+    action?: { target?: unknown; label?: unknown; toolName?: unknown };
+    validation?: { ok?: unknown; summary?: unknown } | null;
+  };
+  const target = typeof data.action?.target === "string" ? data.action.target : null;
+  const label = typeof data.action?.label === "string" ? data.action.label : "处理";
+  const validationSummary = typeof data.validation?.summary === "string" && data.validation.summary.trim()
+    ? data.validation.summary.trim()
+    : data.validation?.ok === true
+      ? "验证已通过。"
+      : data.validation?.ok === false
+        ? "验证未通过。"
+        : "检查已完成。";
+
+  if (data.status === "needs_repair") {
+    return target
+      ? `我已经完成了 ${target} 的${label}，但后续检查没有通过：${validationSummary} 我会停止重复同一个写入动作，需要换一种修复方式继续。`
+      : `工具动作已经执行，但后续检查没有通过：${validationSummary} 我会停止重复同一个写入动作，需要换一种修复方式继续。`;
+  }
+
+  return target
+    ? `工作已完成：${target} 已${label}，并且${validationSummary}`
+    : `工作已完成，后续检查结果：${validationSummary}`;
 }
 
 function inferRequestedFileValueAnswer(
