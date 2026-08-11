@@ -2,16 +2,16 @@
 
 拾光 Agent 是一个轻量级桌面 AI Agent。它把对话、工作区文件操作、工具调用、审批、运行记录和上下文压缩放在一个 Electron 桌面界面里，目标是做成一个下载后即可配置使用的小型个人工作台。
 
-当前版本：`0.2.0`
+当前版本：`0.2.1`
 
 ## 下载使用
 
 在 GitHub Releases 页面下载 Windows 版本：
 
-- 安装包：`拾光 Agent Setup 0.2.0.exe`
+- 安装包：`拾光 Agent Setup 0.2.1.exe`
 - 免安装版：`win-unpacked.zip`
 
-`latest` 预发布会在 `main` 分支更新后自动刷新，适合想直接试用最新构建的用户；正式版本仍使用 `v*` tag 发布。
+`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.1`，才会生成新的正式 Release。
 
 如果使用免安装版，解压后运行：
 
@@ -81,6 +81,24 @@ $env:GEMINI_API_KEY="你的 key"
 | `code_map` / `symbol_search` / `dependency_graph` | 生成工程地图、查找符号、分析 import/use 依赖 |
 | `start_background_process` / `stop_background_process` | 启动或停止 dev server 等后台进程，需要审批 |
 | `search_memory` / `remember_fact` / `forget_memory` | 搜索、写入、删除本地记忆，删除需要审批 |
+
+### MCP 扩展工具
+
+设置页支持直接编辑 `mcpServers` JSON。配置完成后，新运行会启动 stdio MCP server，通过 `tools/list` 自动发现工具，并把 MCP 工具适配成普通拾光工具继续走统一审批、日志和完成判断。
+
+示例：
+
+```json
+{
+  "filesystem": {
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "G:/projects"]
+  }
+}
+```
+
+MCP 工具命名会带上 server 前缀，例如 `mcp_filesystem_read_file`。读工具默认无需审批；写入、删除、执行类工具会按风险进入审批。
 
 ## 常见问题
 
@@ -155,7 +173,7 @@ npm run desktop:package:win
 
 ```text
 release/
-├── 拾光 Agent Setup 0.2.0.exe
+├── 拾光 Agent Setup 0.2.1.exe
 └── win-unpacked/
     └── 拾光 Agent.exe
 ```
@@ -178,8 +196,8 @@ examples/          示例配置
 推送 tag 后会自动构建 Release：
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.2.1
+git push origin v0.2.1
 ```
 
 Release 会上传：

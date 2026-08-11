@@ -2083,6 +2083,20 @@ function buildSettings(
   };
 }
 
+function formatMcpServersJson(servers: DesktopSettings["mcpServers"] | undefined): string {
+  return JSON.stringify(servers ?? {}, null, 2);
+}
+
+function parseMcpServersJson(value: string): DesktopSettings["mcpServers"] {
+  const text = value.trim();
+  if (!text) return {};
+  const parsed = JSON.parse(text) as unknown;
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("MCP Servers 必须是一个 JSON 对象");
+  }
+  return parsed as DesktopSettings["mcpServers"];
+}
+
 function providerTone(draft: ProviderDraft): SignalTone {
   if (draft.authMode === "none") return "accent";
   if (draft.apiKey.trim()) return "warn";
@@ -2157,6 +2171,7 @@ function SettingsDrawer({
   const [activeModel, setActiveModel] = useState("");
   const [maxTokens, setMaxTokens] = useState("");
   const [toolApprovalMode, setToolApprovalMode] = useState<ToolApprovalMode>("ask");
+  const [mcpServersJson, setMcpServersJson] = useState("{}");
   const [providerCatalog, setProviderCatalog] = useState<Record<string, ProviderDraft>>({ openai: createProviderDraft("openai") });
   const [providerKeyInput, setProviderKeyInput] = useState("openai");
   const [providerJsonInput, setProviderJsonInput] = useState("");
@@ -2183,6 +2198,7 @@ function SettingsDrawer({
         ? String(catalog[providerKey]?.maxTokens)
         : "");
     setToolApprovalMode(settings.toolApprovalMode ?? "ask");
+    setMcpServersJson(formatMcpServersJson(settings.mcpServers));
     setProviderCatalog(catalog);
     setProviderKeyInput(providerKey);
     setProviderJsonInput("");
@@ -2441,7 +2457,11 @@ function SettingsDrawer({
     setTestingConnection(true);
     setConnectionResult(null);
     try {
-      const next = buildSettings(settings, providerCatalog, workspaceRoot, activeProvider, activeModel, maxTokens, toolApprovalMode);
+      const mcpServers = parseMcpServersJson(mcpServersJson);
+      const next = {
+        ...buildSettings(settings, providerCatalog, workspaceRoot, activeProvider, activeModel, maxTokens, toolApprovalMode),
+        mcpServers,
+      };
       const saved = await requireDesktopBridge().saveSettings(next);
       onSaved(saved);
       const testResult = await runConnectionTest();
@@ -2483,7 +2503,8 @@ function SettingsDrawer({
     || activeProvider !== (settings.llm.provider ?? "openai")
     || activeModel.trim() !== (settings.llm.model ?? "")
     || maxTokens.trim() !== (settings.llm.maxTokens ? String(settings.llm.maxTokens) : "")
-    || toolApprovalMode !== (settings.toolApprovalMode ?? "ask");
+    || toolApprovalMode !== (settings.toolApprovalMode ?? "ask")
+    || mcpServersJson.trim() !== formatMcpServersJson(settings.mcpServers).trim();
   const effectiveModelSource = activeModel.trim()
     ? "当前配置 llm.model"
     : providerDraft.model.trim()
@@ -2642,6 +2663,21 @@ function SettingsDrawer({
                   : "写入、终端、删除、移动等高风险工具都会先生成审批卡片。"}
               </p>
             </div>
+          </div>
+          <div>
+            <label className="tiny">MCP Servers JSON</label>
+            <textarea
+              className="settings-input"
+              value={mcpServersJson}
+              onChange={(e) => setMcpServersJson(e.target.value)}
+              rows={9}
+              spellCheck={false}
+              style={{ fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace", resize: "vertical" }}
+              placeholder={'{\n  "filesystem": {\n    "transport": "stdio",\n    "command": "npx",\n    "args": ["-y", "@modelcontextprotocol/server-filesystem", "G:/projects"]\n  }\n}'}
+            />
+            <p className="muted" style={{ margin: 0 }}>
+              配置 stdio MCP server。保存后，新运行会自动通过 tools/list 发现工具，并按读/写/执行风险接入审批。
+            </p>
           </div>
         </div>
 

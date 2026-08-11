@@ -75,6 +75,7 @@ MCP server tool -> McpToolAdapter -> ToolDescriptor -> ToolRegistry
 The adapter implementation lives in:
 
 - `src/tools/mcp-adapter.ts`
+- `src/tools/mcp-stdio-runtime.ts`
 
 An MCP tool becomes a normal Shiguang tool:
 
@@ -97,13 +98,29 @@ Prompts should not be auto-run by the model. They are user-invoked templates, si
 
 Tools are the only MCP primitive that the model should select and execute autonomously, and even then Shiguang's approval policy can pause risky actions before execution.
 
-## Next integration step
+## Configuring MCP servers
 
-The current code includes the internal adapter boundary but does not yet ship a full MCP client runtime. The next product step is to add:
+The desktop app supports stdio MCP servers through `mcpServers` in `shiguang.config.json` or through the settings drawer JSON editor:
 
-- MCP server configuration UI.
-- stdio and Streamable HTTP transports.
-- server discovery and health checks.
-- `tools/list` import into `ToolRegistry`.
-- `resources/list` and `resources/read` support for attachable context.
-- audit logs for every MCP call.
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "G:/projects"]
+    }
+  }
+}
+```
+
+On each new run, Shiguang starts the configured server, calls `tools/list`, adapts each returned tool into a native `ToolDescriptor`, and then calls `tools/call` when the model selects that tool.
+
+## Remaining MCP work
+
+The current runtime supports stdio tools. The next product steps are:
+
+- Add explicit MCP health checks in the settings UI.
+- Add Streamable HTTP transport.
+- Add `resources/list` and `resources/read` support for attachable context.
+- Add richer audit details for every MCP call.

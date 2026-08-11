@@ -10,6 +10,7 @@ const DEFAULT_TOOL_APPROVAL_MODE = "ask";
 export type ProviderProtocol = "openai-compatible" | "anthropic" | "gemini";
 export type ProviderAuthMode = "api_key" | "none";
 export type ToolApprovalMode = "ask" | "workspace_edits";
+export type McpTransportMode = "stdio";
 
 interface ProviderConfigFile {
   type?: ProviderProtocol;
@@ -32,6 +33,16 @@ interface DesktopConfigFile {
   toolApprovalMode?: ToolApprovalMode;
   llm?: LlmConfigFile;
   providers?: Record<string, ProviderConfigFile>;
+  mcpServers?: Record<string, McpServerConfigFile>;
+}
+
+interface McpServerConfigFile {
+  transport?: McpTransportMode;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
+  disabled?: boolean;
 }
 
 export interface ResolvedLlmConfig {
@@ -49,6 +60,7 @@ export interface ResolvedDesktopConfig {
   workspaceRoot: string;
   toolApprovalMode: ToolApprovalMode;
   llm: ResolvedLlmConfig;
+  mcpServers: ResolvedMcpServerConfig[];
 }
 
 export interface DesktopProviderSettings {
@@ -75,6 +87,26 @@ export interface DesktopSettings {
     maxTokens?: number;
   };
   providers: Record<string, DesktopProviderSettings>;
+  mcpServers: Record<string, DesktopMcpServerSettings>;
+}
+
+export interface DesktopMcpServerSettings {
+  transport?: McpTransportMode;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
+  disabled?: boolean;
+}
+
+export interface ResolvedMcpServerConfig {
+  id: string;
+  transport: McpTransportMode;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  cwd?: string;
+  disabled: boolean;
 }
 
 function defaultProviderCatalog(): Record<string, DesktopProviderSettings> {
@@ -209,6 +241,7 @@ export function loadDesktopConfig(): ResolvedDesktopConfig {
     workspaceRoot,
     toolApprovalMode: normalizeToolApprovalMode(fileConfig.toolApprovalMode),
     llm,
+    mcpServers: resolveMcpServers(fileConfig.mcpServers),
   };
 }
 
@@ -225,6 +258,7 @@ export function getDesktopSettings(): DesktopSettings {
       ...(typeof fileConfig.llm?.maxTokens === "number" ? { maxTokens: fileConfig.llm.maxTokens } : {}),
     },
     providers: sanitizeDesktopProviderCatalog(mergeProviderCatalog(fileConfig.providers)),
+    mcpServers: sanitizeMcpServers(fileConfig.mcpServers),
   };
 }
 
@@ -241,6 +275,7 @@ export function saveDesktopSettings(settings: DesktopSettings): DesktopSettings 
       ...(typeof settings.llm.maxTokens === "number" ? { maxTokens: settings.llm.maxTokens } : {}),
     },
     providers: buildConfigProvidersForSave(settings.providers, previousConfig.providers),
+    mcpServers: buildMcpServersForSave(settings.mcpServers ?? previousConfig.mcpServers),
   };
   writeFileSync(configPath, `${JSON.stringify(nextConfig, null, 2)}\n`, "utf8");
   return getDesktopSettings();
@@ -326,6 +361,59 @@ function buildConfigProvidersForSave(
         } satisfies ProviderConfigFile,
       ];
     }),
+  );
+}
+
+function resolveMcpServers(servers: Record<string, McpServerConfigFile> | undefined): ResolvedMcpServerConfig[] {
+  return Object.entries(servers ?? {})
+    .map(([id, server]) => {
+      const command = typeof server.command === "string" ? server.command.trim() : "";
+      return {
+        id: id.trim(),
+        transport: normalizeMcpTransport(server.transport),
+        command,
+        args: normalizeStringArray(server.args),
+        env: normalizeStringRecord(server.env),
+        ...(typeof server.cwd === "string" && server.cwd.trim() ? { cwd: resolve(normalize(server.cwd.trim())) } : {}),
+        disabled: server.disabled === true,
+      } satisfies ResolvedMcpServerConfig;
+    })
+    .filter((server) => server.id && server.command && !server.disabled);
+}
+
+function sanitizeMcpServers(servers: Record<string, McpServerConfigFile> | undefined): Record<string, DesktopMcpServerSettings> {
+  return Object.fromEntries(
+    Object.entries(servers ?? {}).map(([id, server]) => [
+      id,
+      {
+        transport: normalizeMcpTransport(server.transport),
+        ...(typeof server.command === "string" && server.command.trim() ? { command: server.command.trim() } : {}),
+        ...(Array.isArray(server.args) ? { args: normalizeStringArray(server.args) } : {}),
+        ...(server.env && Object.keys(normalizeStringRecord(server.env)).length > 0 ? { env: normalizeStringRecord(server.env) } : {}),
+        ...(typeof server.cwd === "string" && server.cwd.trim() ? { cwd: server.cwd.trim() } : {}),
+        ...(server.disabled === true ? { disabled: true } : {}),
+      } satisfies DesktopMcpServerSettings,
+    ]),
+  );
+}
+
+function buildMcpServersForSave(
+  servers: Record<string, DesktopMcpServerSettings> | Record<string, McpServerConfigFile> | undefined,
+): Record<string, McpServerConfigFile> {
+  return Object.fromEntries(
+    Object.entries(servers ?? {})
+      .filter(([id]) => id.trim().length > 0)
+      .map(([id, server]) => [
+        id.trim(),
+        {
+          transport: normalizeMcpTransport(server.transport),
+          ...(typeof server.command === "string" && server.command.trim() ? { command: server.command.trim() } : {}),
+          ...(Array.isArray(server.args) ? { args: normalizeStringArray(server.args) } : {}),
+          ...(server.env && Object.keys(normalizeStringRecord(server.env)).length > 0 ? { env: normalizeStringRecord(server.env) } : {}),
+          ...(typeof server.cwd === "string" && server.cwd.trim() ? { cwd: server.cwd.trim() } : {}),
+          ...(server.disabled === true ? { disabled: true } : {}),
+        } satisfies McpServerConfigFile,
+      ]),
   );
 }
 
@@ -470,6 +558,30 @@ function normalizeMaxTokens(value: string | number): number {
 
 function normalizeToolApprovalMode(value: unknown): ToolApprovalMode {
   return value === "workspace_edits" ? "workspace_edits" : DEFAULT_TOOL_APPROVAL_MODE;
+}
+
+function normalizeMcpTransport(value: unknown): McpTransportMode {
+  return value === "stdio" ? "stdio" : "stdio";
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter(Boolean);
+}
+
+function normalizeStringRecord(value: unknown): Record<string, string> {
+  if (!isPlainObject(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value)
+      .map(([key, item]) => [key.trim(), typeof item === "string" ? item : String(item)])
+      .filter(([key, item]) => key && item),
+  );
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function ensureDesktopConfigDirectory(): void {

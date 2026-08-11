@@ -163,6 +163,15 @@ export interface DesktopProviderSettings {
 
 export type ToolApprovalMode = "ask" | "workspace_edits";
 
+export interface DesktopMcpServerSettings {
+  transport?: "stdio";
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
+  disabled?: boolean;
+}
+
 export interface DesktopSettings {
   configPath: string;
   workspaceRoot: string;
@@ -173,6 +182,7 @@ export interface DesktopSettings {
     maxTokens?: number;
   };
   providers: Record<string, DesktopProviderSettings>;
+  mcpServers: Record<string, DesktopMcpServerSettings>;
 }
 
 export interface DesktopProviderConnectionRequest {

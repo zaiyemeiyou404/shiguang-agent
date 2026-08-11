@@ -2,6 +2,7 @@ export * from "./types.js";
 export * from "./registry.js";
 export * from "./protocol.js";
 export * from "./mcp-adapter.js";
+export * from "./mcp-stdio-runtime.js";
 export * from "./builtins/echo.js";
 export { createReadTextFileTool } from "./builtins/read-text-file.js";
 export { createWriteTextFileTool } from "./builtins/write-text-file.js";

@@ -64,8 +64,21 @@ import {
   createSymbolSearchTool,
   createDependencyGraphTool,
 } from "../dist/tools/builtins/code-intelligence.js";
+import type { Tool } from "../dist/tools/types.js";
+import {
+  McpStdioToolRuntime,
+  type McpStdioServerConfig,
+} from "../dist/tools/mcp-stdio-runtime.js";
 import { createPlanner } from "./planner-factory.js";
-import { loadDesktopConfig, getDesktopSettings, saveDesktopSettings, getStoredProviderApiKey, type ToolApprovalMode } from "./config.js";
+import {
+  loadDesktopConfig,
+  getDesktopSettings,
+  saveDesktopSettings,
+  getStoredProviderApiKey,
+  type ResolvedDesktopConfig,
+  type ResolvedMcpServerConfig,
+  type ToolApprovalMode,
+} from "./config.js";
 import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
 import { existsSync, statSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -96,6 +109,8 @@ export class DesktopAppService {
   private artifactRepository: SqliteArtifactRepository;
   private memoryRepository: SqliteMemoryRepository;
   private memoryService: MemoryService;
+  private mcpRuntime: McpStdioToolRuntime | null = null;
+  private mcpRuntimeKey = "";
 
   constructor(store: DesktopStore) {
     this.store = store;
@@ -341,50 +356,8 @@ export class DesktopAppService {
       return coreRunToDesktop(run);
     }
 
-    const desktopConfig = loadDesktopConfig();
-    const { planner, label } = createPlanner(desktopConfig.llm);
-    const workspaceRoot = resolve(normalize(desktopConfig.workspaceRoot));
-    const tools = [
-      createListDirectoryTool(workspaceRoot),
-      createStatPathTool(workspaceRoot),
-      createInspectProjectTool(workspaceRoot),
-      createGitStatusTool(workspaceRoot),
-      createGitDiffTool(workspaceRoot),
-      createGitHubRepoTool(workspaceRoot),
-      createWebFetchTool(),
-      createWebSearchTool(),
-      createCollectDiagnosticsTool(workspaceRoot),
-      createCodeMapTool(workspaceRoot),
-      createSymbolSearchTool(workspaceRoot),
-      createDependencyGraphTool(workspaceRoot),
-      createListBackgroundProcessesTool(),
-      createReadBackgroundProcessTool(),
-      createReadTextFileTool(workspaceRoot),
-      createSearchWorkspaceTool(workspaceRoot),
-      createSearchMemoryTool(this.memoryService, workspaceRoot),
-      createRememberFactTool(this.memoryService, workspaceRoot),
-      createWriteTextFileTool(workspaceRoot),
-      createPatchTextFileTool(workspaceRoot),
-      createCopyPathTool(workspaceRoot),
-      createMovePathTool(workspaceRoot),
-      createDeletePathTool(workspaceRoot),
-      createRunTerminalCommandTool(workspaceRoot),
-      createStartBackgroundProcessTool(workspaceRoot),
-      createStopBackgroundProcessTool(),
-      createForgetMemoryTool(this.memoryService),
-      createRunValidationTool(workspaceRoot),
-    ];
-    const agent = new Agent({
-      eventSink: sink,
-      planner,
-      tools,
-      allowToolsWithoutApproval: approvalAllowlistForMode(desktopConfig.toolApprovalMode),
-      turnRepository: this.turnRepository,
-      memoryService: this.memoryService,
-      workspaceRoot,
-    });
-
     (async () => {
+      const { agent, label, workspaceRoot } = await this.createAgentRuntime(sink);
       const currentRunBeforeStart = await this.runRepository.get(runId);
       if (controller.signal.aborted || currentRunBeforeStart?.status === "cancelled") {
         return;
@@ -722,15 +695,37 @@ export class DesktopAppService {
     };
   }
 
-  private createAgentRuntime(sink: RepositoryEventSink): {
+  private async createAgentRuntime(sink: RepositoryEventSink): Promise<{
     agent: Agent;
     label: string;
     workspaceRoot: string;
-  } {
+  }> {
     const desktopConfig = loadDesktopConfig();
     const { planner, label } = createPlanner(desktopConfig.llm);
     const workspaceRoot = resolve(normalize(desktopConfig.workspaceRoot));
-    const tools = [
+    const tools = await this.createDesktopTools(desktopConfig, workspaceRoot);
+    const agent = new Agent({
+      eventSink: sink,
+      planner,
+      tools,
+      allowToolsWithoutApproval: approvalAllowlistForMode(desktopConfig.toolApprovalMode),
+      turnRepository: this.turnRepository,
+      memoryService: this.memoryService,
+      workspaceRoot,
+    });
+
+    return { agent, label, workspaceRoot };
+  }
+
+  private async createDesktopTools(desktopConfig: ResolvedDesktopConfig, workspaceRoot: string): Promise<Tool[]> {
+    return [
+      ...this.createBuiltinDesktopTools(workspaceRoot),
+      ...await this.discoverMcpTools(desktopConfig.mcpServers),
+    ];
+  }
+
+  private createBuiltinDesktopTools(workspaceRoot: string): Tool[] {
+    return [
       createListDirectoryTool(workspaceRoot),
       createStatPathTool(workspaceRoot),
       createInspectProjectTool(workspaceRoot),
@@ -760,17 +755,45 @@ export class DesktopAppService {
       createForgetMemoryTool(this.memoryService),
       createRunValidationTool(workspaceRoot),
     ];
-    const agent = new Agent({
-      eventSink: sink,
-      planner,
-      tools,
-      allowToolsWithoutApproval: approvalAllowlistForMode(desktopConfig.toolApprovalMode),
-      turnRepository: this.turnRepository,
-      memoryService: this.memoryService,
-      workspaceRoot,
-    });
+  }
 
-    return { agent, label, workspaceRoot };
+  private async discoverMcpTools(configs: ResolvedMcpServerConfig[]): Promise<Tool[]> {
+    if (configs.length === 0) return [];
+    const runtime = this.getMcpRuntime(configs);
+    return runtime.discoverTools();
+  }
+
+  private getMcpRuntime(configs: ResolvedMcpServerConfig[]): McpStdioToolRuntime {
+    const key = JSON.stringify(configs.map((config) => ({
+      id: config.id,
+      command: config.command,
+      args: config.args,
+      env: config.env,
+      cwd: config.cwd,
+      disabled: config.disabled,
+    })));
+    if (this.mcpRuntime && this.mcpRuntimeKey === key) {
+      return this.mcpRuntime;
+    }
+
+    if (this.mcpRuntime) {
+      void this.mcpRuntime.closeAll();
+    }
+
+    const stdioConfigs: McpStdioServerConfig[] = configs.map((config) => ({
+      id: config.id,
+      command: config.command,
+      args: config.args,
+      env: config.env,
+      cwd: config.cwd,
+      disabled: config.disabled,
+    }));
+    this.mcpRuntime = new McpStdioToolRuntime(stdioConfigs, {
+      clientInfo: { name: "shiguang-agent", version: "0.2.1" },
+      logger: (message) => console.warn(message),
+    });
+    this.mcpRuntimeKey = key;
+    return this.mcpRuntime;
   }
 
   private async handleWorkspaceRootCommand(input: {
@@ -916,7 +939,7 @@ export class DesktopAppService {
     }
 
     const sink = this.createRunEventSink();
-    const { agent, label, workspaceRoot } = this.createAgentRuntime(sink);
+    const { agent, label, workspaceRoot } = await this.createAgentRuntime(sink);
     const userMessage = await this.loadLatestUserMessage(run.sessionId, task);
     const controller = new AbortController();
     this.activeRunControllers.set(run.id, controller);
