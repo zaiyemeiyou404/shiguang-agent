@@ -29,12 +29,16 @@ On first launch, the app attempts to migrate legacy files from:
 
 After migration, the old `shiguang-agent` AppData directory is removed best-effort.
 
-## Clean uninstall
+## Uninstall choice
 
-The Windows installer includes a custom NSIS uninstall step that removes:
+The Windows installer asks whether to delete local data during uninstall.
+
+Choose **Yes** for a clean uninstall. This removes:
 
 - `$INSTDIR\shiguang-agent-data`
 - `%APPDATA%\shiguang-agent`
 - legacy Shiguang files under `%APPDATA%\Electron`
+
+Choose **No** to keep conversations, memories, settings, provider config, and caches for a later reinstall.
 
 For the unpacked portable build, deleting the app folder also deletes the app-owned `shiguang-agent-data/` folder if it is kept next to the executable.
