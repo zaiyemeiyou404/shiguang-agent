@@ -3311,3 +3311,655 @@ body::before,
     grid-template-columns: 52px 232px minmax(0, 1fr);
   }
 }
+
+/* Shiguang product polish v0.2.2: readable desktop shell, calmer hierarchy, safer approval layout. */
+:root {
+  --bg: #070a0f;
+  --bg-elev: #0d121a;
+  --bg-panel: #0f151e;
+  --bg-soft: rgba(92, 139, 189, 0.10);
+  --bg-hover: rgba(148, 163, 184, 0.10);
+  --border: rgba(148, 163, 184, 0.13);
+  --border-strong: rgba(148, 163, 184, 0.22);
+  --text: #f6f8fb;
+  --text-soft: rgba(226, 232, 240, 0.80);
+  --text-dim: rgba(148, 163, 184, 0.70);
+  --accent: #58a6ff;
+  --accent-soft: rgba(88, 166, 255, 0.16);
+  --success: #35d399;
+  --warning: #f2b84b;
+  --danger: #ff6b7a;
+  --shadow: 0 24px 70px rgba(0, 0, 0, 0.34);
+}
+
+body,
+.shell {
+  background:
+    radial-gradient(circle at 22% -18%, rgba(88, 166, 255, 0.18), transparent 30%),
+    radial-gradient(circle at 86% 112%, rgba(53, 211, 153, 0.09), transparent 30%),
+    #070a0f;
+}
+
+.app.simple-layout {
+  grid-template-columns: 92px 328px minmax(0, 1fr);
+  gap: 0;
+  height: 100vh;
+  border-top: 1px solid rgba(255, 255, 255, 0.035);
+}
+
+.app-nav-panel {
+  padding: 14px 10px;
+  background: linear-gradient(180deg, #0b1018, #080c12);
+  border-right: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.brand-mark {
+  width: 40px;
+  height: 40px;
+  border-radius: 13px;
+  background:
+    linear-gradient(135deg, rgba(88, 166, 255, 0.98), rgba(53, 211, 153, 0.92));
+  box-shadow: 0 12px 28px rgba(88, 166, 255, 0.22);
+  font-size: 14px;
+}
+
+.app-nav-copy {
+  display: grid;
+  gap: 2px;
+  margin-top: 8px;
+  text-align: center;
+}
+
+.app-nav-copy strong {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.app-nav-copy span {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.app-nav-group,
+.app-nav-footer {
+  width: 100%;
+}
+
+.app-nav-btn,
+.app-nav-btn.secondary {
+  width: 100%;
+  min-height: 62px;
+  display: grid;
+  place-items: center;
+  gap: 4px;
+  border-radius: 16px;
+}
+
+.app-nav-btn.active {
+  background: linear-gradient(180deg, rgba(88, 166, 255, 0.18), rgba(88, 166, 255, 0.08));
+  border-color: rgba(88, 166, 255, 0.22);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.app-nav-text {
+  display: block;
+  color: inherit;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.app-nav-glyph {
+  font-size: 17px;
+}
+
+.app-nav-status {
+  width: 100%;
+  min-height: 52px;
+  border-radius: 16px;
+  border-color: rgba(148, 163, 184, 0.12);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.app-nav-status small {
+  display: block;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.session-pane {
+  gap: 12px;
+  padding: 16px 14px;
+  background: linear-gradient(180deg, #101722, #0d131c);
+}
+
+.session-pane-header {
+  padding: 4px 4px 8px;
+}
+
+.session-pane-header h2 {
+  font-size: 26px;
+}
+
+.session-pane-header p {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-pane-header-actions .icon-btn {
+  width: 38px;
+  height: 38px;
+  border-radius: 14px;
+}
+
+.session-pane-tools {
+  padding: 12px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.session-controls-card .settings-input {
+  height: 42px;
+  border-radius: 14px;
+  background: rgba(3, 7, 12, 0.46);
+}
+
+.session-filter-row {
+  gap: 8px;
+}
+
+.session-filter-chip {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+}
+
+.session-action-row {
+  display: flex;
+}
+
+.session-action-row .tool-btn {
+  min-height: 34px;
+  border-radius: 12px;
+}
+
+.session-card {
+  position: relative;
+  padding: 13px 14px;
+  border-radius: 18px;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.session-card::before {
+  content: "";
+  position: absolute;
+  inset: 10px auto 10px 0;
+  width: 3px;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.session-card:hover {
+  background: rgba(148, 163, 184, 0.075);
+  border-color: rgba(148, 163, 184, 0.10);
+}
+
+.session-card.active {
+  background: linear-gradient(180deg, rgba(88, 166, 255, 0.15), rgba(255, 255, 255, 0.035));
+  border-color: rgba(88, 166, 255, 0.20);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.18);
+}
+
+.session-card.active::before {
+  background: var(--accent);
+}
+
+.session-name {
+  font-size: 14px;
+}
+
+.session-preview {
+  margin-top: 7px;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.chat-pane {
+  background:
+    linear-gradient(180deg, rgba(15, 21, 30, 0.72), rgba(7, 10, 15, 0.96)),
+    #070a0f;
+}
+
+.chat-pane-header {
+  min-height: 72px;
+  padding: 14px 22px;
+  background: rgba(7, 10, 15, 0.82);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.chat-pane-title .tiny {
+  display: block;
+}
+
+.chat-pane-title h2 {
+  margin-top: 3px;
+  font-size: 25px;
+  letter-spacing: -0.035em;
+}
+
+.chat-pane-title p {
+  max-width: 720px;
+  color: var(--text-dim);
+}
+
+.chat-pane .toolbar {
+  gap: 8px;
+}
+
+.chat-pane .toolbar .tool-btn {
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 13px;
+}
+
+.tool-btn.primary,
+.send-btn {
+  background: linear-gradient(135deg, #58a6ff, #35d399);
+  border-color: transparent;
+  color: #031018;
+  font-weight: 700;
+}
+
+.chat-banner-stack {
+  padding: 12px 22px 0;
+}
+
+.global-banner {
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.74);
+}
+
+.chat-surface {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px 24px 14px;
+}
+
+.chat-transcript {
+  max-width: 980px;
+  gap: 16px;
+  padding-bottom: 12px;
+}
+
+.timeline-node {
+  gap: 12px;
+}
+
+.timeline-dot {
+  width: 13px;
+  height: 13px;
+  border-color: #070a0f;
+  box-shadow: 0 0 0 4px rgba(88, 166, 255, 0.12);
+}
+
+.message,
+.event-card {
+  border-radius: 18px;
+  background: rgba(15, 23, 42, 0.76);
+  border-color: rgba(148, 163, 184, 0.14);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.16);
+}
+
+.message {
+  max-width: min(780px, 78%);
+  padding: 15px 17px;
+}
+
+.message.user {
+  background: linear-gradient(180deg, rgba(88, 166, 255, 0.20), rgba(29, 78, 216, 0.13));
+  border-color: rgba(88, 166, 255, 0.30);
+}
+
+.message.system {
+  max-width: min(980px, 100%);
+  background: rgba(148, 163, 184, 0.07);
+  border-style: dashed;
+}
+
+.message-meta {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.message p,
+.tool-json,
+.approval-diff {
+  font-size: 13px;
+}
+
+.message .approval-card,
+.approval-main-list .approval-card {
+  max-height: min(62vh, 680px);
+  border-radius: 18px;
+  background: rgba(10, 16, 24, 0.96);
+  border: 1px solid rgba(88, 166, 255, 0.22);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.24);
+}
+
+.approval-main {
+  padding: 18px 24px;
+}
+
+.approval-main-list {
+  max-width: 1080px;
+}
+
+.approval-preview {
+  border-radius: 16px;
+  background: rgba(2, 6, 12, 0.58);
+}
+
+.approval-diff {
+  max-height: min(42vh, 460px);
+  border-radius: 14px;
+}
+
+.approval-actions {
+  margin: 12px -12px -12px;
+  border-radius: 0 0 18px 18px;
+  background: linear-gradient(180deg, rgba(10, 16, 24, 0.82), rgba(10, 16, 24, 0.98));
+}
+
+.composer-dock {
+  width: min(980px, calc(100% - 48px));
+  margin: 0 auto 22px;
+  border-radius: 22px;
+  background: rgba(15, 23, 42, 0.92);
+  border-color: rgba(148, 163, 184, 0.16);
+  box-shadow:
+    0 24px 64px rgba(0, 0, 0, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.composer {
+  padding: 14px 16px;
+}
+
+.composer textarea {
+  min-height: 86px;
+  font-size: 14px;
+}
+
+.composer-action,
+.send-btn {
+  min-height: 38px;
+  border-radius: 13px;
+}
+
+.settings-drawer {
+  border-left: 1px solid rgba(148, 163, 184, 0.16);
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(8, 12, 18, 0.98));
+}
+
+.settings-summary-card,
+.provider-registry-item,
+.settings-source-card,
+.settings-diff-item,
+.detail-block,
+.status-card,
+.workspace-inline-stat,
+.run-phase-strip {
+  background: rgba(15, 23, 42, 0.58);
+  border-color: rgba(148, 163, 184, 0.13);
+}
+
+.provider-registry-item.active {
+  border-color: rgba(88, 166, 255, 0.32);
+  box-shadow: 0 14px 34px rgba(88, 166, 255, 0.08);
+}
+
+@media (max-width: 1320px) {
+  .app.simple-layout {
+    grid-template-columns: 84px 300px minmax(0, 1fr);
+  }
+
+  .session-pane-header h2 {
+    font-size: 23px;
+  }
+}
+
+@media (max-width: 1120px) {
+  .app.simple-layout {
+    grid-template-columns: 76px 270px minmax(0, 1fr);
+  }
+
+  .app-nav-text,
+  .app-nav-copy span,
+  .app-nav-status small {
+    display: none;
+  }
+
+  .app-nav-btn,
+  .app-nav-btn.secondary {
+    min-height: 48px;
+  }
+
+  .chat-pane-header {
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 920px) {
+  body {
+    overflow: auto;
+  }
+
+  .app.simple-layout {
+    grid-template-columns: 1fr;
+    height: auto;
+    min-height: 100vh;
+  }
+
+  .app-nav-panel {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    flex-direction: row;
+    align-items: center;
+    padding: 10px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .app-nav-top {
+    width: auto;
+  }
+
+  .app-nav-copy {
+    display: none;
+  }
+
+  .app-nav-group,
+  .app-nav-footer {
+    width: auto;
+    display: flex;
+    align-items: center;
+  }
+
+  .app-nav-btn,
+  .app-nav-btn.secondary,
+  .app-nav-status {
+    width: 48px;
+    min-height: 44px;
+  }
+
+  .session-pane,
+  .chat-pane {
+    min-height: 68vh;
+  }
+
+  .chat-pane-header,
+  .chat-surface,
+  .chat-banner-stack,
+  .approval-main {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .message {
+    max-width: 92%;
+  }
+
+  .composer-dock {
+    width: calc(100% - 20px);
+    margin-bottom: 10px;
+  }
+}
+
+/* Codex-like left conversation rail: flat rows instead of stacked cards. */
+.session-pane {
+  padding: 16px 10px 12px;
+  background: linear-gradient(180deg, #0f151d, #0b1118);
+}
+
+.session-pane-header {
+  padding: 0 8px 10px;
+}
+
+.session-pane-tools {
+  padding: 0 8px 10px;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.session-controls-card .settings-input {
+  height: 38px;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.session-filter-row {
+  margin-top: 10px;
+}
+
+.session-filter-chip {
+  min-height: 30px;
+  padding: 0 10px;
+  background: transparent;
+  border-color: rgba(148, 163, 184, 0.10);
+}
+
+.session-filter-chip:hover {
+  background: rgba(148, 163, 184, 0.075);
+}
+
+.session-filter-chip.active {
+  background: rgba(148, 163, 184, 0.12);
+  border-color: rgba(148, 163, 184, 0.16);
+  color: var(--text);
+}
+
+.session-action-row {
+  padding-top: 4px;
+}
+
+.session-action-row .tool-btn {
+  background: transparent;
+  border-color: rgba(148, 163, 184, 0.10);
+}
+
+.session-pane-list {
+  gap: 2px;
+  padding: 4px 0 0;
+}
+
+.session-card,
+.session-card.active,
+.session-card.pinned {
+  box-shadow: none;
+}
+
+.session-card {
+  min-height: 42px;
+  padding: 8px 10px 8px 14px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+}
+
+.session-card::before {
+  inset: 9px auto 9px 4px;
+  width: 2px;
+}
+
+.session-card:hover {
+  background: rgba(148, 163, 184, 0.075);
+  border-color: transparent;
+}
+
+.session-card.active {
+  background: rgba(148, 163, 184, 0.13);
+  border-color: transparent;
+}
+
+.session-card.active::before {
+  background: #f6f8fb;
+}
+
+.session-card.pinned:not(.active)::before {
+  background: rgba(242, 184, 75, 0.75);
+}
+
+.session-top {
+  gap: 6px;
+}
+
+.session-name-row {
+  align-items: center;
+}
+
+.session-name {
+  font-size: 13px;
+  font-weight: 560;
+  letter-spacing: -0.005em;
+}
+
+.session-preview {
+  margin-top: 3px;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.35;
+  -webkit-line-clamp: 1;
+}
+
+.session-card-meta {
+  margin-top: 4px;
+  justify-content: flex-start;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.session-card-status {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.session-pin-btn {
+  width: 20px;
+  height: 20px;
+  border: 0;
+  background: transparent;
+  opacity: 0;
+}
+
+.session-card:hover .session-pin-btn,
+.session-card.pinned .session-pin-btn {
+  opacity: 1;
+}
