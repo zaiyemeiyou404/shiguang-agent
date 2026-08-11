@@ -86,6 +86,11 @@ export class MemoryService implements MemoryStore {
     }
   }
 
+  async delete(id: string): Promise<void> {
+    await this.repo.delete(id);
+    this.index.remove(id);
+  }
+
   searchLocal(text: string, limit = 10): Memory[] {
     return this.index.search(text, limit);
   }

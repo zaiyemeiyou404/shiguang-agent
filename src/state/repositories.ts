@@ -50,6 +50,7 @@ export interface MemoryRepository {
   create(memory: Memory): Promise<void>;
   get(id: string): Promise<Memory | null>;
   update(id: string, patch: Partial<Memory>): Promise<void>;
+  delete(id: string): Promise<void>;
   search(scope: string, query: string, limit?: number): Promise<Memory[]>;
   listByWorkspace(workspaceScope: string, limit?: number): Promise<Memory[]>;
 }

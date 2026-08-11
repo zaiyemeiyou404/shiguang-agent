@@ -44,6 +44,21 @@ import { createDeletePathTool } from "../dist/tools/builtins/delete-path.js";
 import { createGitStatusTool } from "../dist/tools/builtins/git-status.js";
 import { createGitDiffTool } from "../dist/tools/builtins/git-diff.js";
 import { createInspectProjectTool } from "../dist/tools/builtins/inspect-project.js";
+import { createGitHubRepoTool } from "../dist/tools/builtins/github-repo.js";
+import { createWebFetchTool } from "../dist/tools/builtins/web-fetch.js";
+import { createWebSearchTool } from "../dist/tools/builtins/web-search.js";
+import { createCollectDiagnosticsTool } from "../dist/tools/builtins/collect-diagnostics.js";
+import {
+  createStartBackgroundProcessTool,
+  createListBackgroundProcessesTool,
+  createReadBackgroundProcessTool,
+  createStopBackgroundProcessTool,
+} from "../dist/tools/builtins/background-processes.js";
+import {
+  createSearchMemoryTool,
+  createRememberFactTool,
+  createForgetMemoryTool,
+} from "../dist/tools/builtins/memory-tools.js";
 import { createPlanner } from "./planner-factory.js";
 import { loadDesktopConfig, getDesktopSettings, saveDesktopSettings, getStoredProviderApiKey, type ToolApprovalMode } from "./config.js";
 import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
@@ -330,14 +345,25 @@ export class DesktopAppService {
       createInspectProjectTool(workspaceRoot),
       createGitStatusTool(workspaceRoot),
       createGitDiffTool(workspaceRoot),
+      createGitHubRepoTool(workspaceRoot),
+      createWebFetchTool(),
+      createWebSearchTool(),
+      createCollectDiagnosticsTool(workspaceRoot),
+      createListBackgroundProcessesTool(),
+      createReadBackgroundProcessTool(),
       createReadTextFileTool(workspaceRoot),
       createSearchWorkspaceTool(workspaceRoot),
+      createSearchMemoryTool(this.memoryService, workspaceRoot),
+      createRememberFactTool(this.memoryService, workspaceRoot),
       createWriteTextFileTool(workspaceRoot),
       createPatchTextFileTool(workspaceRoot),
       createCopyPathTool(workspaceRoot),
       createMovePathTool(workspaceRoot),
       createDeletePathTool(workspaceRoot),
       createRunTerminalCommandTool(workspaceRoot),
+      createStartBackgroundProcessTool(workspaceRoot),
+      createStopBackgroundProcessTool(),
+      createForgetMemoryTool(this.memoryService),
       createRunValidationTool(workspaceRoot),
     ];
     const agent = new Agent({
@@ -702,14 +728,25 @@ export class DesktopAppService {
       createInspectProjectTool(workspaceRoot),
       createGitStatusTool(workspaceRoot),
       createGitDiffTool(workspaceRoot),
+      createGitHubRepoTool(workspaceRoot),
+      createWebFetchTool(),
+      createWebSearchTool(),
+      createCollectDiagnosticsTool(workspaceRoot),
+      createListBackgroundProcessesTool(),
+      createReadBackgroundProcessTool(),
       createReadTextFileTool(workspaceRoot),
       createSearchWorkspaceTool(workspaceRoot),
+      createSearchMemoryTool(this.memoryService, workspaceRoot),
+      createRememberFactTool(this.memoryService, workspaceRoot),
       createWriteTextFileTool(workspaceRoot),
       createPatchTextFileTool(workspaceRoot),
       createCopyPathTool(workspaceRoot),
       createMovePathTool(workspaceRoot),
       createDeletePathTool(workspaceRoot),
       createRunTerminalCommandTool(workspaceRoot),
+      createStartBackgroundProcessTool(workspaceRoot),
+      createStopBackgroundProcessTool(),
+      createForgetMemoryTool(this.memoryService),
       createRunValidationTool(workspaceRoot),
     ];
     const agent = new Agent({

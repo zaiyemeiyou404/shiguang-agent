@@ -119,6 +119,10 @@ export class SqliteMemoryRepository implements MemoryRepository {
     this.db.prepare(`UPDATE memories SET ${assignments.join(", ")} WHERE id = ?`).run(...values);
   }
 
+  async delete(id: string): Promise<void> {
+    this.db.prepare("DELETE FROM memories WHERE id = ?").run(id);
+  }
+
   async search(scope: string, query: string, limit = 10): Promise<Memory[]> {
     const normalizedLimit = normalizeLimit(limit);
     const q = query.trim();

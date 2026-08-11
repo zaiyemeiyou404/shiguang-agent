@@ -15,3 +15,18 @@ export { createDeletePathTool } from "./builtins/delete-path.js";
 export { createGitStatusTool } from "./builtins/git-status.js";
 export { createGitDiffTool } from "./builtins/git-diff.js";
 export { createInspectProjectTool } from "./builtins/inspect-project.js";
+export { createGitHubRepoTool } from "./builtins/github-repo.js";
+export { createWebFetchTool } from "./builtins/web-fetch.js";
+export { createWebSearchTool } from "./builtins/web-search.js";
+export { createCollectDiagnosticsTool } from "./builtins/collect-diagnostics.js";
+export {
+  createStartBackgroundProcessTool,
+  createListBackgroundProcessesTool,
+  createReadBackgroundProcessTool,
+  createStopBackgroundProcessTool,
+} from "./builtins/background-processes.js";
+export {
+  createSearchMemoryTool,
+  createRememberFactTool,
+  createForgetMemoryTool,
+} from "./builtins/memory-tools.js";
