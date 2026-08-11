@@ -30,3 +30,8 @@ export {
   createRememberFactTool,
   createForgetMemoryTool,
 } from "./builtins/memory-tools.js";
+export {
+  createCodeMapTool,
+  createSymbolSearchTool,
+  createDependencyGraphTool,
+} from "./builtins/code-intelligence.js";

@@ -59,6 +59,11 @@ import {
   createRememberFactTool,
   createForgetMemoryTool,
 } from "../dist/tools/builtins/memory-tools.js";
+import {
+  createCodeMapTool,
+  createSymbolSearchTool,
+  createDependencyGraphTool,
+} from "../dist/tools/builtins/code-intelligence.js";
 import { createPlanner } from "./planner-factory.js";
 import { loadDesktopConfig, getDesktopSettings, saveDesktopSettings, getStoredProviderApiKey, type ToolApprovalMode } from "./config.js";
 import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
@@ -349,6 +354,9 @@ export class DesktopAppService {
       createWebFetchTool(),
       createWebSearchTool(),
       createCollectDiagnosticsTool(workspaceRoot),
+      createCodeMapTool(workspaceRoot),
+      createSymbolSearchTool(workspaceRoot),
+      createDependencyGraphTool(workspaceRoot),
       createListBackgroundProcessesTool(),
       createReadBackgroundProcessTool(),
       createReadTextFileTool(workspaceRoot),
@@ -732,6 +740,9 @@ export class DesktopAppService {
       createWebFetchTool(),
       createWebSearchTool(),
       createCollectDiagnosticsTool(workspaceRoot),
+      createCodeMapTool(workspaceRoot),
+      createSymbolSearchTool(workspaceRoot),
+      createDependencyGraphTool(workspaceRoot),
       createListBackgroundProcessesTool(),
       createReadBackgroundProcessTool(),
       createReadTextFileTool(workspaceRoot),

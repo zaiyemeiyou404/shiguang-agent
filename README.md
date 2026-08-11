@@ -53,6 +53,7 @@ $env:GEMINI_API_KEY="你的 key"
 - 桌面 UI：深色工作台界面，接近 Codex/Craft 一类 Agent 产品的布局。
 - 工具调用：支持读写文件、搜索工作区、运行终端命令、校验项目等内置工具。
 - 扩展工具：支持 GitHub 仓库读取、网页搜索/抓取、轻量代码诊断、后台进程管理和记忆管理。
+- 工程理解：支持生成代码地图、搜索符号、分析轻量依赖图，帮助 Agent 更快读懂工程结构。
 - 审批机制：高风险工具可进入审批流，用户确认后继续运行。
 - 工作区切换：可以在对话中要求切换工作区，也可以通过设置调整。
 - 上下文管理：保留关键运行记录，在上下文压力较高时进行压缩。
@@ -77,6 +78,7 @@ $env:GEMINI_API_KEY="你的 key"
 | `github_repo` | 读取仓库信息、issue、PR、Actions run、latest release |
 | `web_search` / `web_fetch` | 搜索网页、抓取网页正文 |
 | `collect_diagnostics` | 收集 TypeScript、JavaScript、Python、JSON 诊断 |
+| `code_map` / `symbol_search` / `dependency_graph` | 生成工程地图、查找符号、分析 import/use 依赖 |
 | `start_background_process` / `stop_background_process` | 启动或停止 dev server 等后台进程，需要审批 |
 | `search_memory` / `remember_fact` / `forget_memory` | 搜索、写入、删除本地记忆，删除需要审批 |
 

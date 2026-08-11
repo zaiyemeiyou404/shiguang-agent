@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import * as assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -8,6 +8,7 @@ import type { Memory } from "../../core/types.js";
 import type { MemoryRepository } from "../../state/repositories.js";
 import { MemoryService } from "../../memory/service.js";
 import { createCollectDiagnosticsTool } from "./collect-diagnostics.js";
+import { createCodeMapTool, createDependencyGraphTool, createSymbolSearchTool } from "./code-intelligence.js";
 import { parseGitHubRemote } from "./github-repo.js";
 import { createForgetMemoryTool, createRememberFactTool, createSearchMemoryTool } from "./memory-tools.js";
 
@@ -98,4 +99,50 @@ test("memory tools can remember, search, and forget a memory", async () => {
   assert.equal(deleted.deleted, true);
   const afterDelete = await search.execute({ query: "Shiguang", scope: "workspace" }) as { memories: unknown[] };
   assert.equal(afterDelete.memories.length, 0);
+});
+
+test("code intelligence tools map entrypoints, symbols, and dependencies", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "shiguang-code-map-"));
+  try {
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({
+      name: "sample-app",
+      scripts: { dev: "vite --host 0.0.0.0" },
+      dependencies: { react: "^19.0.0" },
+      devDependencies: { typescript: "^5.0.0", vite: "^6.0.0" },
+    }), "utf8");
+    writeFileSync(join(dir, "src", "main.ts"), [
+      "import React from 'react';",
+      "import { helper } from './util';",
+      "export function bootstrap() { return helper(React.version); }",
+    ].join("\n"), "utf8");
+    writeFileSync(join(dir, "src", "util.ts"), [
+      "export class Utility {}",
+      "export const helper = (value: string) => value;",
+    ].join("\n"), "utf8");
+
+    const codeMap = await createCodeMapTool(dir).execute({ maxFiles: 20 }) as {
+      entrypoints: string[];
+      frameworks: string[];
+      exportedSymbols: Array<{ name: string }>;
+    };
+    assert.deepEqual(codeMap.entrypoints, ["src/main.ts"]);
+    assert.equal(codeMap.frameworks.includes("react"), true);
+    assert.equal(codeMap.exportedSymbols.some((symbol) => symbol.name === "bootstrap"), true);
+
+    const symbolSearch = await createSymbolSearchTool(dir).execute({ query: "Utility" }) as {
+      results: Array<{ name: string; file: string }>;
+    };
+    assert.equal(symbolSearch.results[0]?.name, "Utility");
+    assert.equal(symbolSearch.results[0]?.file, "src/util.ts");
+
+    const graph = await createDependencyGraphTool(dir).execute({ maxFiles: 20 }) as {
+      localEdges: Array<{ from: string; to: string }>;
+      packageImports: Array<{ target: string; imports: number }>;
+    };
+    assert.equal(graph.localEdges.some((edge) => edge.from === "src/main.ts" && edge.to === "src/util"), true);
+    assert.equal(graph.packageImports.some((edge) => edge.target === "react"), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
