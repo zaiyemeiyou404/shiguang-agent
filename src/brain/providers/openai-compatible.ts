@@ -1,5 +1,6 @@
 import type { LlmPlannerModel, LlmPlannerModelRequest, LlmPlannerModelResponse, PlannerContext } from "../model-types.js";
 import type { ToolDescriptor } from "../../tools/types.js";
+import { describeToolForNativeFunction } from "../../tools/protocol.js";
 import {
   buildProviderMessages,
   buildProviderRepairMessages,
@@ -194,11 +195,7 @@ function buildNativeTools(tools: ToolDescriptor[]): OpenAIChatTool[] {
 }
 
 function buildToolDescription(tool: ToolDescriptor): string {
-  const effects = tool.effects
-    ? ` Effects: workspaceMutation=${tool.effects.workspaceMutation === true}, validationMode=${tool.effects.validationMode ?? "none"}.`
-    : "";
-  const approval = tool.requiresApproval ? " Runtime policy may pause this tool call for user approval." : "";
-  return `${tool.description}${effects}${approval}`.trim().slice(0, 1024);
+  return describeToolForNativeFunction(tool);
 }
 
 function normalizeToolParameters(schema: Record<string, unknown> | undefined): Record<string, unknown> {

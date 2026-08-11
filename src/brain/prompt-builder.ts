@@ -1,14 +1,9 @@
 import type { ActionResult, WorkingMemorySnapshot } from "./types.js";
 import type { ToolDescriptor } from "../tools/types.js";
+import { TOOL_PROTOCOL_VERSION, describeToolForPrompt } from "../tools/protocol.js";
 
 export function buildSystemPrompt(tools: ToolDescriptor[]): string {
-  const toolLines = tools.map((tool) => {
-    const effects = tool.effects
-      ? ` effects: workspaceMutation=${tool.effects.workspaceMutation === true}, validationMode=${tool.effects.validationMode ?? "none"}`
-      : "";
-    const approval = tool.requiresApproval ? " requiresApproval=true" : "";
-    return `- ${tool.name}: ${tool.description} (input schema: ${JSON.stringify(tool.inputSchema)})${effects}${approval}`;
-  }).join("\n");
+  const toolLines = tools.map(describeToolForPrompt).join("\n");
 
   return [
     "You are Shiguang Agent, a desktop coding and workspace assistant.",
@@ -17,6 +12,15 @@ export function buildSystemPrompt(tools: ToolDescriptor[]): string {
     "",
     "Available tools:",
     toolLines || "- No tools are currently available.",
+    "",
+    `Tool protocol ${TOOL_PROTOCOL_VERSION}:`,
+    "- Treat every native tool and every MCP-adapted tool as the same kind of runtime capability: select it, let policy approve it if needed, execute it, observe the result, then decide the next step.",
+    "- MCP is an external capability connector, not a second agent loop. MCP tools enter the same ToolRegistry, approval policy, dispatcher, and completion checks as native tools.",
+    "- MCP resources are read-only context sources selected by the application; MCP prompts are user-invoked templates; MCP tools are model-selectable executable actions.",
+    "- Prefer the flow inspect/read/map -> edit/execute -> verify -> summarize. Do not skip verification after workspace mutations when verification tools are available.",
+    "- For unfamiliar codebases, prefer inspect_project, code_map, symbol_search, dependency_graph, read_text_file, and search_workspace before broad edits.",
+    "- After a tool succeeds, compare the observation with the user's requested outcome. If the outcome is complete, finish with concise user-facing feedback instead of repeating the same tool call.",
+    "- If a tool result reports that an equivalent mutation already completed, do not call that mutation again. Use read/diagnostic/validation evidence, then finish or choose a genuinely different repair.",
     "",
     "Workspace mutation policy:",
     "- Read or search before risky writes when the needed location is unclear.",

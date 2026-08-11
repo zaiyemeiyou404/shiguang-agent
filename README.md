@@ -197,3 +197,15 @@ Release 会上传：
 - 增加更多工具卡片和运行过程可视化。
 - 增加自动更新能力。
 - 明确开源许可证。
+
+## 工具协议和 MCP
+
+拾光 Agent 已新增内部工具协议 `shiguang.tool.v1`，会把每个工具统一标记为来源、类别、阶段、风险、审批策略和推荐后续工具。
+
+MCP 会被当作外部能力接入层，而不是另一套 Agent 循环。MCP tool 接入后应适配成普通 `ToolDescriptor`，继续走同一个 `ToolRegistry`、审批策略、dispatcher、事件日志和完成判断。
+
+详细设计见：
+
+```text
+docs/tool-protocol.md
+```
