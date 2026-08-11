@@ -15,6 +15,8 @@ Main files:
 - `shiguang-store.json`: lightweight desktop session cache
 - `shiguang.config.json`: desktop settings and provider config
 
+Provider API keys saved from the desktop settings panel are protected with Electron `safeStorage` when OS encryption is available. Legacy plaintext keys in `shiguang.config.json` are migrated to an `encryptedApiKey` field on the next config read/save.
+
 You can override the data directory with either environment variable:
 
 - `SHIGUANG_USER_DATA_DIR`

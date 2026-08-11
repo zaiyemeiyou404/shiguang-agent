@@ -113,6 +113,7 @@ export class Agent {
         { signal: input.signal },
       );
 
+      await this.emitSyntheticFinalFeedback(input.runId, state);
       await this.persistAssistantTurn(sessionId, summarizeAssistantTurn(state));
       return { state };
     } catch (error) {
@@ -186,6 +187,7 @@ export class Agent {
         );
       }
 
+      await this.emitSyntheticFinalFeedback(input.runId, state);
       await this.persistAssistantTurn(sessionId, summarizeAssistantTurn(state));
       return { state };
     } catch (error) {
@@ -214,6 +216,13 @@ export class Agent {
   private async persistAssistantTurn(sessionId: string, content: string): Promise<void> {
     if (!this.options.turnRepository) return;
     await this.options.turnRepository.create(makeTurn(sessionId, "assistant", content));
+  }
+
+  private async emitSyntheticFinalFeedback(runId: string, state: LoopState): Promise<void> {
+    if (!this.options.eventSink || state.lastResult?.metadata?.syntheticFinalFeedback !== true) return;
+    const content = summarizeAssistantTurn(state).trim();
+    if (!content) return;
+    await this.options.eventSink.record(runId, "message", { content });
   }
 
   private async emitContextCompactionEvent(runId: string, diagnostics: ContextBuildDiagnostics): Promise<void> {
@@ -249,7 +258,8 @@ function shouldEmitContextCompactionEvent(
   if (savedBudget <= 0) return false;
   if (usedLlmCompactor) return true;
   const savedRatio = compression.originalBudget > 0 ? savedBudget / compression.originalBudget : 0;
-  return savedBudget >= 128 || savedRatio >= 0.1;
+  const budgetPressure = compression.budgetPressure ?? 0;
+  return budgetPressure >= 0.95 && (savedBudget >= 1024 || savedRatio >= 0.2);
 }
 
 function makeTurn(sessionId: string, role: Turn["role"], content: string): Turn {

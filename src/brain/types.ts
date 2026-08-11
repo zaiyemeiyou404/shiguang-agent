@@ -119,4 +119,5 @@ export interface ActionResultMetadata {
   errorKind?: ToolErrorKind;
   workspaceMutation?: boolean;
   validationMode?: ValidationModeHint;
+  syntheticFinalFeedback?: boolean;
 }

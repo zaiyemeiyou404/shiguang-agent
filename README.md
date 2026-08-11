@@ -11,6 +11,8 @@
 - 安装包：`拾光 Agent Setup 0.2.0.exe`
 - 免安装版：`win-unpacked.zip`
 
+`latest` 预发布会在 `main` 分支更新后自动刷新，适合想直接试用最新构建的用户；正式版本仍使用 `v*` tag 发布。
+
 如果使用免安装版，解压后运行：
 
 ```text
@@ -42,6 +44,8 @@ $env:GEMINI_API_KEY="你的 key"
 ```
 
 本项目不会把 API Key 提交到仓库。请不要把真实密钥写入 README、issue、commit 或截图里。
+
+桌面端保存到本机的 API Key 会优先使用 Electron `safeStorage` 加密；旧版本明文配置会在可用时自动迁移到加密字段。
 
 ## 能做什么
 

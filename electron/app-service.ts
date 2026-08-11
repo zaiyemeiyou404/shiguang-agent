@@ -1586,7 +1586,8 @@ function isMeaningfulContextCompactionEvent(event: RunEvent): boolean {
   if (savedBudget <= 0) return false;
   if (payload.usedLlmCompactor === true) return true;
   const savedRatio = originalBudget > 0 ? savedBudget / originalBudget : 0;
-  return savedBudget >= 128 || savedRatio >= 0.1;
+  const budgetPressure = typeof payload.budgetPressure === "number" ? payload.budgetPressure : 0;
+  return budgetPressure >= 0.95 && (savedBudget >= 1024 || savedRatio >= 0.2);
 }
 
 function coreEventToConversationEntry(sessionId: string, event: RunEvent): DesktopConversationEntry | null {

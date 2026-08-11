@@ -1,4 +1,4 @@
-import { app } from "electron";
+import { app, safeStorage } from "electron";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, normalize, resolve } from "node:path";
 
@@ -16,6 +16,8 @@ interface ProviderConfigFile {
   authMode?: ProviderAuthMode;
   baseURL?: string;
   apiKey?: string;
+  encryptedApiKey?: string;
+  apiKeyStorage?: "safeStorage" | "plain";
   apiKeyEnv?: string;
   model?: string;
   maxTokens?: number;
@@ -54,6 +56,8 @@ export interface DesktopProviderSettings {
   authMode?: ProviderAuthMode;
   baseURL?: string;
   apiKey?: string;
+  encryptedApiKey?: string;
+  apiKeyStorage?: "safeStorage" | "plain";
   apiKeyMasked?: string;
   hasStoredApiKey?: boolean;
   apiKeyEnv?: string;
@@ -157,7 +161,7 @@ export function getDesktopConfigPath(): string {
 
 export function loadDesktopConfig(): ResolvedDesktopConfig {
   const configPath = getDesktopConfigPath();
-  const fileConfig = readConfigFile(configPath);
+  const fileConfig = readMigratedConfigFile(configPath);
   const providerName = process.env.SHIGUANG_LLM_PROVIDER
     ?? fileConfig.llm?.provider
     ?? "openai";
@@ -180,7 +184,7 @@ export function loadDesktopConfig(): ResolvedDesktopConfig {
       ? providerConfig.apiKey ?? ""
       : process.env.SHIGUANG_LLM_API_KEY
         ?? readProviderApiKey(providerConfig)
-        ?? fileConfig.llm?.apiKey
+        ?? readStoredProviderApiKey(fileConfig.llm)
         ?? "",
     model: process.env.SHIGUANG_LLM_MODEL
       ?? fileConfig.llm?.model
@@ -210,7 +214,7 @@ export function loadDesktopConfig(): ResolvedDesktopConfig {
 
 export function getDesktopSettings(): DesktopSettings {
   const configPath = getDesktopConfigPath();
-  const fileConfig = readConfigFile(configPath);
+  const fileConfig = readMigratedConfigFile(configPath);
   return {
     configPath,
     workspaceRoot: fileConfig.workspaceRoot ?? process.cwd(),
@@ -227,7 +231,7 @@ export function getDesktopSettings(): DesktopSettings {
 export function saveDesktopSettings(settings: DesktopSettings): DesktopSettings {
   ensureDesktopConfigDirectory();
   const configPath = getDesktopConfigPath();
-  const previousConfig = readConfigFile(configPath);
+  const previousConfig = readMigratedConfigFile(configPath);
   const nextConfig: DesktopConfigFile = {
     workspaceRoot: settings.workspaceRoot,
     toolApprovalMode: normalizeToolApprovalMode(settings.toolApprovalMode),
@@ -244,8 +248,19 @@ export function saveDesktopSettings(settings: DesktopSettings): DesktopSettings 
 
 export function getStoredProviderApiKey(providerKey: string): string {
   const configPath = getDesktopConfigPath();
+  const fileConfig = readMigratedConfigFile(configPath);
+  return readStoredProviderApiKey(fileConfig.providers?.[providerKey]) ?? "";
+}
+
+function readMigratedConfigFile(configPath: string): DesktopConfigFile {
   const fileConfig = readConfigFile(configPath);
-  return fileConfig.providers?.[providerKey]?.apiKey?.trim() ?? "";
+  if (!existsSync(configPath)) return fileConfig;
+
+  const migration = migratePlaintextSecrets(fileConfig);
+  if (migration.changed) {
+    writeFileSync(configPath, `${JSON.stringify(migration.config, null, 2)}\n`, "utf8");
+  }
+  return migration.config;
 }
 
 function readConfigFile(configPath: string): DesktopConfigFile {
@@ -269,7 +284,7 @@ function readProviderApiKey(providerConfig: ProviderConfigFile | undefined): str
     const envValue = process.env[providerConfig.apiKeyEnv];
     if (envValue) return envValue;
   }
-  return providerConfig.apiKey;
+  return readStoredProviderApiKey(providerConfig);
 }
 
 function sanitizeDesktopProviderCatalog(catalog: Record<string, DesktopProviderSettings>): Record<string, DesktopProviderSettings> {
@@ -279,12 +294,14 @@ function sanitizeDesktopProviderCatalog(catalog: Record<string, DesktopProviderS
 }
 
 function sanitizeDesktopProviderSettings(provider: DesktopProviderSettings): DesktopProviderSettings {
-  const storedApiKey = provider.authMode === "none" ? (provider.apiKey ?? "") : "";
-  const hasStoredApiKey = provider.authMode !== "none" && Boolean(provider.apiKey?.trim());
+  const storedApiKey = provider.authMode === "none" ? (provider.apiKey ?? "") : readStoredProviderApiKey(provider);
+  const hasStoredApiKey = provider.authMode !== "none" && Boolean(storedApiKey?.trim());
+  const { encryptedApiKey: _encryptedApiKey, apiKeyStorage: _apiKeyStorage, ...publicProvider } = provider;
   return {
-    ...provider,
+    ...publicProvider,
     apiKey: storedApiKey,
-    ...(hasStoredApiKey ? { apiKeyMasked: maskApiKey(provider.apiKey ?? ""), hasStoredApiKey: true } : {}),
+    ...(provider.authMode !== "none" ? { apiKey: "" } : {}),
+    ...(hasStoredApiKey ? { apiKeyMasked: maskApiKey(storedApiKey ?? ""), hasStoredApiKey: true } : {}),
   };
 }
 
@@ -295,17 +312,14 @@ function buildConfigProvidersForSave(
   return Object.fromEntries(
     Object.entries(providers).map(([key, provider]) => {
       const previousProvider = previousProviders?.[key];
-      const nextApiKey = provider.apiKey?.trim();
-      const preservedApiKey = !nextApiKey && provider.hasStoredApiKey ? previousProvider?.apiKey?.trim() : undefined;
+      const apiKeyFields = buildApiKeyFieldsForSave(provider, previousProvider);
       return [
         key,
         {
           ...(provider.type ? { type: provider.type } : {}),
           ...(provider.authMode ? { authMode: provider.authMode } : {}),
           ...(provider.baseURL?.trim() ? { baseURL: provider.baseURL.trim() } : {}),
-          ...((provider.authMode === "none"
-            ? (nextApiKey ? { apiKey: nextApiKey } : {})
-            : (nextApiKey ? { apiKey: nextApiKey } : preservedApiKey ? { apiKey: preservedApiKey } : {}))),
+          ...apiKeyFields,
           ...(provider.apiKeyEnv?.trim() ? { apiKeyEnv: provider.apiKeyEnv.trim() } : {}),
           ...(provider.model?.trim() ? { model: provider.model.trim() } : {}),
           ...(typeof provider.maxTokens === "number" ? { maxTokens: provider.maxTokens } : {}),
@@ -313,6 +327,121 @@ function buildConfigProvidersForSave(
       ];
     }),
   );
+}
+
+function buildApiKeyFieldsForSave(
+  provider: DesktopProviderSettings,
+  previousProvider?: ProviderConfigFile,
+): Pick<ProviderConfigFile, "apiKey" | "encryptedApiKey" | "apiKeyStorage"> {
+  const nextApiKey = provider.apiKey?.trim();
+  if (provider.authMode === "none") {
+    return nextApiKey ? { apiKey: nextApiKey } : {};
+  }
+
+  if (nextApiKey) {
+    return protectApiKeyForConfig(nextApiKey);
+  }
+
+  if (!provider.hasStoredApiKey) return {};
+
+  if (previousProvider?.encryptedApiKey) {
+    return {
+      encryptedApiKey: previousProvider.encryptedApiKey,
+      apiKeyStorage: previousProvider.apiKeyStorage ?? "safeStorage",
+    };
+  }
+
+  const previousApiKey = readStoredProviderApiKey(previousProvider);
+  return previousApiKey ? protectApiKeyForConfig(previousApiKey) : {};
+}
+
+function migratePlaintextSecrets(config: DesktopConfigFile): { config: DesktopConfigFile; changed: boolean } {
+  let changed = false;
+  const next: DesktopConfigFile = { ...config };
+
+  if (next.llm) {
+    const migrated = migrateProviderSecret(next.llm);
+    next.llm = migrated.provider;
+    changed = changed || migrated.changed;
+  }
+
+  if (next.providers) {
+    const providers: Record<string, ProviderConfigFile> = {};
+    for (const [key, provider] of Object.entries(next.providers)) {
+      const migrated = migrateProviderSecret(provider);
+      providers[key] = migrated.provider;
+      changed = changed || migrated.changed;
+    }
+    next.providers = providers;
+  }
+
+  return { config: next, changed };
+}
+
+function migrateProviderSecret<T extends ProviderConfigFile>(provider: T): { provider: T; changed: boolean } {
+  const apiKey = provider.apiKey?.trim();
+  if (!apiKey || provider.authMode === "none") {
+    return { provider, changed: false };
+  }
+
+  const { apiKey: _legacyApiKey, ...rest } = provider;
+  return {
+    provider: {
+      ...rest,
+      ...protectApiKeyForConfig(apiKey),
+    } as T,
+    changed: true,
+  };
+}
+
+function readStoredProviderApiKey(providerConfig: ProviderConfigFile | undefined): string | undefined {
+  if (!providerConfig) return undefined;
+  if (providerConfig.encryptedApiKey) {
+    const decrypted = decryptApiKeyFromConfig(providerConfig.encryptedApiKey);
+    if (decrypted) return decrypted;
+  }
+  return providerConfig.apiKey?.trim() || undefined;
+}
+
+function protectApiKeyForConfig(apiKey: string): Pick<ProviderConfigFile, "apiKey" | "encryptedApiKey" | "apiKeyStorage"> {
+  const encryptedApiKey = encryptApiKeyForConfig(apiKey);
+  if (encryptedApiKey) {
+    return {
+      encryptedApiKey,
+      apiKeyStorage: "safeStorage",
+    };
+  }
+  return {
+    apiKey,
+    apiKeyStorage: "plain",
+  };
+}
+
+function encryptApiKeyForConfig(apiKey: string): string | null {
+  if (!canUseSafeStorage()) return null;
+  try {
+    return safeStorage.encryptString(apiKey).toString("base64");
+  } catch {
+    return null;
+  }
+}
+
+function decryptApiKeyFromConfig(value: string): string | null {
+  if (!canUseSafeStorage()) return null;
+  try {
+    const decrypted = safeStorage.decryptString(Buffer.from(value, "base64")).trim();
+    return decrypted || null;
+  } catch {
+    return null;
+  }
+}
+
+function canUseSafeStorage(): boolean {
+  try {
+    return safeStorage.isEncryptionAvailable();
+  } catch {
+    return false;
+  }
 }
 
 function maskApiKey(apiKey: string): string {

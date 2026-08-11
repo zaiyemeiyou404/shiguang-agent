@@ -1032,6 +1032,7 @@ export async function runLoop(
     input = { ...input, history: state.history, workingMemory: state.workingMemory };
   }
 
+  finalizeDanglingCompletionCheck(state);
   return state;
 }
 
@@ -1069,7 +1070,7 @@ function resolveDuplicateWorkspaceMutation(
 
   const signature = toolActionSignature(decision.action);
   if (signature && hasCompletionCheckAfterMutation(history, duplicate.index, signature)) {
-    const feedback = buildDuplicateWorkspaceMutationFeedback(decision, duplicate.result, latestValidationAfterMutation);
+    const feedback = buildCompletionGateFeedback(decision, duplicate.result, latestValidationAfterMutation);
     return {
       kind: "decision",
       decision: {
@@ -1109,11 +1110,11 @@ function buildCompletionCheckResult(
     status,
     repeatedActionPrevented: true,
     duplicateSignature,
-    action: {
-      toolName,
-      target,
-      label: labelWorkspaceAction(toolName),
-    },
+        action: {
+          toolName,
+          target,
+          label: labelWorkspaceActionSafe(toolName),
+        },
     validation: latestValidation
       ? {
           ok: !validationFailed,
@@ -1176,6 +1177,143 @@ function findLatestValidationAfterMutation(history: ActionResult[], mutationInde
     }
   }
   return null;
+}
+
+type CompletionCheckPayload = {
+  status: string;
+  action?: {
+    toolName?: string;
+    target?: string;
+    label?: string;
+  };
+  validation?: {
+    ok?: boolean;
+    summary?: string;
+  } | null;
+};
+
+function finalizeDanglingCompletionCheck(state: LoopState): void {
+  if (state.stopReason) return;
+  const completionCheck = parseCompletionCheckPayload(state.lastResult);
+  if (!completionCheck) return;
+
+  const feedback = buildCompletionCheckFeedback(completionCheck);
+  const failed = completionCheck.status === "needs_repair" || completionCheck.validation?.ok === false;
+  const action: BrainDecision["action"] = failed
+    ? { kind: "fail", reason: feedback }
+    : { kind: "respond", content: feedback };
+  const result: ActionResult = {
+    action,
+    ok: !failed,
+    output: feedback,
+    ...(failed ? { error: feedback } : {}),
+    metadata: {
+      category: failed ? "runtime_error" : "assistant_response",
+      summary: feedback,
+      retryable: false,
+      syntheticFinalFeedback: true,
+    },
+  };
+
+  state.lastDecision = {
+    action,
+    reasoning: "Runtime finalized a dangling completion_check so the run stops with user-facing feedback.",
+  };
+  state.lastResult = result;
+  state.history.push(result);
+  state.workingMemory = updateWorkingMemory(state.workingMemory, state.steps, result);
+  state.stopReason = failed ? "fail" : "respond";
+  state.stopSummary = feedback;
+}
+
+function parseCompletionCheckPayload(result: ActionResult | null): CompletionCheckPayload | null {
+  if (!result || result.action.kind !== "tool_call" || result.action.toolName !== "completion_check") {
+    return null;
+  }
+  if (!result.output || typeof result.output !== "object") return null;
+  const output = result.output as {
+    status?: unknown;
+    action?: { toolName?: unknown; target?: unknown; label?: unknown };
+    validation?: { ok?: unknown; summary?: unknown } | null;
+  };
+  const status = typeof output.status === "string" ? output.status : "";
+  if (!status) return null;
+  const action = output.action && typeof output.action === "object"
+    ? {
+        ...(typeof output.action.toolName === "string" ? { toolName: output.action.toolName } : {}),
+        ...(typeof output.action.target === "string" ? { target: output.action.target } : {}),
+        ...(typeof output.action.label === "string" ? { label: output.action.label } : {}),
+      }
+    : undefined;
+  const validation = output.validation && typeof output.validation === "object"
+    ? {
+        ...(typeof output.validation.ok === "boolean" ? { ok: output.validation.ok } : {}),
+        ...(typeof output.validation.summary === "string" ? { summary: output.validation.summary } : {}),
+      }
+    : output.validation === null
+      ? null
+      : undefined;
+  return { status, ...(action ? { action } : {}), ...(validation !== undefined ? { validation } : {}) };
+}
+
+function buildCompletionCheckFeedback(payload: CompletionCheckPayload): string {
+  const toolName = payload.action?.toolName ?? "tool";
+  const label = payload.action?.label ?? labelWorkspaceActionSafe(toolName);
+  const target = payload.action?.target;
+  const validationSummary = summarizeCompletionValidation(payload.validation);
+
+  if (payload.status === "needs_repair" || payload.validation?.ok === false) {
+    return target
+      ? `已停止重复执行：${target} 已${label}，但验证没有通过。${validationSummary} 请换一种修复方式继续。`
+      : `已停止重复执行：工具动作已经执行，但验证没有通过。${validationSummary} 请换一种修复方式继续。`;
+  }
+
+  return target
+    ? `已完成：${target} 已${label}。${validationSummary} 我已停止重复执行相同工具。`
+    : `已完成：${toolName} 动作已经执行。${validationSummary} 我已停止重复执行相同工具。`;
+}
+
+function buildCompletionGateFeedback(
+  decision: BrainDecision,
+  completedResult: ActionResult,
+  latestValidation: ActionResult | null,
+): string {
+  const toolName = decision.action.toolName ?? completedResult.action.toolName ?? "tool";
+  const target = inferWorkspaceActionTarget(decision.action)
+    ?? inferWorkspaceActionTarget(completedResult.action)
+    ?? inferOutputPath(completedResult.output);
+  const validationFailed = latestValidation ? validationDidFail(latestValidation) : false;
+  const validationSummary = latestValidation
+    ? summarizeValidationResult(latestValidation) ?? (validationFailed ? "验证未通过。" : "验证已完成。")
+    : "没有检测到额外验证步骤。";
+  const label = labelWorkspaceActionSafe(toolName);
+
+  if (validationFailed) {
+    return target
+      ? `文件已${label}：${target}，但验证未通过：${validationSummary} 我已停止重复执行同一个写入动作，请根据验证错误继续修复。`
+      : `工具动作已经执行，但验证未通过：${validationSummary} 我已停止重复执行同一个写入动作，请根据验证错误继续修复。`;
+  }
+
+  return target
+    ? `已完成：${target} 已${label}。${validationSummary} 无需再次执行同一个写入动作。`
+    : `已完成：${toolName} 动作已经执行。${validationSummary} 无需再次执行同一个工具动作。`;
+}
+
+function summarizeCompletionValidation(validation: CompletionCheckPayload["validation"]): string {
+  const summary = validation?.summary?.trim();
+  if (summary) return `验证结果：${summary}`;
+  if (validation?.ok === true) return "验证已通过。";
+  if (validation?.ok === false) return "验证未通过。";
+  return "没有检测到额外验证步骤。";
+}
+
+function labelWorkspaceActionSafe(toolName: string): string {
+  if (toolName === "delete_path") return "删除";
+  if (toolName === "move_path") return "移动";
+  if (toolName === "copy_path") return "复制";
+  if (toolName === "patch_text_file") return "修改";
+  if (toolName === "write_text_file") return "写入/更新";
+  return "处理";
 }
 
 function buildDuplicateWorkspaceMutationFeedback(

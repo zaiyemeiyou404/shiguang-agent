@@ -110,3 +110,46 @@ jobs:
             release-files/*.exe
             release-files/*.zip
           generate_release_notes: true
+
+  publish-latest:
+    name: Publish Latest Download
+    if: github.ref == 'refs/heads/main'
+    needs: build-desktop
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Flatten latest files
+        shell: bash
+        run: |
+          mkdir -p release-files
+          find release-artifacts -type f \( \
+            -name '*.exe' -o \
+            -name 'win-unpacked.zip' -o \
+            -name 'linux-unpacked.zip' \
+          \) -exec cp {} release-files/ \;
+          ls -R release-files
+
+      - name: Replace latest prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release delete latest --yes --cleanup-tag || true
+          git tag -f latest "${GITHUB_SHA}"
+          git push -f origin latest
+          gh release create latest release-files/* \
+            --title "Shiguang Agent latest" \
+            --notes "Automatic build from main commit ${GITHUB_SHA}." \
+            --prerelease \
+            --target "${GITHUB_SHA}"

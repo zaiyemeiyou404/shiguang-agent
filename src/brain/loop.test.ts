@@ -735,6 +735,87 @@ test("runLoop validates instead of repeating a model-emitted approval request", 
   assert.equal(state.lastDecision?.action.toolName, "run_validation");
 });
 
+test("runLoop finalizes a dangling completion_check with user feedback at the step limit", async () => {
+  const duplicateWrite: BrainDecision = {
+    action: { kind: "tool_call", toolName: "write_text_file", toolInput: { path: "christmas_tree.py", content: "print('ok')\n" } },
+    reasoning: "Model repeated the same write at the end of the step budget.",
+  };
+
+  const seededWrite: ActionResult = {
+    action: duplicateWrite.action,
+    ok: true,
+    output: { path: "christmas_tree.py", bytes: 12 },
+    metadata: {
+      category: "tool_observation",
+      summary: "File written.",
+      retryable: false,
+      toolName: "write_text_file",
+      workspaceMutation: true,
+      validationMode: "all",
+    },
+  };
+
+  const seededValidation: ActionResult = {
+    action: { kind: "tool_call", toolName: "run_validation", toolInput: { mode: "all" } },
+    ok: true,
+    output: { ok: true, mode: "all", summary: "Validation passed." },
+    metadata: {
+      category: "tool_observation",
+      summary: "Validation passed.",
+      retryable: false,
+      toolName: "run_validation",
+    },
+  };
+
+  const state = await runLoop(
+    {
+      context: makeContext("create christmas_tree.py"),
+      runId: "run_dangling_completion_check",
+      priorTurns: [],
+      history: [seededWrite, seededValidation],
+      workingMemory: {
+        step: 2,
+        lastActionKind: "tool_call",
+        lastToolName: "run_validation",
+      },
+      availableTools: [
+        { name: "write_text_file", description: "write", inputSchema: {}, risk: "write", requiresApproval: true, capability: "fs.write" },
+        { name: "run_validation", description: "validate", inputSchema: {}, risk: "execute", requiresApproval: false, capability: "process.validate" },
+      ],
+    },
+    {
+      planner: {
+        async decide(): Promise<BrainDecision> {
+          return duplicateWrite;
+        },
+      },
+      policy: {
+        async check(): Promise<BrainDecision> {
+          throw new Error("policy should not be called for an injected completion_check");
+        },
+      },
+      dispatcher: {
+        async dispatch(): Promise<ActionResult> {
+          throw new Error("dispatcher should not be called for an injected completion_check");
+        },
+      },
+      evaluator: {
+        async evaluate() {
+          throw new Error("evaluator should not be called for an injected completion_check");
+        },
+      },
+    },
+    3,
+  );
+
+  assert.equal(state.stopReason, "respond");
+  assert.equal(state.lastDecision?.action.kind, "respond");
+  assert.equal(state.lastResult?.metadata?.syntheticFinalFeedback, true);
+  assert.match(String(state.lastResult?.output), /christmas_tree\.py/);
+  assert.match(String(state.lastResult?.output), /Validation passed/);
+  assert.equal(state.history.some((result) => result.action.kind === "tool_call" && result.action.toolName === "completion_check"), true);
+});
+
 test("runLoop extracts TypeScript paren-format diagnostics from validation output", async () => {
   const decision: BrainDecision = {
     action: { kind: "tool_call", toolName: "run_validation", toolInput: { mode: "typecheck" } },
