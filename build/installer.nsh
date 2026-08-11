@@ -1,5 +1,5 @@
 !macro customUnInstall
-  MessageBox MB_YESNO|MB_ICONQUESTION "Do you also want to delete local conversations, memories, settings, caches, and legacy AppData files?$\r$\n$\r$\nChoose Yes for a clean uninstall.$\r$\nChoose No to keep data for a later reinstall." IDYES deleteShiguangData IDNO keepShiguangData
+  MessageBox MB_YESNO|MB_ICONQUESTION "是否同时删除本地会话、记忆、设置、缓存以及旧版本 AppData 数据？$\r$\n$\r$\n选择“是”：干净卸载。$\r$\n选择“否”：保留数据，之后重装可继续使用。" IDYES deleteShiguangData IDNO keepShiguangData
 
   keepShiguangData:
     DetailPrint "Keeping Shiguang Agent data."
