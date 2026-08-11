@@ -3,7 +3,9 @@ node_modules/
 
 # Build output
 dist/
-build/
+build/*
+!build/
+!build/installer.nsh
 coverage/
 *.tsbuildinfo
 
@@ -33,6 +35,7 @@ pnpm-debug.log*
 .cache/
 .tmp/
 tmp/
+shiguang-agent-data/
 worktest/
 
 # Local agent notes / prompts

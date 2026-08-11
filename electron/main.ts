@@ -3,8 +3,10 @@ import * as path from "node:path";
 import { DesktopStore } from "./store.js";
 import { DesktopAppService } from "./app-service.js";
 import { registerIpcHandlers } from "./ipc.js";
+import { configureAppUserDataPath } from "./user-data.js";
 
 const isDev = process.env.ELECTRON_DEV === "true";
+const userDataPath = configureAppUserDataPath();
 let service: DesktopAppService;
 
 function createWindow() {
@@ -35,6 +37,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  console.log(`Shiguang Agent user data: ${userDataPath}`);
   const store = new DesktopStore();
   service = new DesktopAppService(store);
   registerIpcHandlers(service);
