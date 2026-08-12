@@ -857,6 +857,55 @@ function toolEventName(event: DesktopEvent): string | null {
   return typeof tool === "string" ? tool : null;
 }
 
+function formatToolActivityName(toolName: string | null): string {
+  if (!toolName) return "工具";
+  const labels: Record<string, string> = {
+    inspect_project: "检查项目结构",
+    list_directory: "浏览目录",
+    stat_path: "读取路径信息",
+    search_workspace: "搜索工作区",
+    read_text_file: "读取文件",
+    write_text_file: "写入文件",
+    patch_text_file: "修改文件",
+    copy_path: "复制路径",
+    move_path: "移动路径",
+    delete_path: "删除路径",
+    run_terminal_command: "运行终端命令",
+    run_validation: "运行验证",
+    collect_diagnostics: "收集诊断",
+    code_map: "生成代码地图",
+    symbol_search: "搜索符号",
+    dependency_graph: "分析依赖",
+    github_repo: "读取 GitHub 仓库",
+    web_search: "搜索网页",
+    web_fetch: "抓取网页",
+    search_memory: "搜索记忆",
+    remember_fact: "写入记忆",
+    forget_memory: "删除记忆",
+    completion_check: "确认任务完成度",
+  };
+  return labels[toolName] ?? toolName.replace(/^mcp_/, "调用 MCP：").replace(/_/g, " ");
+}
+
+function summarizeToolActivityDetail(toolName: string | null, input: unknown): string {
+  if (!input || typeof input !== "object") return input === undefined ? "等待工具返回结果。" : summarizeToolBlockValue(input);
+  const record = input as Record<string, unknown>;
+  const path = typeof record.path === "string" ? record.path : undefined;
+  const query = typeof record.query === "string" ? record.query : undefined;
+  const mode = typeof record.mode === "string" ? record.mode : undefined;
+  const command = typeof record.command === "string" ? record.command : undefined;
+
+  if (toolName === "read_text_file" && path) return `正在打开 ${path}`;
+  if ((toolName === "write_text_file" || toolName === "patch_text_file") && path) return `准备更新 ${path}`;
+  if (toolName === "run_validation") return `验证模式：${mode ?? "auto"}`;
+  if (toolName === "search_workspace" && query) return `搜索：${query}`;
+  if (toolName === "list_directory") return `目录：${path ?? "."}`;
+  if (toolName === "run_terminal_command" && command) return truncateInline(command, 180);
+  if (query) return `查询：${query}`;
+  if (path) return `目标：${path}`;
+  return summarizeToolBlockValue(input);
+}
+
 function toolEventCallId(event: DesktopEvent): string | null {
   const payload = eventPayloadRecord(event);
   const toolCallId = payload.toolCallId;
@@ -1342,6 +1391,7 @@ function describeRunActivity(
 
   const latestEvent = events[events.length - 1] ?? null;
   const lastEventAgeLabel = formatAgeFromTimestamp(latestEvent?.createdAt ?? run.startedAt ?? null);
+  const latestThinkingEvent = [...events].reverse().find((event) => event.kind === "thinking") ?? null;
   const latestAssistantMessage = [...events].reverse().find((event) => event.kind === "message" && eventPayloadRecord(event).role !== "user") ?? null;
   const latestErrorEvent = [...events].reverse().find((event) => event.kind === "error") ?? null;
   const pendingApproval = pendingApprovals.find((approval) => approval.runId === run.id) ?? null;
@@ -1375,18 +1425,25 @@ function describeRunActivity(
   } else if (latestPendingToolCall) {
     const payload = eventPayloadRecord(latestPendingToolCall);
     const toolName = toolEventName(latestPendingToolCall) ?? "工具";
-    label = `执行 ${toolName}`;
+    label = formatToolActivityName(toolName);
     detail = payload.input !== undefined
-      ? summarizeToolBlockValue(payload.input)
+      ? summarizeToolActivityDetail(toolName, payload.input)
       : "工具已发出，正在等待结果。";
     tone = "accent";
   } else if (latestToolResult) {
     const toolName = toolEventName(latestToolResult) ?? "工具";
-    label = `${toolName} 完成`;
+    label = `${formatToolActivityName(toolName)}完成`;
     detail = latestToolResultPayload?.output !== undefined
       ? summarizeToolBlockValue(latestToolResultPayload.output)
       : "工具结果已返回。";
     tone = "success";
+  } else if ((run.status === "running" || run.status === "pending") && latestThinkingEvent) {
+    const payload = eventPayloadRecord(latestThinkingEvent);
+    label = "规划下一步";
+    detail = typeof payload.reasoning === "string" && payload.reasoning.trim()
+      ? truncateInline(payload.reasoning, 180)
+      : "正在理解上下文并决定下一步动作。";
+    tone = "accent";
   } else if (latestAssistantMessage) {
     const payload = eventPayloadRecord(latestAssistantMessage);
     label = run.status === "completed" ? "已生成回复" : "整理回复";
@@ -1438,6 +1495,7 @@ function describeRunPhase(
   }
 
   const latestEvent = events[events.length - 1] ?? null;
+  const latestThinkingEvent = [...events].reverse().find((event) => event.kind === "thinking") ?? null;
   const latestAssistantMessage = [...events].reverse().find((event) => event.kind === "message" && eventPayloadRecord(event).role !== "user") ?? null;
   const latestPendingToolCall = findLatestToolCallWithoutResult(events);
   const latestToolResult = findLatestToolResult(events);
@@ -1469,9 +1527,14 @@ function describeRunPhase(
     currentStep = "tool";
     label = latestPendingToolCall ? "工具执行中" : "工具已返回";
     detail = latestPendingToolCall
-      ? `正在等待 ${toolEventName(latestPendingToolCall) ?? "工具"} 返回结果。`
-      : `${toolEventName(latestToolResult!) ?? "工具"} 已返回，准备继续推进。`;
+      ? `正在${formatToolActivityName(toolEventName(latestPendingToolCall))}。`
+      : `${formatToolActivityName(toolEventName(latestToolResult!))}已返回，准备继续推进。`;
     tone = latestPendingToolCall ? "accent" : "success";
+  } else if ((run.status === "running" || run.status === "pending") && latestThinkingEvent) {
+    currentStep = "plan";
+    label = "规划下一步";
+    detail = "正在理解上下文、选择工具或整理下一步动作。";
+    tone = "accent";
   } else if (latestAssistantMessage || run.status === "completed") {
     currentStep = "reply";
     label = run.status === "completed" ? "回复完成" : "整理回复";
@@ -1515,6 +1578,50 @@ function computeRunProgressPercent(run: DesktopRun | null, phase: RunPhaseSummar
   const total = Math.max(phase.steps.length, 1);
   const base = activeIndex >= 0 ? ((activeIndex + 0.45) / total) * 100 : 12;
   return Math.max(8, Math.min(94, Math.round(base)));
+}
+
+function RunLiveReadout({
+  run,
+  phase,
+  activity,
+  progressPercent,
+}: {
+  run: DesktopRun;
+  phase: RunPhaseSummary;
+  activity: RunActivitySummary;
+  progressPercent: number;
+}) {
+  const status = run.status;
+  const isLive = status === "pending" || status === "running";
+  const meta = [
+    phase.latestEventLabel ? `最新 ${phase.latestEventLabel}` : null,
+    phase.elapsedLabel ? `运行 ${phase.elapsedLabel}` : null,
+    phase.silenceLabel ? `静默 ${phase.silenceLabel}` : null,
+  ].filter((item): item is string => Boolean(item));
+  const detail = activity.stalledDetail ?? activity.detail ?? phase.detail;
+
+  return (
+    <section className={`live-run-readout ${status}${isLive ? " live" : ""}`} aria-live="polite">
+      <div className="live-run-readout-main">
+        <span className="live-run-orb" aria-hidden="true" />
+        <div className="live-run-copy">
+          <div className="live-run-line">
+            <span className="live-run-label">{activity.label || phase.label}</span>
+            <span className="live-run-chevron">›</span>
+            <span className="live-run-detail">{detail}</span>
+          </div>
+          <div className="live-run-track" aria-label="当前运行进度">
+            <span style={{ width: `${progressPercent}%` }} />
+          </div>
+        </div>
+        {meta.length > 0 ? (
+          <div className="live-run-meta">
+            {meta.slice(0, 2).map((item) => <span key={item}>{item}</span>)}
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
 }
 
 function EventCard({ event }: { event: DesktopEvent }) {
@@ -3964,6 +4071,15 @@ export default function App() {
                 />
               ) : null}
             </section>
+
+            {showChatView && activeRun && activeRun.status !== "completed" && activeRun.status !== "cancelled" ? (
+              <RunLiveReadout
+                run={activeRun}
+                phase={runPhase}
+                activity={runActivity}
+                progressPercent={runProgressPercent}
+              />
+            ) : null}
 
             {!showChatView ? (
               <section className="chat-home">

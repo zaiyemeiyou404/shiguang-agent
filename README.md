@@ -2,16 +2,16 @@
 
 拾光 Agent 是一个轻量级桌面 AI Agent。它把对话、工作区文件操作、工具调用、审批、运行记录和上下文压缩放在一个 Electron 桌面界面里，目标是做成一个下载后即可配置使用的小型个人工作台。
 
-当前版本：`0.2.6`
+当前版本：`0.2.7`
 
 ## 下载使用
 
 在 GitHub Releases 页面下载 Windows 版本：
 
-- 安装包：`拾光 Agent Setup 0.2.6.exe`
+- 安装包：`拾光 Agent Setup 0.2.7.exe`
 - 免安装版：`win-unpacked.zip`
 
-`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.6`，才会生成新的正式 Release。
+`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.7`，才会生成新的正式 Release。
 
 如果使用免安装版，解压后运行：
 
@@ -55,7 +55,7 @@ $env:GEMINI_API_KEY="你的 key"
 - 扩展工具：支持 GitHub 仓库读取、网页搜索/抓取、轻量代码诊断、后台进程管理和记忆管理。
 - 工程理解：支持生成代码地图、搜索符号、分析轻量依赖图，帮助 Agent 更快读懂工程结构。
 - 审批机制：高风险工具会进入类似 Codex/Claude 的审查卡片，展示风险等级、影响范围、输入/diff 预览，并按“仅本次通过”恢复运行。
-- 运行读条：运行区显示类似 Codex 的当前步骤读条，能看到正在规划、调用工具、等待审批或整理回复。
+- 运行读条：聊天页顶部显示类似 Codex 的当前动作读条，能看到正在规划、调用工具、等待审批、验证或整理回复。
 - 中途补充：Agent 运行中仍可输入补充指令；发送后会先暂停当前 run，再带着补充和已有现场继续推进。
 - 暂停继续：运行中不输入内容时，右下角按钮会切换为“暂停”；暂停后可直接点“继续”或补充下一步，避免从零重跑。
 - 完成校验：写入/修改文件并通过 `run_validation` 后，会先进入 `completion_check` 判断任务是否已经完成，再输出最终反馈，避免工具一直重复调用。
@@ -179,7 +179,7 @@ npm run desktop:package:win
 
 ```text
 release/
-├── 拾光 Agent Setup 0.2.6.exe
+├── 拾光 Agent Setup 0.2.7.exe
 └── win-unpacked/
     └── 拾光 Agent.exe
 ```
@@ -202,8 +202,8 @@ examples/          示例配置
 推送 tag 后会自动构建 Release：
 
 ```bash
-git tag v0.2.6
-git push origin v0.2.6
+git tag v0.2.7
+git push origin v0.2.7
 ```
 
 Release 会上传：
