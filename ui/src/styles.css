@@ -531,6 +531,84 @@ body {
   background: rgba(255,255,255,0.78);
 }
 
+.codex-progress-readout {
+  display: grid;
+  gap: 10px;
+  padding: 4px 2px 8px;
+}
+
+.codex-progress-copy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-soft);
+}
+
+.codex-progress-copy > span:first-child {
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.codex-progress-copy .muted {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-progress-chevron {
+  color: var(--text-dim);
+  font-size: 20px;
+  line-height: 1;
+}
+
+.codex-progress-track {
+  position: relative;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(119, 132, 164, 0.18);
+}
+
+.codex-progress-track span {
+  position: relative;
+  display: block;
+  height: 100%;
+  min-width: 20px;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #7ab8ff, #b8a7ff, #55e0bd);
+  transition: width 0.34s ease;
+}
+
+.codex-progress-readout.running .codex-progress-track span::after,
+.codex-progress-readout.pending .codex-progress-track span::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.82), transparent);
+  animation: codex-progress-sheen 1.35s ease-in-out infinite;
+}
+
+.codex-progress-readout.paused .codex-progress-track span,
+.codex-progress-readout.needs_approval .codex-progress-track span {
+  background: linear-gradient(90deg, #ffbf69, #f6d365);
+}
+
+.codex-progress-readout.completed .codex-progress-track span {
+  background: linear-gradient(90deg, #57d3a6, #55e0bd);
+}
+
+.codex-progress-readout.failed .codex-progress-track span,
+.codex-progress-readout.cancelled .codex-progress-track span {
+  background: linear-gradient(90deg, #ff6b6b, #ff9c8d);
+}
+
+@keyframes codex-progress-sheen {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(110%); }
+}
+
 .run-phase-head {
   display: flex;
   align-items: flex-start;
@@ -1079,6 +1157,16 @@ body {
   border-color: transparent;
   min-width: 88px;
   box-shadow: 0 10px 24px rgba(92,108,255,0.24);
+}
+
+.send-btn.pause {
+  background: linear-gradient(135deg, rgba(255,184,77,0.96), rgba(255,137,93,0.94));
+  box-shadow: 0 10px 24px rgba(255,137,93,0.20);
+}
+
+.send-btn.supplement {
+  background: linear-gradient(135deg, rgba(85,224,189,0.96), rgba(96,167,255,0.94));
+  box-shadow: 0 10px 24px rgba(85,224,189,0.20);
 }
 
 .source-card, .detail-block { padding: 14px; }

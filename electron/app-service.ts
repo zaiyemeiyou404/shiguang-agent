@@ -359,7 +359,7 @@ export class DesktopAppService {
     (async () => {
       const { agent, label, workspaceRoot } = await this.createAgentRuntime(sink);
       const currentRunBeforeStart = await this.runRepository.get(runId);
-      if (controller.signal.aborted || currentRunBeforeStart?.status === "cancelled") {
+      if (controller.signal.aborted || isRunStoppedByUser(currentRunBeforeStart?.status)) {
         return;
       }
 
@@ -399,7 +399,7 @@ export class DesktopAppService {
         await this.persistApprovalsFromEvents(runId, storedEvents);
 
         const currentRun = await this.runRepository.get(runId);
-        if (currentRun?.status === "cancelled") {
+        if (isRunStoppedByUser(currentRun?.status)) {
           return;
         }
 
@@ -457,7 +457,7 @@ export class DesktopAppService {
       } catch (err: unknown) {
         const reason = err instanceof Error ? err.message : String(err);
         const currentRun = await this.runRepository.get(runId);
-        if (currentRun?.status === "cancelled") {
+        if (isRunStoppedByUser(currentRun?.status)) {
           return;
         }
         await this.runRepository.update(runId, {
@@ -500,7 +500,7 @@ export class DesktopAppService {
     })().catch((err: unknown) => {
       const reason = err instanceof Error ? err.message : String(err);
       void this.runRepository.get(runId).then((currentRun) => {
-        if (currentRun?.status === "cancelled") {
+        if (isRunStoppedByUser(currentRun?.status)) {
           return;
         }
         void this.runRepository.update(runId, {
@@ -632,6 +632,41 @@ export class DesktopAppService {
     const updatedRun = await this.runRepository.get(runId);
     if (!updatedRun) {
       throw new Error(`Run not found after cancellation: ${runId}`);
+    }
+    return coreRunToDesktop(updatedRun);
+  }
+
+  async pauseRun(runId: string): Promise<DesktopRun> {
+    const run = await this.runRepository.get(runId);
+    if (!run) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+    if (run.status === "completed" || run.status === "failed" || run.status === "cancelled" || run.status === "paused") {
+      return coreRunToDesktop(run);
+    }
+
+    const now = new Date();
+    this.activeRunControllers.get(runId)?.abort();
+    await this.runRepository.update(runId, {
+      status: "paused",
+      endedAt: now,
+      reason: "Paused by user. Continue with follow-up guidance when ready.",
+      summary: run.summary ?? "Paused before completion.",
+    });
+    await this.taskRepository.update(run.taskId, {
+      status: "in_progress",
+      updatedAt: now,
+    });
+
+    const sink = this.createRunEventSink();
+    await sink.record(runId, "system", {
+      message: run.status === "running" ? "run paused by user" : "run pause requested by user",
+    });
+
+    await this.refreshSessionSummary(run.sessionId);
+    const updatedRun = await this.runRepository.get(runId);
+    if (!updatedRun) {
+      throw new Error(`Run not found after pause: ${runId}`);
     }
     return coreRunToDesktop(updatedRun);
   }
@@ -973,7 +1008,7 @@ export class DesktopAppService {
       await this.persistApprovalsFromEvents(run.id, storedEvents);
 
       const currentRun = await this.runRepository.get(run.id);
-      if (currentRun?.status === "cancelled") {
+      if (isRunStoppedByUser(currentRun?.status)) {
         return;
       }
 
@@ -1032,7 +1067,7 @@ export class DesktopAppService {
     } catch (err: unknown) {
       const reason = err instanceof Error ? err.message : String(err);
       const currentRun = await this.runRepository.get(run.id);
-      if (currentRun?.status === "cancelled") {
+      if (isRunStoppedByUser(currentRun?.status)) {
         return;
       }
       await this.runRepository.update(run.id, {
@@ -1812,6 +1847,10 @@ function buildBranchSuggestedPrompt(input: {
     artifactLines.length > 0 ? ["可复用产物：", ...artifactLines].join("\n") : null,
     "先检查上面这次运行的结论、报错和产物，再决定下一步；如果需要修复，做最小修改并重新验证。",
   ].filter((item): item is string => Boolean(item)).join("\n\n");
+}
+
+function isRunStoppedByUser(status: Run["status"] | null | undefined): boolean {
+  return status === "cancelled" || status === "paused";
 }
 
 function branchStatusLabel(status: DesktopRun["status"]): string {

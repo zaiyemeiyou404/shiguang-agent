@@ -1481,6 +1481,19 @@ function describeRunPhase(
   };
 }
 
+function computeRunProgressPercent(run: DesktopRun | null, phase: RunPhaseSummary): number {
+  if (!run) return 8;
+  if (run.status === "completed") return 100;
+  if (run.status === "failed" || run.status === "cancelled") return 100;
+  if (run.status === "paused") return 76;
+  if (run.status === "needs_approval") return 68;
+
+  const activeIndex = phase.steps.findIndex((step) => step.status === "active" || step.status === "warn");
+  const total = Math.max(phase.steps.length, 1);
+  const base = activeIndex >= 0 ? ((activeIndex + 0.45) / total) * 100 : 12;
+  return Math.max(8, Math.min(94, Math.round(base)));
+}
+
 function EventCard({ event }: { event: DesktopEvent }) {
   const { kind, payload, createdAt } = event;
   const p = payload as Record<string, unknown> | undefined;
@@ -3080,7 +3093,7 @@ export default function App() {
   const [surface, setSurface] = useState<MainSurface>("home");
   const [settings, setSettings] = useState<DesktopSettings | null>(null);
   const [decisionState, setDecisionState] = useState<Record<string, "approving" | "approved" | "denied">>({});
-  const [runActionState, setRunActionState] = useState<"idle" | "cancelling" | "retrying">("idle");
+  const [runActionState, setRunActionState] = useState<"idle" | "cancelling" | "pausing" | "retrying">("idle");
   const [branchingRunId, setBranchingRunId] = useState<string | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
@@ -3214,17 +3227,57 @@ export default function App() {
     () => describeRunPhase(activeRun, sortedEvents, pendingApprovals),
     [activeRun, pendingApprovals, sortedEvents],
   );
+  const isProcessingRun = activeRun?.status === "pending" || activeRun?.status === "running";
+  const isRunAwaitingApproval = activeRun?.status === "needs_approval";
+  const composerHasPayload = Boolean(inputText.trim() || selectedAttachments.length > 0);
+  const composerPlaceholder = isProcessingRun
+    ? "运行中也可以补充指令；发送后会先暂停当前步骤，再带着补充继续..."
+    : activeRun?.status === "paused"
+      ? "输入“继续”或补充下一步，Agent 会接着上次现场干..."
+      : "输入要继续推进的任务、问题或命令...";
+  const composerSendLabel = runActionState === "pausing"
+    ? "暂停中..."
+    : sending && isProcessingRun
+      ? "补充中..."
+      : sending
+        ? "..."
+        : isProcessingRun
+          ? (composerHasPayload ? "补充并继续 ↗" : "暂停")
+          : activeRun?.status === "paused"
+            ? "继续 ↗"
+            : "发送 ↗";
+  const canSubmitComposer = Boolean(
+    activeSessionId
+      && !isRunAwaitingApproval
+      && !sending
+      && runActionState === "idle"
+      && (isProcessingRun || composerHasPayload || activeRun?.status === "paused"),
+  );
+  const composerTone: SignalTone = isRunAwaitingApproval
+    ? "warn"
+    : streamState === "error"
+      ? "danger"
+      : isProcessingRun
+        ? "success"
+        : "neutral";
+  const runProgressPercent = computeRunProgressPercent(activeRun, runPhase);
+  const runProgressLabel = runActivity.label || runPhase.label;
+  const runProgressDetail = runActivity.stalledDetail ?? runActivity.detail ?? runPhase.detail;
   const runActivityMeta = [runActivity.ageLabel ? `最近事件 ${runActivity.ageLabel}` : null, runActivity.stalled ? "长等待" : null]
     .filter(Boolean)
     .join(" · ");
   const composerBlockedReason = !activeSessionId
     ? "先创建或选中一个会话。"
     : runActionState !== "idle"
-      ? (runActionState === "retrying" ? "正在重试运行…" : "正在取消运行…")
+      ? (runActionState === "retrying" ? "正在重试运行…" : runActionState === "pausing" ? "正在暂停运行…" : "正在取消运行…")
       : sending
         ? "正在发送消息…"
+        : isProcessingRun
+          ? "运行中：可以补充一句新要求；不输入内容时，右下角会暂停当前 run。"
         : activeRun?.status === "needs_approval"
           ? "运行因审批暂停，请先处理上方审批卡片后继续。"
+          : activeRun?.status === "paused"
+            ? "已暂停：输入“继续”或补充下一步，Agent 会沿着上次现场继续。"
           : settingsError
             ? "先修好模型设置，再启动下一次运行。"
             : "Shift+Enter 换行 · Enter 发送";
@@ -3296,10 +3349,32 @@ export default function App() {
 
   const submitMessage = async (message: string, attachments: DesktopAttachment[] = selectedAttachments) => {
     const sid = activeSessionId;
-    if (!sid || (!message.trim() && attachments.length === 0) || sending) return;
+    const trimmedMessage = message.trim();
+    const interruptedRun = isProcessingRun ? activeRun : null;
+    const continuationRun = activeRun?.status === "paused" ? activeRun : null;
+    const canUseDefaultContinuation = Boolean(continuationRun && attachments.length === 0);
+    if (!sid || (!trimmedMessage && attachments.length === 0 && !canUseDefaultContinuation) || sending || isRunAwaitingApproval) return;
     setSending(true);
     try {
-      const run = await requireDesktopBridge().sendUserMessage({ sessionId: sid, message, attachments });
+      const bridge = requireDesktopBridge();
+      let outboundMessage = message;
+      if (interruptedRun) {
+        await bridge.pauseRun({ runId: interruptedRun.id });
+        outboundMessage = [
+          `补充指令：${trimmedMessage || "请结合当前输入继续任务。"}`,
+          "",
+          `请从刚刚暂停的运行继续，不要重做已经完成的工作。上一轮 run：${interruptedRun.id}。`,
+          "先检查最近工具结果、审批结果和工作区当前状态，再继续推进；如果任务已经完成，请直接给出完成反馈。",
+        ].join("\n");
+      } else if (continuationRun) {
+        outboundMessage = [
+          trimmedMessage || "继续上次暂停的任务。",
+          "",
+          `请沿着已暂停的运行继续，不要从零开始。上一轮 run：${continuationRun.id}。`,
+          "先检查最近工具结果、运行摘要、已有产物和工作区当前状态，再决定下一步；如果任务已经完成，请直接总结结果。",
+        ].join("\n");
+      }
+      const run = await bridge.sendUserMessage({ sessionId: sid, message: outboundMessage, attachments });
       setActionError(null);
       setActiveRunId(run.id);
       setInputText("");
@@ -3314,7 +3389,29 @@ export default function App() {
     }
   };
 
+  const handlePauseRun = async () => {
+    if (!activeRun || !isProcessingRun || runActionState !== "idle" || sending) return;
+    setRunActionState("pausing");
+    try {
+      const bridge = requireDesktopBridge();
+      const run = await bridge.pauseRun({ runId: activeRun.id });
+      setActionError(null);
+      setActiveRunId(run.id);
+      await refreshDetail();
+      await refreshSessions();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setActionError(`暂停运行失败：${message}`);
+    } finally {
+      setRunActionState("idle");
+    }
+  };
+
   const handleSend = async () => {
+    if (isProcessingRun && !inputText.trim() && selectedAttachments.length === 0) {
+      await handlePauseRun();
+      return;
+    }
     await submitMessage(inputText, selectedAttachments);
   };
 
@@ -3507,7 +3604,7 @@ export default function App() {
   };
 
   const handlePickAttachments = async () => {
-    if (!activeSessionId || sending || runActionState !== "idle") return;
+    if (!activeSessionId || sending || isProcessingRun || runActionState !== "idle") return;
     try {
       const picked = await requireDesktopBridge().pickAttachments();
       if (picked.length === 0) return;
@@ -3878,9 +3975,9 @@ export default function App() {
 
                 <section className="composer composer-dock">
                   <div className="composer-hint-row">
-                    <SignalPill tone={activeRun?.status === "needs_approval" ? "warn" : streamState === "error" ? "danger" : activeRun?.status === "running" ? "success" : "neutral"}>
-                      {activeRun?.status === "needs_approval" ? "需要审批" : activeRun ? formatRunStatus(activeRun.status) : "就绪"}
-                    </SignalPill>
+                  <SignalPill tone={composerTone}>
+                    {activeRun?.status === "needs_approval" ? "需要审批" : activeRun ? formatRunStatus(activeRun.status) : "就绪"}
+                  </SignalPill>
                     <p className="muted">{failureInsight && activeRun?.status !== "running" ? `可直接写入修复提示：${failureInsight.nextStep}` : composerBlockedReason}</p>
                   </div>
                   <textarea
@@ -3893,8 +3990,8 @@ export default function App() {
                         setSessionDrafts((prev) => ({ ...prev, [activeSessionId]: nextValue }));
                       }
                     }}
-                    placeholder="输入要继续推进的任务、问题或命令..."
-                    disabled={!activeSessionId || sending || runActionState === "retrying"}
+                  placeholder={composerPlaceholder}
+                  disabled={!activeSessionId || sending || runActionState !== "idle"}
                     onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void handleSend(); } }}
                   />
                   {selectedAttachments.length > 0 ? (
@@ -3912,12 +4009,12 @@ export default function App() {
                   ) : null}
                   <div className="composer-footer">
                     <div className="composer-actions">
-                      <button className="composer-action" type="button" onClick={() => { void handlePickAttachments(); }} disabled={!activeSessionId || sending || runActionState !== "idle"}>📎 附件{selectedAttachments.length > 0 ? ` (${selectedAttachments.length})` : ""}</button>
-                      <button className="composer-action" type="button" onClick={() => { void openSettings(); }}>⚙ 模型</button>
-                    </div>
-                    <button className="send-btn" type="button" onClick={() => { void handleSend(); }} disabled={!activeSessionId || sending || runActionState !== "idle" || (!inputText.trim() && selectedAttachments.length === 0)}>
-                      {sending ? "..." : "发送 ↗"}
-                    </button>
+                    <button className="composer-action" type="button" onClick={() => { void handlePickAttachments(); }} disabled={!activeSessionId || sending || isProcessingRun || runActionState !== "idle"}>📎 附件{selectedAttachments.length > 0 ? ` (${selectedAttachments.length})` : ""}</button>
+                    <button className="composer-action" type="button" onClick={() => { void openSettings(); }}>⚙ 模型</button>
+                  </div>
+                  <button className={`send-btn ${isProcessingRun ? (composerHasPayload ? "supplement" : "pause") : ""}`} type="button" onClick={() => { void handleSend(); }} disabled={!canSubmitComposer}>
+                    {composerSendLabel}
+                  </button>
                   </div>
                 </section>
               </>
@@ -4230,6 +4327,16 @@ export default function App() {
                 </div>
 
                 <div className="run-phase-strip">
+                  <div className={`codex-progress-readout ${activeRun?.status ?? "idle"}`}>
+                    <div className="codex-progress-copy">
+                      <span>{runProgressLabel}</span>
+                      <span className="codex-progress-chevron">›</span>
+                      <p className="muted">{runProgressDetail}</p>
+                    </div>
+                    <div className="codex-progress-track" aria-label="运行进度">
+                      <span style={{ width: `${runProgressPercent}%` }} />
+                    </div>
+                  </div>
                   <div className="run-phase-head">
                     <div>
                       <span className="tiny">运行阶段</span>
@@ -4315,7 +4422,7 @@ export default function App() {
 
               <section className="composer composer-dock">
                 <div className="composer-hint-row">
-                  <SignalPill tone={activeRun?.status === "needs_approval" ? "warn" : streamState === "error" ? "danger" : activeRun?.status === "running" ? "success" : "neutral"}>
+                  <SignalPill tone={composerTone}>
                     {activeRun?.status === "needs_approval" ? "需要审批" : activeRun ? formatRunStatus(activeRun.status) : "就绪"}
                   </SignalPill>
                   <p className="muted">{failureInsight && activeRun?.status !== "running" ? `可直接写入修复提示：${failureInsight.nextStep}` : composerBlockedReason}</p>
@@ -4330,8 +4437,8 @@ export default function App() {
                       setSessionDrafts((prev) => ({ ...prev, [activeSessionId]: nextValue }));
                     }
                   }}
-                  placeholder="输入要继续推进的任务、问题或命令..."
-                  disabled={!activeSessionId || sending || runActionState === "retrying"}
+                  placeholder={composerPlaceholder}
+                  disabled={!activeSessionId || sending || runActionState !== "idle"}
                   onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void handleSend(); } }}
                 />
                 {selectedAttachments.length > 0 ? (
@@ -4349,11 +4456,11 @@ export default function App() {
                 ) : null}
                 <div className="composer-footer">
                   <div className="composer-actions">
-                    <button className="composer-action" type="button" onClick={() => { void handlePickAttachments(); }} disabled={!activeSessionId || sending || runActionState !== "idle"}>📎 附件{selectedAttachments.length > 0 ? ` (${selectedAttachments.length})` : ""}</button>
+                    <button className="composer-action" type="button" onClick={() => { void handlePickAttachments(); }} disabled={!activeSessionId || sending || isProcessingRun || runActionState !== "idle"}>📎 附件{selectedAttachments.length > 0 ? ` (${selectedAttachments.length})` : ""}</button>
                     <button className="composer-action" type="button" onClick={() => { void openSettings(); }}>⚙ 模型</button>
                   </div>
-                  <button className="send-btn" type="button" onClick={() => { void handleSend(); }} disabled={!activeSessionId || sending || runActionState !== "idle" || (!inputText.trim() && selectedAttachments.length === 0)}>
-                    {sending ? "..." : "发送 ↗"}
+                  <button className={`send-btn ${isProcessingRun ? (composerHasPayload ? "supplement" : "pause") : ""}`} type="button" onClick={() => { void handleSend(); }} disabled={!canSubmitComposer}>
+                    {composerSendLabel}
                   </button>
                 </div>
               </section>

@@ -28,6 +28,7 @@ const bridge: ShiguangBridge = {
   listPendingApprovals: (sessionId: string) => ipcRenderer.invoke("listPendingApprovals", sessionId),
   decideApproval: (req) => ipcRenderer.invoke("decideApproval", req),
   cancelRun: (req) => ipcRenderer.invoke("cancelRun", req),
+  pauseRun: (req) => ipcRenderer.invoke("pauseRun", req),
   retryRun: (req) => ipcRenderer.invoke("retryRun", req),
   subscribeRunEvents: (runId: string, callback: (event: DesktopEvent) => void) => {
     void ipcRenderer.invoke("subscribeRunEvents", runId);

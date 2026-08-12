@@ -83,6 +83,10 @@ export function registerIpcHandlers(service: DesktopAppService): void {
     return service.cancelRun(req.runId);
   });
 
+  ipcMain.handle("pauseRun", (_event, req: RunActionRequest) => {
+    return service.pauseRun(req.runId);
+  });
+
   ipcMain.handle("retryRun", (_event, req: RunActionRequest) => {
     return service.retryRun(req.runId);
   });

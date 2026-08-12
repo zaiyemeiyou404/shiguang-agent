@@ -220,6 +220,7 @@ export interface ShiguangBridge {
   listPendingApprovals(sessionId: string): Promise<DesktopApproval[]>;
   decideApproval(req: ApprovalDecisionRequest): Promise<DesktopApproval>;
   cancelRun(req: RunActionRequest): Promise<DesktopRun>;
+  pauseRun(req: RunActionRequest): Promise<DesktopRun>;
   retryRun(req: RunActionRequest): Promise<DesktopRun>;
   subscribeRunEvents(runId: string, callback: (event: DesktopEvent) => void): () => void;
 }
