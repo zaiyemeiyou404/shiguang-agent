@@ -5,6 +5,7 @@ import {
   parseProviderDecision,
   tryParseProviderDecision,
 } from "./shared.js";
+import { formatProviderEmptyResponse, formatProviderFetchError, formatProviderHttpError } from "./errors.js";
 
 export interface GeminiModelConfig {
   baseURL?: string;
@@ -116,11 +117,13 @@ export class GeminiModel implements LlmPlannerModel {
       },
       body: JSON.stringify(body),
       signal,
+    }).catch((error: unknown) => {
+      throw formatProviderFetchError("Gemini", url.toString(), error);
     });
 
     if (!response.ok) {
       const text = await response.text().catch(() => "unknown error");
-      throw new Error(`Gemini API error ${response.status}: ${text}`);
+      throw formatProviderHttpError("Gemini", response.status, text);
     }
 
     const data = (await response.json()) as GeminiResponse;
@@ -129,7 +132,7 @@ export class GeminiModel implements LlmPlannerModel {
       .join("\n")
       .trim();
     if (!raw) {
-      throw new Error("Gemini returned empty response");
+      throw formatProviderEmptyResponse("Gemini");
     }
 
     return raw;

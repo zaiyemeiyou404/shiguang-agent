@@ -5,6 +5,7 @@ import {
   parseProviderDecision,
   tryParseProviderDecision,
 } from "./shared.js";
+import { formatProviderEmptyResponse, formatProviderFetchError, formatProviderHttpError } from "./errors.js";
 
 export interface AnthropicModelConfig {
   baseURL?: string;
@@ -100,7 +101,8 @@ export class AnthropicModel implements LlmPlannerModel {
       temperature: 0.1,
     };
 
-    const response = await fetch(`${this.baseURL}/messages`, {
+    const url = `${this.baseURL}/messages`;
+    const response = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -109,11 +111,13 @@ export class AnthropicModel implements LlmPlannerModel {
       },
       body: JSON.stringify(body),
       signal,
+    }).catch((error: unknown) => {
+      throw formatProviderFetchError("Anthropic", url, error);
     });
 
     if (!response.ok) {
       const text = await response.text().catch(() => "unknown error");
-      throw new Error(`Anthropic API error ${response.status}: ${text}`);
+      throw formatProviderHttpError("Anthropic", response.status, text);
     }
 
     const data = (await response.json()) as AnthropicResponse;
@@ -123,7 +127,7 @@ export class AnthropicModel implements LlmPlannerModel {
       .join("\n")
       .trim();
     if (!raw) {
-      throw new Error("Anthropic returned empty response");
+      throw formatProviderEmptyResponse("Anthropic");
     }
 
     return raw;

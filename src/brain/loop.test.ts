@@ -496,13 +496,14 @@ test("runLoop can go edit to validate to summarize without premature finish", as
         },
       },
     },
-    4,
+    5,
   );
 
   assert.deepEqual(actions, ["patch_text_file", "run_validation", "respond"]);
   assert.equal(state.stopReason, "finish");
   assert.equal(state.workingMemory.phase, "summarize");
-  assert.equal(state.history.length, 4);
+  assert.equal(state.history.length, 5);
+  assert.equal(state.history.some((result) => result.action.kind === "tool_call" && result.action.toolName === "completion_check"), true);
 });
 
 test("runLoop continues from seeded history without replaying the approved tool step", async () => {
@@ -689,7 +690,7 @@ test("runLoop stops duplicate approved workspace mutation instead of requesting 
     5,
   );
 
-  assert.equal(plannerCalls, 2);
+  assert.equal(plannerCalls, 1);
   assert.equal(policyCalls, 1);
   assert.equal(dispatcherCalls, 1);
   assert.equal(state.stopReason, "respond");
@@ -788,6 +789,104 @@ test("runLoop validates instead of repeating a model-emitted approval request", 
   assert.equal(dispatcherCalls, 1);
   assert.equal(state.stopReason, "finish");
   assert.equal(state.lastDecision?.action.toolName, "run_validation");
+});
+
+test("runLoop inserts completion_check after successful validation before final feedback", async () => {
+  const seededWrite: ActionResult = {
+    action: { kind: "tool_call", toolName: "write_text_file", toolInput: { path: "star.py", content: "print('*')\n" } },
+    ok: true,
+    output: { path: "star.py", bytes: 11 },
+    metadata: {
+      category: "tool_observation",
+      summary: "File written.",
+      retryable: false,
+      toolName: "write_text_file",
+      workspaceMutation: true,
+      validationMode: "all",
+    },
+  };
+  const seededValidation: ActionResult = {
+    action: { kind: "tool_call", toolName: "run_validation", toolInput: { mode: "all" } },
+    ok: true,
+    output: { ok: true, mode: "all", summary: "Fallback validation passed." },
+    metadata: {
+      category: "tool_observation",
+      summary: "Validation passed.",
+      retryable: false,
+      toolName: "run_validation",
+    },
+  };
+
+  let plannerCalls = 0;
+
+  const state = await runLoop(
+    {
+      context: makeContext("create star.py"),
+      runId: "run_completion_gate",
+      priorTurns: [],
+      history: [seededWrite, seededValidation],
+      workingMemory: {
+        step: 2,
+        phase: "summarize",
+        lastActionKind: "tool_call",
+        lastToolName: "run_validation",
+      },
+      availableTools: [
+        { name: "write_text_file", description: "write", inputSchema: {}, risk: "write", requiresApproval: true, capability: "fs.write", effects: { workspaceMutation: true, validationMode: "all" } },
+        { name: "run_validation", description: "validate", inputSchema: {}, risk: "execute", requiresApproval: false, capability: "process.validate" },
+      ],
+    },
+    {
+      planner: {
+        async decide(input): Promise<BrainDecision> {
+          plannerCalls += 1;
+          const lastResult = input.history[input.history.length - 1];
+          assert.equal(lastResult?.action.kind, "tool_call");
+          assert.equal(lastResult?.action.toolName, "completion_check");
+          return {
+            action: { kind: "respond", content: "工作已完成：star.py 已写入，并且验证已通过。" },
+            reasoning: "Planner finalized from completion_check.",
+          };
+        },
+      },
+      policy: {
+        async check(next): Promise<BrainDecision> {
+          assert.equal(next.action.kind, "respond");
+          return next;
+        },
+      },
+      dispatcher: {
+        async dispatch(next): Promise<ActionResult> {
+          assert.equal(next.action.kind, "respond");
+          return {
+            action: next.action,
+            ok: true,
+            output: next.action.content,
+            metadata: {
+              category: "assistant_response",
+              summary: "Final feedback sent.",
+              retryable: false,
+            },
+          };
+        },
+      },
+      evaluator: {
+        async evaluate(decision) {
+          assert.equal(decision.action.kind, "respond");
+          return { kind: "stop", reason: "respond" } as const;
+        },
+      },
+    },
+    6,
+  );
+
+  const completionCheck = state.history.find((result) => result.action.kind === "tool_call" && result.action.toolName === "completion_check");
+  assert.equal(plannerCalls, 1);
+  assert.ok(completionCheck);
+  assert.equal((completionCheck.output as { repeatedActionPrevented?: unknown }).repeatedActionPrevented, false);
+  assert.equal(state.stopReason, "respond");
+  assert.match(String(state.lastResult?.output), /star\.py/);
+  assert.doesNotMatch(String(state.lastResult?.output), /重复/);
 });
 
 test("runLoop finalizes a dangling completion_check with user feedback at the step limit", async () => {

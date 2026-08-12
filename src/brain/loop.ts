@@ -1000,6 +1000,11 @@ export async function runLoop(
     throwIfAborted(context?.signal);
     state.steps++;
 
+    if (appendPendingSuccessfulValidationCompletionCheck(state, input.availableTools)) {
+      input = { ...input, history: state.history, workingMemory: state.workingMemory };
+      continue;
+    }
+
     const rawDecision = await deps.planner.decide(input, { signal: context?.signal });
     const duplicateResolution = resolveDuplicateWorkspaceMutation(rawDecision, state.history, input.availableTools);
     if (duplicateResolution.kind === "observation") {
@@ -1032,12 +1037,62 @@ export async function runLoop(
     input = { ...input, history: state.history, workingMemory: state.workingMemory };
   }
 
+  appendPendingSuccessfulValidationCompletionCheck(state, input.availableTools);
   finalizeDanglingCompletionCheck(state);
   if (!state.stopReason && state.steps >= maxSteps) {
     state.stopReason = "step_limit";
     state.stopSummary = `Reached the ${maxSteps}-step budget before producing a final answer. Continue the run to keep working from the latest checkpoint.`;
   }
   return state;
+}
+
+function appendPendingSuccessfulValidationCompletionCheck(
+  state: LoopState,
+  availableTools: BrainInput["availableTools"],
+): boolean {
+  if (state.stopReason) return false;
+  const completionCheck = resolveSuccessfulValidationCompletionCheck(state.history, availableTools);
+  if (!completionCheck) return false;
+
+  state.lastDecision = completionCheck.decision;
+  state.lastResult = completionCheck.result;
+  state.history.push(completionCheck.result);
+  state.workingMemory = updateWorkingMemory(state.workingMemory, state.steps, completionCheck.result);
+  return true;
+}
+
+function resolveSuccessfulValidationCompletionCheck(
+  history: ActionResult[],
+  availableTools: BrainInput["availableTools"],
+): { decision: BrainDecision; result: ActionResult } | null {
+  const latest = history[history.length - 1];
+  if (!latest || latest.action.kind !== "tool_call" || latest.action.toolName !== "run_validation") return null;
+  if (!latest.ok || validationDidFail(latest)) return null;
+  if (!availableTools.some((tool) => tool.name === "completion_check" || tool.name === "run_validation")) return null;
+
+  const mutation = findLatestSuccessfulWorkspaceMutationBefore(history, history.length - 1);
+  if (!mutation) return null;
+
+  const signature = toolActionSignature(mutation.result.action);
+  if (signature ? hasCompletionCheckAfterMutation(history, mutation.index, signature) : hasAnyCompletionCheckAfterMutation(history, mutation.index)) {
+    return null;
+  }
+
+  return buildCompletionCheckResult(
+    {
+      action: mutation.result.action,
+      reasoning: "Successful validation after a workspace mutation requires a completion gate before final user feedback.",
+    },
+    mutation.result,
+    latest,
+    signature,
+    {
+      repeatedActionPrevented: false,
+      reasoning: "Successful workspace mutation was validated; inserting a completion check so the planner must judge whether the task is done.",
+      summary: "Completion check: mutation and validation are complete; produce final user feedback or choose a genuinely new next step.",
+      instruction: "The mutation and validation are complete. Decide whether the user's requested outcome is satisfied, then respond with final user-facing feedback; do not repeat the same tool input.",
+    },
+  );
 }
 
 type DuplicateWorkspaceMutationResolution =
@@ -1102,6 +1157,12 @@ function buildCompletionCheckResult(
   completedResult: ActionResult,
   latestValidation: ActionResult | null,
   duplicateSignature: string | null,
+  options: {
+    repeatedActionPrevented?: boolean;
+    reasoning?: string;
+    summary?: string;
+    instruction?: string;
+  } = {},
 ): { decision: BrainDecision; result: ActionResult } {
   const toolName = decision.action.toolName ?? completedResult.action.toolName ?? "tool";
   const target = inferWorkspaceActionTarget(decision.action)
@@ -1110,9 +1171,10 @@ function buildCompletionCheckResult(
   const validationFailed = latestValidation ? validationDidFail(latestValidation) : false;
   const validationSummary = latestValidation ? summarizeValidationResult(latestValidation) : null;
   const status = validationFailed ? "needs_repair" : "ready_for_final_feedback";
+  const repeatedActionPrevented = options.repeatedActionPrevented ?? true;
   const output = {
     status,
-    repeatedActionPrevented: true,
+    repeatedActionPrevented,
     duplicateSignature,
         action: {
           toolName,
@@ -1127,7 +1189,7 @@ function buildCompletionCheckResult(
       : null,
     instruction: validationFailed
       ? "The repeated mutation was blocked. Use the validation result and history to choose a different repair or explain the failure; do not repeat the same tool input."
-      : "The mutation and validation are complete. Decide whether the user's task is satisfied, then respond with final user-facing feedback; do not repeat the same tool input.",
+      : options.instruction ?? "The mutation and validation are complete. Decide whether the user's task is satisfied, then respond with final user-facing feedback; do not repeat the same tool input.",
   };
   const checkDecision: BrainDecision = {
     action: {
@@ -1137,7 +1199,7 @@ function buildCompletionCheckResult(
     },
     reasoning: [
       decision.reasoning,
-      "Duplicate workspace mutation was converted into a completion check so the planner can make the final judgment.",
+      options.reasoning ?? "Duplicate workspace mutation was converted into a completion check so the planner can make the final judgment.",
     ].filter(Boolean).join(" "),
   };
 
@@ -1151,7 +1213,7 @@ function buildCompletionCheckResult(
         category: "tool_observation",
         summary: validationFailed
           ? "Completion check: previous mutation exists, but validation failed; choose a different repair or report failure."
-          : "Completion check: previous mutation and validation are complete; produce final user feedback.",
+          : options.summary ?? "Completion check: previous mutation and validation are complete; produce final user feedback.",
         retryable: false,
         toolName: "completion_check",
       },
@@ -1173,6 +1235,27 @@ function hasCompletionCheckAfterMutation(
   return false;
 }
 
+function hasAnyCompletionCheckAfterMutation(history: ActionResult[], mutationIndex: number): boolean {
+  for (let index = history.length - 1; index > mutationIndex; index--) {
+    const result = history[index];
+    if (result?.action.kind === "tool_call" && result.action.toolName === "completion_check") return true;
+  }
+  return false;
+}
+
+function findLatestSuccessfulWorkspaceMutationBefore(
+  history: ActionResult[],
+  beforeIndex: number,
+): { index: number; result: ActionResult } | null {
+  for (let index = beforeIndex - 1; index >= 0; index--) {
+    const result = history[index];
+    if (result?.ok === true && result.metadata?.workspaceMutation === true) {
+      return { index, result };
+    }
+  }
+  return null;
+}
+
 function findLatestValidationAfterMutation(history: ActionResult[], mutationIndex: number): ActionResult | null {
   for (let index = history.length - 1; index > mutationIndex; index--) {
     const result = history[index];
@@ -1185,6 +1268,7 @@ function findLatestValidationAfterMutation(history: ActionResult[], mutationInde
 
 type CompletionCheckPayload = {
   status: string;
+  repeatedActionPrevented?: boolean;
   action?: {
     toolName?: string;
     target?: string;
@@ -1237,11 +1321,13 @@ function parseCompletionCheckPayload(result: ActionResult | null): CompletionChe
   if (!result.output || typeof result.output !== "object") return null;
   const output = result.output as {
     status?: unknown;
+    repeatedActionPrevented?: unknown;
     action?: { toolName?: unknown; target?: unknown; label?: unknown };
     validation?: { ok?: unknown; summary?: unknown } | null;
   };
   const status = typeof output.status === "string" ? output.status : "";
   if (!status) return null;
+  const repeatedActionPrevented = typeof output.repeatedActionPrevented === "boolean" ? output.repeatedActionPrevented : undefined;
   const action = output.action && typeof output.action === "object"
     ? {
         ...(typeof output.action.toolName === "string" ? { toolName: output.action.toolName } : {}),
@@ -1257,7 +1343,7 @@ function parseCompletionCheckPayload(result: ActionResult | null): CompletionChe
     : output.validation === null
       ? null
       : undefined;
-  return { status, ...(action ? { action } : {}), ...(validation !== undefined ? { validation } : {}) };
+  return { status, ...(repeatedActionPrevented !== undefined ? { repeatedActionPrevented } : {}), ...(action ? { action } : {}), ...(validation !== undefined ? { validation } : {}) };
 }
 
 function buildCompletionCheckFeedback(payload: CompletionCheckPayload): string {
@@ -1265,11 +1351,23 @@ function buildCompletionCheckFeedback(payload: CompletionCheckPayload): string {
   const label = payload.action?.label ?? labelWorkspaceActionSafe(toolName);
   const target = payload.action?.target;
   const validationSummary = summarizeCompletionValidation(payload.validation);
+  const repeatedActionPrevented = payload.repeatedActionPrevented !== false;
 
   if (payload.status === "needs_repair" || payload.validation?.ok === false) {
+    if (repeatedActionPrevented) {
+      return target
+        ? `已停止重复执行：${target} 已${label}，但验证没有通过。${validationSummary} 请换一种修复方式继续。`
+        : `已停止重复执行：工具动作已经执行，但验证没有通过。${validationSummary} 请换一种修复方式继续。`;
+    }
     return target
-      ? `已停止重复执行：${target} 已${label}，但验证没有通过。${validationSummary} 请换一种修复方式继续。`
-      : `已停止重复执行：工具动作已经执行，但验证没有通过。${validationSummary} 请换一种修复方式继续。`;
+      ? `${target} 已${label}，但验证没有通过。${validationSummary} 请换一种修复方式继续。`
+      : `工具动作已经执行，但验证没有通过。${validationSummary} 请换一种修复方式继续。`;
+  }
+
+  if (!repeatedActionPrevented) {
+    return target
+      ? `已完成：${target} 已${label}。${validationSummary}`
+      : `已完成：${toolName} 动作已经执行。${validationSummary}`;
   }
 
   return target

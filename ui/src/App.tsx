@@ -639,6 +639,7 @@ function SimpleChatTranscript({
     createdAt?: string;
     content: string;
     payload?: unknown;
+    runId?: string | null;
     duplicateCount?: number;
   };
 
@@ -657,6 +658,7 @@ function SimpleChatTranscript({
       createdAt: entry.createdAt,
       content,
       payload: entry.payload,
+      runId: entry.runId,
     }];
   });
 
@@ -695,6 +697,7 @@ function SimpleChatTranscript({
         time: new Date(event.createdAt).toLocaleTimeString(),
         content,
         payload: event.payload,
+        runId: event.runId,
       }];
     }
 
@@ -720,6 +723,7 @@ function SimpleChatTranscript({
         time: new Date(event.createdAt).toLocaleTimeString(),
         content: body ? `${title}\n${body}` : title,
         payload: event.payload,
+        runId: event.runId,
       }];
     }
 
@@ -767,7 +771,9 @@ function SimpleChatTranscript({
         if (item.kind === "approval_request") {
           const payload = item.payload && typeof item.payload === "object" ? item.payload as { approvalId?: unknown } : {};
           const approvalId = typeof payload.approvalId === "string" ? payload.approvalId : undefined;
-          const approval = approvalId ? pendingApprovals.find((candidate) => candidate.id === approvalId) : undefined;
+          const approval = approvalId
+            ? pendingApprovals.find((candidate) => candidate.id === approvalId) ?? approvalFromEventPayload(item.payload, item.runId)
+            : undefined;
           if (approval) {
             return (
               <Message
@@ -810,6 +816,23 @@ function formatPayload(payload: unknown): string {
   } catch {
     return String(payload);
   }
+}
+
+function approvalFromEventPayload(payload: unknown, runId: string | null | undefined): DesktopApproval | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const record = payload as Record<string, unknown>;
+  const id = typeof record.approvalId === "string" ? record.approvalId : undefined;
+  if (!id || !runId) return undefined;
+
+  return {
+    id,
+    runId,
+    pluginId: typeof record.pluginId === "string" ? record.pluginId : "runtime",
+    capability: typeof record.capability === "string" ? record.capability : "tool.approval",
+    status: "pending",
+    request: record.request,
+    decidedAt: null,
+  };
 }
 
 function eventPayloadRecord(event: DesktopEvent): Record<string, unknown> {
@@ -3323,16 +3346,22 @@ export default function App() {
   }, [activeSessionId, sortedEvents.length, refreshDetail, refreshSessions]);
 
   const handleApprovalDecision = async (approvalId: string, decision: "granted" | "denied") => {
+    const approval = pendingApprovals.find((candidate) => candidate.id === approvalId);
     setDecisionState((prev) => ({ ...prev, [approvalId]: "approving" }));
     try {
       const bridge = requireDesktopBridge();
       await bridge.decideApproval({ approvalId, decision });
       setApprovalError(null);
+      if (approval) {
+        setActiveRunId(approval.runId);
+        setSurface("running");
+      }
       setDecisionState((prev) => ({
         ...prev,
         [approvalId]: decision === "granted" ? "approved" : "denied",
       }));
       await refreshDetail();
+      await refreshSessions();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setApprovalError(`${decision === "granted" ? "通过" : "拒绝"}审批动作失败：${message}`);

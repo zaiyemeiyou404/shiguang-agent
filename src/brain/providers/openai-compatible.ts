@@ -8,6 +8,7 @@ import {
   tryParseProviderDecision,
   type ProviderMessage,
 } from "./shared.js";
+import { formatProviderEmptyResponse, formatProviderFetchError, formatProviderHttpError } from "./errors.js";
 
 export interface OpenAIModelConfig {
   baseURL?: string;
@@ -139,7 +140,8 @@ export class OpenAICompatibleModel implements LlmPlannerModel {
           : {}),
     };
 
-    const response = await fetch(`${this.baseURL}/chat/completions`, {
+    const url = `${this.baseURL}/chat/completions`;
+    const response = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -147,6 +149,8 @@ export class OpenAICompatibleModel implements LlmPlannerModel {
       },
       body: JSON.stringify(body),
       signal,
+    }).catch((error: unknown) => {
+      throw formatProviderFetchError("OpenAI-compatible", url, error);
     });
 
     if (!response.ok) {
@@ -157,7 +161,7 @@ export class OpenAICompatibleModel implements LlmPlannerModel {
       if (completionMode === "json_object" && isJsonModeUnsupported(response.status, text)) {
         return this.requestCompletion(messages, signal, [], "plain_json");
       }
-      throw new Error(`OpenAI API error ${response.status}: ${text}`);
+      throw formatProviderHttpError("OpenAI-compatible", response.status, text);
     }
 
     const data = (await response.json()) as ChatCompletionResponse;
@@ -167,14 +171,14 @@ export class OpenAICompatibleModel implements LlmPlannerModel {
       if (fallback) {
         return this.requestCompletion(messages, signal, [], fallback);
       }
-      throw new Error("OpenAI returned no message after native/json/plain fallbacks");
+      throw formatProviderEmptyResponse("OpenAI-compatible");
     }
     if (!normalizeMessageContent(message) && !hasToolCalls(message)) {
       const fallback = nextFallbackMode(completionMode);
       if (fallback) {
         return this.requestCompletion(messages, signal, [], fallback);
       }
-      throw new Error("OpenAI returned empty response after native/json/plain fallbacks");
+      throw formatProviderEmptyResponse("OpenAI-compatible");
     }
 
     return message;

@@ -1126,11 +1126,13 @@ function summarizeCompletionCheck(output: unknown): string | null {
   if (!output || typeof output !== "object") return null;
   const data = output as {
     status?: unknown;
+    repeatedActionPrevented?: unknown;
     action?: { target?: unknown; label?: unknown; toolName?: unknown };
     validation?: { ok?: unknown; summary?: unknown } | null;
   };
   const target = typeof data.action?.target === "string" ? data.action.target : null;
   const label = typeof data.action?.label === "string" ? data.action.label : "处理";
+  const repeatedActionPrevented = data.repeatedActionPrevented !== false;
   const validationSummary = typeof data.validation?.summary === "string" && data.validation.summary.trim()
     ? data.validation.summary.trim()
     : data.validation?.ok === true
@@ -1140,9 +1142,20 @@ function summarizeCompletionCheck(output: unknown): string | null {
         : "检查已完成。";
 
   if (data.status === "needs_repair") {
+    if (!repeatedActionPrevented) {
+      return target
+        ? `${target} 已${label}，但后续检查没有通过：${validationSummary} 我会换一种修复方式继续。`
+        : `工具动作已经执行，但后续检查没有通过：${validationSummary} 我会换一种修复方式继续。`;
+    }
     return target
       ? `我已经完成了 ${target} 的${label}，但后续检查没有通过：${validationSummary} 我会停止重复同一个写入动作，需要换一种修复方式继续。`
       : `工具动作已经执行，但后续检查没有通过：${validationSummary} 我会停止重复同一个写入动作，需要换一种修复方式继续。`;
+  }
+
+  if (!repeatedActionPrevented) {
+    return target
+      ? `工作已完成：${target} 已${label}，并且${validationSummary}`
+      : `工作已完成，后续检查结果：${validationSummary}`;
   }
 
   return target
