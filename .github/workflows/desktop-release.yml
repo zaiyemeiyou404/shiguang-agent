@@ -27,10 +27,6 @@ jobs:
             artifact_globs: |
               release/拾光 Agent Setup *.exe
               release/win-unpacked/**
-          - os: ubuntu-latest
-            artifact_name: shiguang-agent-linux
-            artifact_globs: |
-              release/linux-unpacked/**
 
     steps:
       - name: Checkout
@@ -54,21 +50,11 @@ jobs:
         if: runner.os == 'Windows'
         run: npx electron-builder build --win --x64 --publish never
 
-      - name: Package Linux desktop
-        if: runner.os == 'Linux'
-        run: npx electron-builder build --linux --dir --publish never
-
       - name: Zip Windows unpacked app
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           Compress-Archive -Path 'release/win-unpacked/*' -DestinationPath 'release/win-unpacked.zip' -Force
-
-      - name: Zip Linux unpacked app
-        if: runner.os == 'Linux'
-        run: |
-          cd release
-          zip -r linux-unpacked.zip linux-unpacked
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -77,7 +63,6 @@ jobs:
           path: |
             ${{ matrix.artifact_globs }}
             release/win-unpacked.zip
-            release/linux-unpacked.zip
           if-no-files-found: error
 
   publish-release:
@@ -98,8 +83,7 @@ jobs:
           mkdir -p release-files
           find release-artifacts -type f \( \
             -name '*.exe' -o \
-            -name 'win-unpacked.zip' -o \
-            -name 'linux-unpacked.zip' \
+            -name 'win-unpacked.zip' \
           \) -exec cp {} release-files/ \;
           ls -R release-files
 
@@ -134,8 +118,7 @@ jobs:
           mkdir -p release-files
           find release-artifacts -type f \( \
             -name '*.exe' -o \
-            -name 'win-unpacked.zip' -o \
-            -name 'linux-unpacked.zip' \
+            -name 'win-unpacked.zip' \
           \) -exec cp {} release-files/ \;
           ls -R release-files
 

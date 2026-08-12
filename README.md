@@ -210,7 +210,6 @@ Release 会上传：
 
 - Windows 安装包 `.exe`
 - Windows 免安装包 `win-unpacked.zip`
-- Linux 免安装包 `linux-unpacked.zip`
 
 ## 当前状态
 
