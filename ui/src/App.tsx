@@ -776,7 +776,7 @@ function SimpleChatTranscript({
                 from="审批"
                 time={item.duplicateCount && item.duplicateCount > 1 ? `${item.time} x${item.duplicateCount}` : item.time}
               >
-                <ApprovalCard
+                <ApprovalReviewCard
                   approval={approval}
                   decisionState={decisionState[approval.id]}
                   onDecision={onApprovalDecision}
@@ -898,6 +898,130 @@ function summarizeApprovalRequest(request: unknown): {
     toolInput: formatPayload(payload.toolInput),
     preview: parseApprovalPreview(payload.preview),
   };
+}
+
+type ApprovalRiskLevel = "low" | "medium" | "high" | "critical";
+
+type ApprovalRiskInfo = {
+  level: ApprovalRiskLevel;
+  label: string;
+  detail: string;
+  tone: SignalTone;
+};
+
+function approvalRiskInfo(approval: DesktopApproval, summary: ReturnType<typeof summarizeApprovalRequest>): ApprovalRiskInfo {
+  const text = [
+    approval.capability,
+    summary.toolName,
+    summary.preview?.operation,
+    summary.preview?.path,
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  if (/delete|remove|unlink|rmdir|rm\b|fs\.delete/.test(text)) {
+    return {
+      level: "critical",
+      label: "高危变更",
+      detail: "可能删除文件或破坏现有工作区内容，通过前请重点检查路径和 diff。",
+      tone: "danger",
+    };
+  }
+  if (/execute|process|terminal|command|shell|start_background|stop_background/.test(text)) {
+    return {
+      level: "high",
+      label: "命令执行",
+      detail: "会在本机工作区运行命令或进程，建议确认命令、cwd 和参数没有越界。",
+      tone: "warn",
+    };
+  }
+  if (/write|patch|move|copy|fs\.write|fs\.move/.test(text) || summary.preview?.diff) {
+    return {
+      level: "high",
+      label: "文件写入",
+      detail: "会修改工作区文件，重点查看目标路径、增删行和预览差异。",
+      tone: "warn",
+    };
+  }
+  if (/network|web|http|github|mcp/.test(text)) {
+    return {
+      level: "medium",
+      label: "外部访问",
+      detail: "会访问外部服务或扩展工具，确认请求范围符合当前任务。",
+      tone: "accent",
+    };
+  }
+  return {
+    level: "medium",
+    label: "需要确认",
+    detail: "这是受保护动作，本次通过只会恢复当前这一条工具调用。",
+    tone: "warn",
+  };
+}
+
+function approvalRequestRecord(request: unknown): Record<string, unknown> {
+  return request && typeof request === "object" ? request as Record<string, unknown> : {};
+}
+
+function approvalToolInputRecord(request: unknown): Record<string, unknown> | null {
+  const payload = approvalRequestRecord(request);
+  const input = payload.toolInput;
+  return input && typeof input === "object" && !Array.isArray(input)
+    ? input as Record<string, unknown>
+    : null;
+}
+
+function approvalInputText(input: Record<string, unknown> | null, keys: string[]): string | null {
+  if (!input) return null;
+  for (const key of keys) {
+    const value = input[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+  }
+  return null;
+}
+
+function approvalTargetLabel(approval: DesktopApproval, summary: ReturnType<typeof summarizeApprovalRequest>): string {
+  const input = approvalToolInputRecord(approval.request);
+  return summary.preview?.path
+    ?? approvalInputText(input, ["path", "targetPath", "destination", "dest", "to", "cwd", "url", "command", "query"])
+    ?? "当前工作区";
+}
+
+function approvalActionLabel(approval: DesktopApproval, summary: ReturnType<typeof summarizeApprovalRequest>): string {
+  const tool = summary.toolName ?? approval.capability;
+  const op = summary.preview?.operation;
+  return op ? `${op}: ${tool}` : `审阅 ${tool}`;
+}
+
+function approvalScopeRows(approval: DesktopApproval, summary: ReturnType<typeof summarizeApprovalRequest>): Array<{ label: string; value: string }> {
+  const input = approvalToolInputRecord(approval.request);
+  const rows = [
+    { label: "工具", value: summary.toolName ?? approval.capability },
+    { label: "能力", value: approval.capability },
+    { label: "目标", value: approvalTargetLabel(approval, summary) },
+    { label: "授权范围", value: "仅当前这一次调用" },
+  ];
+  const cwd = approvalInputText(input, ["cwd"]);
+  const command = approvalInputText(input, ["command"]);
+  if (cwd && cwd !== rows[2]?.value) rows.push({ label: "工作目录", value: cwd });
+  if (command && command !== rows[2]?.value) rows.push({ label: "命令", value: command });
+  return rows;
+}
+
+function approvalSafetyChecks(risk: ApprovalRiskInfo, summary: ReturnType<typeof summarizeApprovalRequest>): string[] {
+  const checks = [
+    risk.level === "critical" ? "确认目标路径不是项目根目录、系统目录或无关文件。" : null,
+    risk.level === "high" ? "确认这一步确实是完成当前任务所必需的最小动作。" : null,
+    summary.preview?.diff ? "已生成 diff 预览，优先检查新增/删除内容是否符合预期。" : null,
+    summary.preview?.truncated ? "diff 已截断，建议谨慎通过或先让 Agent 缩小改动范围。" : null,
+    "通过后 Agent 会自动继续运行；拒绝会让当前 run 停止并记录原因。",
+  ].filter((item): item is string => Boolean(item));
+  return checks;
+}
+
+function compactApprovalInput(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed || trimmed === "undefined") return "";
+  return trimmed.length > 640 ? `${trimmed.slice(0, 640)}...` : trimmed;
 }
 
 function formatAgeFromTimestamp(timestamp: string | null | undefined, now = Date.now()): string | null {
@@ -2010,6 +2134,101 @@ function ApprovalCard({
       <div className="approval-actions">
         <button className="tool-btn" type="button" disabled={deciding} onClick={() => onDecision(approval.id, "denied")}>拒绝</button>
         <button className="tool-btn primary" type="button" disabled={deciding} onClick={() => onDecision(approval.id, "granted")}>{deciding ? "处理中..." : "通过"}</button>
+      </div>
+    </div>
+  );
+}
+
+function ApprovalReviewCard({
+  approval,
+  decisionState,
+  onDecision,
+}: {
+  approval: DesktopApproval;
+  decisionState?: "approving" | "approved" | "denied";
+  onDecision: (approvalId: string, decision: "granted" | "denied") => void;
+}) {
+  const requestSummary = summarizeApprovalRequest(approval.request);
+  const risk = approvalRiskInfo(approval, requestSummary);
+  const rows = approvalScopeRows(approval, requestSummary);
+  const checks = approvalSafetyChecks(risk, requestSummary);
+  const inputSnippet = compactApprovalInput(requestSummary.toolInput);
+  const deciding = decisionState === "approving";
+  const resolved = decisionState === "approved"
+    || decisionState === "denied"
+    || approval.status === "granted"
+    || approval.status === "denied"
+    || approval.status === "expired";
+  const statusLabel = decisionState === "approving"
+    ? "正在处理"
+    : decisionState === "approved" || approval.status === "granted"
+      ? "已通过"
+      : decisionState === "denied" || approval.status === "denied"
+        ? "已拒绝"
+        : approval.status === "expired"
+          ? "已过期"
+          : "等待确认";
+
+  return (
+    <div className={`event-card action-card approval-review-card approval-risk-${risk.level}`}>
+      <div className="approval-review-head">
+        <div className="approval-review-icon">!</div>
+        <div className="approval-review-title">
+          <span className="tiny">权限审查 · 单次授权</span>
+          <h3>{approvalActionLabel(approval, requestSummary)}</h3>
+          <p className="muted">{requestSummary.reason ?? risk.detail}</p>
+        </div>
+        <div className="approval-review-status">
+          <SignalPill tone={risk.tone}>{risk.label}</SignalPill>
+          <span className="tiny">{statusLabel}</span>
+        </div>
+      </div>
+
+      <div className="approval-review-grid">
+        {rows.map((row) => (
+          <div className="approval-review-cell" key={`${row.label}:${row.value}`}>
+            <span>{row.label}</span>
+            <strong>{row.value}</strong>
+          </div>
+        ))}
+      </div>
+
+      <div className="approval-review-checks">
+        <strong>通过前确认</strong>
+        {checks.map((check) => (
+          <p key={check}>{check}</p>
+        ))}
+      </div>
+
+      {requestSummary.preview ? <ApprovalPreviewBlock preview={requestSummary.preview} /> : null}
+
+      {inputSnippet ? (
+        <details className="approval-input-details">
+          <summary>查看原始工具输入</summary>
+          <pre className="tool-json">{inputSnippet}</pre>
+        </details>
+      ) : null}
+
+      {decisionState === "approved" ? <p className="approval-state-note">已通过，正在恢复运行...</p> : null}
+      {decisionState === "denied" ? <p className="approval-state-note">已拒绝，当前运行会停在这里。</p> : null}
+
+      <div className="approval-actions approval-review-actions">
+        <button
+          className="tool-btn"
+          type="button"
+          disabled={deciding || resolved}
+          onClick={() => onDecision(approval.id, "denied")}
+        >
+          拒绝并停止
+        </button>
+        <button
+          className="tool-btn primary"
+          type="button"
+          disabled={deciding || resolved}
+          onClick={() => onDecision(approval.id, "granted")}
+        >
+          {deciding ? "处理中..." : "通过一次并继续"}
+        </button>
       </div>
     </div>
   );
@@ -4152,7 +4371,7 @@ export default function App() {
                 ) : (
                   <div className="approval-main-list">
                     {pendingApprovals.map((approval) => (
-                      <ApprovalCard
+                      <ApprovalReviewCard
                         key={approval.id}
                         approval={approval}
                         decisionState={decisionState[approval.id]}
@@ -4386,7 +4605,7 @@ export default function App() {
               {pendingApprovals.length === 0 ? <p className="muted">当前没有待审批动作。</p> : (
                 <div className="inspector-stack">
                   {pendingApprovals.map((approval) => (
-                    <ApprovalCard
+                    <ApprovalReviewCard
                       key={approval.id}
                       approval={approval}
                       decisionState={decisionState[approval.id]}

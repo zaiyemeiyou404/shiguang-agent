@@ -41,10 +41,20 @@ export class ToolMetadataPolicy implements Policy {
         toolName: descriptor.name,
         toolInput: decision.action.toolInput,
         capability,
-        reason: `Tool requires approval before execution: ${descriptor.name} [${capability}]`,
+        reason: describeApprovalReason(descriptor, capability),
       },
     };
   }
+}
+
+function describeApprovalReason(descriptor: ToolDescriptor, capability: string): string {
+  const risk = descriptor.risk ?? "execute";
+  const effect = risk === "write"
+    ? "这个动作可能修改、创建或删除工作区文件"
+    : risk === "execute"
+      ? "这个动作会运行命令或启动进程"
+      : "这个动作需要访问受保护的信息";
+  return `需要你确认后才能继续：${descriptor.name} [${capability}]。${effect}，本次批准只会执行当前这一次工具调用。`;
 }
 
 export class AllowAllPolicy implements Policy {
