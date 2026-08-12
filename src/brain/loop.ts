@@ -1033,6 +1033,10 @@ export async function runLoop(
   }
 
   finalizeDanglingCompletionCheck(state);
+  if (!state.stopReason && state.steps >= maxSteps) {
+    state.stopReason = "step_limit";
+    state.stopSummary = `Reached the ${maxSteps}-step budget before producing a final answer. Continue the run to keep working from the latest checkpoint.`;
+  }
   return state;
 }
 

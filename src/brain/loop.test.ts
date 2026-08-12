@@ -32,6 +32,61 @@ function makeContext(message: string): ContextBundle {
   };
 }
 
+test("runLoop pauses with step_limit when the step budget is exhausted", async () => {
+  const decision: BrainDecision = {
+    action: { kind: "tool_call", toolName: "list_directory", toolInput: { path: "." } },
+    reasoning: "Keep inspecting a large workspace.",
+  };
+
+  const state = await runLoop(
+    {
+      context: makeContext("inspect this large project"),
+      runId: "run_step_limit",
+      priorTurns: [],
+      history: [],
+      availableTools: [],
+    },
+    {
+      planner: {
+        async decide(): Promise<BrainDecision> {
+          return decision;
+        },
+      },
+      policy: {
+        async check(next): Promise<BrainDecision> {
+          return next;
+        },
+      },
+      dispatcher: {
+        async dispatch(next): Promise<ActionResult> {
+          return {
+            action: next.action,
+            ok: true,
+            output: { entries: [] },
+            metadata: {
+              category: "tool_observation",
+              summary: "Listed directory.",
+              retryable: false,
+              toolName: "list_directory",
+            },
+          };
+        },
+      },
+      evaluator: {
+        async evaluate() {
+          return { kind: "continue" } as const;
+        },
+      },
+    },
+    2,
+  );
+
+  assert.equal(state.steps, 2);
+  assert.equal(state.stopReason, "step_limit");
+  assert.match(state.stopSummary ?? "", /2-step budget/);
+  assert.equal(state.history.length, 2);
+});
+
 test("runLoop tracks the latest validation failure in working memory", async () => {
   const decision: BrainDecision = {
     action: { kind: "tool_call", toolName: "run_validation", toolInput: { mode: "typecheck" } },

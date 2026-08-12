@@ -46,6 +46,7 @@ function isHighSignalRun(item: ContextItem): boolean {
   return status === "failed"
     || status === "cancelled"
     || status === "needs_approval"
+    || status === "paused"
     || item.score >= 0.8;
 }
 

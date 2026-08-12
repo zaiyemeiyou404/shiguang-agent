@@ -131,7 +131,7 @@ function GlobalBanner({ variant, title, detail }: { variant: BannerVariant; titl
 
 function signalToneForRunStatus(status: DesktopRun["status"] | null): SignalTone {
   if (status === "running") return "success";
-  if (status === "needs_approval" || status === "pending") return "warn";
+  if (status === "needs_approval" || status === "pending" || status === "paused") return "warn";
   if (status === "failed" || status === "cancelled") return "danger";
   if (status === "completed") return "accent";
   return "neutral";
@@ -362,6 +362,7 @@ function formatEventKindLabel(kind: DesktopEvent["kind"]) {
 
 function formatRunStatus(status: DesktopRun["status"] | null | undefined) {
   if (status === "running") return "运行中";
+  if (status === "paused") return "待继续";
   if (status === "needs_approval") return "待审批";
   if (status === "pending") return "排队中";
   if (status === "completed") return "已完成";
@@ -449,6 +450,8 @@ function SessionCard({ active, session, pinned, onClick, onTogglePin }: {
       ? `待审批 ${session.attention.pendingApprovalCount}`
       : session.attention?.hasFailedRun
         ? "失败"
+        : session.attention?.latestRunStatus === "paused"
+          ? "待继续"
         : session.attention?.hasRunningRun
           ? "运行中"
           : formatSessionStatus(session.status);
@@ -1211,6 +1214,10 @@ function describeRunActivity(
         ? `待确认输入：${summarizeToolBlockValue(approvalSummary.toolInput)}`
         : "高风险动作已暂停，等你确认后继续。");
     tone = "warn";
+  } else if (run.status === "paused") {
+    label = "等待继续";
+    detail = run.reason ?? "本轮到达步骤预算，已保留现场。点击继续工作后会沿着最近的检查点继续推进。";
+    tone = "warn";
   } else if (latestErrorEvent) {
     const payload = eventPayloadRecord(latestErrorEvent);
     label = run.status === "failed" ? "运行失败" : "最新错误";
@@ -1300,6 +1307,11 @@ function describeRunPhase(
     currentStep = "tool";
     label = "等待审批";
     detail = approvalSummary.reason ?? "高风险动作已暂停，等你确认后继续。";
+    tone = "warn";
+  } else if (run.status === "paused") {
+    currentStep = "reply";
+    label = "等待继续";
+    detail = run.reason ?? "本轮到达步骤预算，已保留现场。继续工作会沿最近的检查点往下推进。";
     tone = "warn";
   } else if (latestErrorEvent || run.status === "failed") {
     currentStep = latestPendingToolCall || latestToolResult ? "tool" : "reply";
@@ -2882,14 +2894,14 @@ export default function App() {
     : null;
   const showActiveRunTranscript = Boolean(
     activeRun
-      && (activeRun.status === "pending" || activeRun.status === "running" || activeRun.status === "needs_approval")
+      && (activeRun.status === "pending" || activeRun.status === "running" || activeRun.status === "paused" || activeRun.status === "needs_approval")
       && (sessionTurns.length === 0 || (latestSessionRun?.id ?? null) === (activeRunId ?? null)),
   );
   const pendingApprovals = workspaceSnapshot?.pendingApprovals ?? [];
   const artifacts = workspaceSnapshot?.artifacts ?? [];
   const sortedEvents = [...events].sort((a, b) => a.seq - b.seq);
   const latestErrorEvent = [...sortedEvents].reverse().find((event) => event.kind === "error");
-  const canShowCompactionBanner = activeRun?.status === "running" || activeRun?.status === "needs_approval";
+  const canShowCompactionBanner = activeRun?.status === "running" || activeRun?.status === "paused" || activeRun?.status === "needs_approval";
   const latestCompactionEvent = canShowCompactionBanner
     ? [...sortedEvents].reverse().find((event) => event.kind === "context_compacted" && isMeaningfulCompactionEvent(event))
     : undefined;
@@ -3265,8 +3277,10 @@ export default function App() {
       }
     }
     setSurface("running");
-    if (!inputText.trim() && !activeRun && activeSessionId) {
-      const draft = "继续当前任务，先检查最近状态、可用产物和下一步。";
+    if (!inputText.trim() && activeSessionId && (!activeRun || activeRun.status === "paused")) {
+      const draft = activeRun?.status === "paused"
+        ? "继续上次暂停的任务，从最近检查点往下推进，并先说明还差什么。"
+        : "继续当前任务，先检查最近状态、可用产物和下一步。";
       setInputText(draft);
       setSessionDrafts((prev) => ({ ...prev, [activeSessionId]: draft }));
     }

@@ -2,16 +2,16 @@
 
 拾光 Agent 是一个轻量级桌面 AI Agent。它把对话、工作区文件操作、工具调用、审批、运行记录和上下文压缩放在一个 Electron 桌面界面里，目标是做成一个下载后即可配置使用的小型个人工作台。
 
-当前版本：`0.2.2`
+当前版本：`0.2.3`
 
 ## 下载使用
 
 在 GitHub Releases 页面下载 Windows 版本：
 
-- 安装包：`拾光 Agent Setup 0.2.2.exe`
+- 安装包：`拾光 Agent Setup 0.2.3.exe`
 - 免安装版：`win-unpacked.zip`
 
-`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.2`，才会生成新的正式 Release。
+`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.3`，才会生成新的正式 Release。
 
 如果使用免安装版，解压后运行：
 
@@ -57,6 +57,7 @@ $env:GEMINI_API_KEY="你的 key"
 - 审批机制：高风险工具可进入审批流，用户确认后继续运行。
 - 工作区切换：可以在对话中要求切换工作区，也可以通过设置调整。
 - 上下文管理：保留关键运行记录，在上下文压力较高时进行压缩。
+- 检查点续跑：普通运行预算提升到 36 步；如果大工程分析仍达到预算上限，会显示“待继续”并保留现场，而不是误标成“已完成”。
 - 多语言轻量校验：没有 `package.json` 的工作区也能识别并校验常见文件。
 
 当前 `run_validation` 支持：
@@ -173,7 +174,7 @@ npm run desktop:package:win
 
 ```text
 release/
-├── 拾光 Agent Setup 0.2.2.exe
+├── 拾光 Agent Setup 0.2.3.exe
 └── win-unpacked/
     └── 拾光 Agent.exe
 ```
@@ -196,8 +197,8 @@ examples/          示例配置
 推送 tag 后会自动构建 Release：
 
 ```bash
-git tag v0.2.2
-git push origin v0.2.2
+git tag v0.2.3
+git push origin v0.2.3
 ```
 
 Release 会上传：

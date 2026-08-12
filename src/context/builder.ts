@@ -64,7 +64,7 @@ export function buildContext(input: ContextBuilderInput): ContextBundle {
     if (!run.summary) continue;
     const runScore = run.status === "failed"
       ? 0.9
-      : run.status === "cancelled" || run.status === "needs_approval"
+      : run.status === "cancelled" || run.status === "needs_approval" || run.status === "paused"
         ? 0.8
         : 0.7;
     volatile.push(
@@ -156,7 +156,7 @@ function optionalPriority(item: ContextItem): number {
 function runStatusBonus(item: ContextItem): number {
   if (item.kind !== "run_summary") return 0;
   const status = item.metadata?.status;
-  return status === "failed" || status === "cancelled" || status === "needs_approval" ? 1 : 0;
+  return status === "failed" || status === "cancelled" || status === "needs_approval" || status === "paused" ? 1 : 0;
 }
 
 function runTimestamp(item: ContextItem): number {

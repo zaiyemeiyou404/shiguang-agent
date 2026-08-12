@@ -39,6 +39,7 @@ export interface Task {
 export type RunStatus =
   | "pending"
   | "running"
+  | "paused"
   | "completed"
   | "failed"
   | "cancelled"

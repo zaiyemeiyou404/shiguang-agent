@@ -17,6 +17,9 @@ import type { TurnRepository } from "../state/repositories.js";
 import type { MemoryService } from "../memory/service.js";
 import { randomUUID } from "node:crypto";
 
+const DEFAULT_RUN_STEP_BUDGET = 36;
+const APPROVAL_RESUME_STEP_BUDGET = 30;
+
 export interface AgentOptions {
   eventSink: EventSink;
   turnRepository?: TurnRepository;
@@ -109,7 +112,7 @@ export class Agent {
           },
           evaluator: this.evaluator,
         },
-        12,
+        DEFAULT_RUN_STEP_BUDGET,
         { signal: input.signal },
       );
 
@@ -182,7 +185,7 @@ export class Agent {
             },
             evaluator: this.evaluator,
           },
-          12,
+          APPROVAL_RESUME_STEP_BUDGET,
           { signal: input.signal },
         );
       }
@@ -298,6 +301,10 @@ function summarizeAssistantTurn(state: LoopState): string {
   }
 
   if (state.stopReason) {
+    if (state.stopReason === "step_limit") {
+      return state.stopSummary
+        ?? `Paused after ${state.steps} steps. Continue the run to keep working from the latest checkpoint.`;
+    }
     return state.stopSummary
       ? `Run stopped: ${state.stopReason}: ${state.stopSummary}`
       : `Run stopped: ${state.stopReason}.`;

@@ -9,6 +9,7 @@ export type LoopStopReason =
   | "finish"
   | "fail"
   | "needs_approval"
+  | "step_limit"
   | "non_retryable_tool_error"
   | "repeated_retryable_tool_error";
 

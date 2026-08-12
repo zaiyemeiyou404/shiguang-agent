@@ -20,7 +20,7 @@ export interface DesktopSession {
 export interface DesktopRun {
   id: string;
   sessionId: string;
-  status: "pending" | "running" | "completed" | "failed" | "cancelled" | "needs_approval";
+  status: "pending" | "running" | "paused" | "completed" | "failed" | "cancelled" | "needs_approval";
   reason: string | null;
   startedAt: string | null;
   endedAt: string | null;

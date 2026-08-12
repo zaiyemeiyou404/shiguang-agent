@@ -686,7 +686,7 @@ export class DesktopAppService {
       ...session,
       attention: {
         latestRunStatus: latestRun?.status ?? null,
-        hasRunningRun: runs.some((run) => run.status === "pending" || run.status === "running"),
+        hasRunningRun: runs.some((run) => run.status === "pending" || run.status === "running" || run.status === "paused"),
         hasPendingApproval: pendingApprovals.length > 0,
         pendingApprovalCount: pendingApprovals.length,
         hasFailedRun: latestRun?.status === "failed",
@@ -1282,6 +1282,9 @@ function deriveRunStatus(state: { stopReason: string | null; lastDecision: { act
   if (state.lastDecision?.action.kind === "needs_approval" || state.stopReason === "needs_approval") {
     return "needs_approval";
   }
+  if (state.stopReason === "step_limit") {
+    return "paused";
+  }
   if (state.lastDecision?.action.kind === "fail" || state.stopReason === "fail" || state.stopReason === "non_retryable_tool_error" || state.stopReason === "repeated_retryable_tool_error") {
     return "failed";
   }
@@ -1814,6 +1817,7 @@ function buildBranchSuggestedPrompt(input: {
 function branchStatusLabel(status: DesktopRun["status"]): string {
   if (status === "pending") return "排队中";
   if (status === "running") return "运行中";
+  if (status === "paused") return "暂停后继续";
   if (status === "completed") return "已完成";
   if (status === "failed") return "失败后继续";
   if (status === "cancelled") return "已取消后继续";
