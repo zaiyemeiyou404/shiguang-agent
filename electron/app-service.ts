@@ -243,13 +243,15 @@ export class DesktopAppService {
       throw new Error(`Session not found: ${sessionId}`);
     }
     await this.ensureSqliteSession(session);
+    await this.refreshSessionSummary(sessionId);
+    const refreshedSession = this.store.getSession(sessionId) ?? session;
     const [runs, turns] = await Promise.all([
       this.runRepository.listBySession(sessionId),
       this.turnRepository.listBySession(sessionId, 200),
     ]);
     const conversation = await this.buildSessionConversation(sessionId, turns, runs);
     return {
-      session: await this.decorateSession(session),
+      session: await this.decorateSession(refreshedSession),
       runs: runs.map(coreRunToDesktop),
       turns: turns.map(coreTurnToDesktop),
       conversation,
@@ -485,18 +487,7 @@ export class DesktopAppService {
         this.activeRunControllers.delete(runId);
       }
 
-      const sessionRuns = await this.runRepository.listBySession(sessionId);
-      const completedCount = sessionRuns.filter((r) => r.status === "completed").length;
-      const updatedAt = new Date();
-      const summary = `${sessionRuns.length} run(s), ${completedCount} completed`;
-      this.store.updateSession(sessionId, {
-        updatedAt: updatedAt.toISOString(),
-        summary,
-      });
-      await this.sessionRepository.update(sessionId, {
-        updatedAt,
-        summary,
-      });
+      await this.refreshSessionSummary(sessionId);
     })().catch((err: unknown) => {
       const reason = err instanceof Error ? err.message : String(err);
       void this.runRepository.get(runId).then((currentRun) => {
@@ -1100,9 +1091,31 @@ export class DesktopAppService {
 
   private async refreshSessionSummary(sessionId: string): Promise<void> {
     const sessionRuns = await this.runRepository.listBySession(sessionId);
+    const turns = await this.turnRepository.listBySession(sessionId, 200);
     const completedCount = sessionRuns.filter((r) => r.status === "completed").length;
-    const updatedAt = new Date();
     const summary = `${sessionRuns.length} run(s), ${completedCount} completed`;
+    const activityDates: Date[] = [];
+    for (const run of sessionRuns) {
+      if (run.endedAt) activityDates.push(run.endedAt);
+      if (run.startedAt) activityDates.push(run.startedAt);
+      const events = await this.runEventRepository.listByRun(run.id);
+      for (const event of events) {
+        activityDates.push(event.createdAt);
+      }
+    }
+    for (const turn of turns) {
+      activityDates.push(turn.createdAt);
+    }
+
+    let updatedAt = activityDates.reduce<Date | null>((latest, item) => {
+      if (!latest || item.getTime() > latest.getTime()) return item;
+      return latest;
+    }, null);
+    if (!updatedAt) {
+      const existing = await this.sessionRepository.get(sessionId);
+      updatedAt = existing?.updatedAt ?? new Date();
+    }
+
     this.store.updateSession(sessionId, {
       updatedAt: updatedAt.toISOString(),
       summary,

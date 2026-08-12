@@ -4195,6 +4195,123 @@ body,
   color: var(--text-dim);
 }
 
+/* Final shell polish: narrow Codex-like icon rail and denser session list. */
+.app.simple-layout {
+  grid-template-columns: 64px 286px minmax(0, 1fr);
+}
+
+.app-nav-panel {
+  padding: 12px 8px;
+  align-items: center;
+  background: #080d14;
+}
+
+.app-nav-top,
+.app-nav-group,
+.app-nav-footer {
+  width: 100%;
+  display: grid;
+  gap: 9px;
+  justify-items: center;
+}
+
+.app-nav-copy,
+.app-nav-text,
+.app-nav-status small {
+  display: none;
+}
+
+.brand-mark {
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.app-nav-btn,
+.app-nav-btn.secondary,
+.app-nav-status {
+  width: 46px;
+  min-height: 46px;
+  border-radius: 14px;
+}
+
+.app-nav-btn,
+.app-nav-btn.secondary {
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+
+.app-nav-glyph {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.app-nav-status {
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.session-pane {
+  padding: 14px 8px 12px;
+}
+
+.session-pane-header {
+  padding: 0 6px 8px;
+}
+
+.session-pane-header h2 {
+  font-size: 24px;
+}
+
+.session-pane-tools {
+  padding: 0 6px 8px;
+}
+
+.session-filter-row {
+  gap: 6px;
+}
+
+.session-filter-chip {
+  min-height: 28px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.session-action-row {
+  gap: 6px;
+}
+
+.session-card {
+  padding: 8px 9px 8px 13px;
+}
+
+@media (max-width: 1320px) {
+  .app.simple-layout {
+    grid-template-columns: 60px 270px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 1120px) {
+  .app.simple-layout {
+    grid-template-columns: 56px 248px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 920px) {
+  .app.simple-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .app-nav-panel {
+    padding: 8px;
+  }
+}
+
 .session-pin-btn {
   width: 20px;
   height: 20px;

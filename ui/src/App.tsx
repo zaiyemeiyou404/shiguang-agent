@@ -437,6 +437,16 @@ function eventLane(kind: DesktopEvent["kind"]): string {
 
 type TimelineLane = ReturnType<typeof eventLane>;
 
+function scrollTranscriptToLatest(node: HTMLDivElement | null): void {
+  if (!node) return;
+  const scrollHost = node.closest(".chat-surface") as HTMLElement | null;
+  const target = scrollHost ?? node;
+  target.scrollTo({ top: target.scrollHeight, behavior: "auto" });
+  if (target !== node) {
+    node.scrollTo({ top: node.scrollHeight, behavior: "auto" });
+  }
+}
+
 function SessionCard({ active, session, pinned, onClick, onTogglePin }: {
   active?: boolean;
   pinned?: boolean;
@@ -585,7 +595,8 @@ function LegacySimpleChatTranscript({ events }: { events: DesktopEvent[] }) {
     const host = scrollRef.current;
     if (!host) return;
     requestAnimationFrame(() => {
-      host.scrollTo({ top: host.scrollHeight });
+      scrollTranscriptToLatest(host);
+      requestAnimationFrame(() => scrollTranscriptToLatest(host));
     });
   }, [items.length]);
 
@@ -753,9 +764,10 @@ function SimpleChatTranscript({
     const host = scrollRef.current;
     if (!host) return;
     requestAnimationFrame(() => {
-      host.scrollTo({ top: host.scrollHeight });
+      scrollTranscriptToLatest(host);
+      requestAnimationFrame(() => scrollTranscriptToLatest(host));
     });
-  }, [items.length]);
+  }, [items.length, entries.length, liveEvents.length]);
 
   if (items.length === 0) {
     return (
@@ -3884,36 +3896,27 @@ export default function App() {
         <div className="app simple-layout">
           <aside className="panel app-nav-panel">
             <div className="app-nav-top">
-              <div className="brand-mark">拾</div>
-              <div className="app-nav-copy">
-                <strong>拾光</strong>
-                <span>Agent</span>
-              </div>
+              <div className="brand-mark">S</div>
             </div>
 
             <div className="app-nav-group">
-              <button className={`app-nav-btn${surface === "home" ? " active" : ""}`} type="button" onClick={() => setSurface("home")}>
-                <span className="app-nav-glyph">会</span>
-                <span className="app-nav-text">会话</span>
+              <button className={`app-nav-btn${surface === "home" ? " active" : ""}`} type="button" onClick={() => setSurface("home")} title="会话" aria-label="会话">
+                <span className="app-nav-glyph">◌</span>
               </button>
-              <button className={`app-nav-btn${showChatView ? " active" : ""}`} type="button" onClick={() => setSurface(activeSessionId ? "running" : "home")}>
-                <span className="app-nav-glyph">聊</span>
-                <span className="app-nav-text">聊天</span>
+              <button className={`app-nav-btn${showChatView ? " active" : ""}`} type="button" onClick={() => setSurface(activeSessionId ? "running" : "home")} title="聊天" aria-label="聊天">
+                <span className="app-nav-glyph">⌁</span>
               </button>
-              <button className="app-nav-btn" type="button" onClick={handleCreateSession}>
+              <button className="app-nav-btn" type="button" onClick={handleCreateSession} title="新建会话" aria-label="新建会话">
                 <span className="app-nav-glyph">＋</span>
-                <span className="app-nav-text">新建</span>
               </button>
             </div>
 
             <div className="app-nav-footer">
               <div className={`app-nav-status${pendingApprovals.length > 0 ? " warn" : ""}`}>
-                <span>{pendingApprovals.length > 0 ? `${pendingApprovals.length} 待审` : runtimeLabel}</span>
-                <small>{streamLabel}</small>
+                <span>{pendingApprovals.length > 0 ? pendingApprovals.length : "•"}</span>
               </div>
-              <button className="app-nav-btn secondary" type="button" onClick={() => { void openSettings(); }}>
-                <span className="app-nav-glyph">设</span>
-                <span className="app-nav-text">设置</span>
+              <button className="app-nav-btn secondary" type="button" onClick={() => { void openSettings(); }} title="设置" aria-label="设置">
+                <span className="app-nav-glyph">⚙</span>
               </button>
             </div>
           </aside>
@@ -4109,6 +4112,7 @@ export default function App() {
               <>
                 <section className="chat-surface">
                   <SimpleChatTranscript
+                    key={activeSessionId ?? "no-session"}
                     entries={sessionConversation}
                     liveEvents={sortedEvents}
                     showLiveEvents={showActiveRunTranscript}
