@@ -1,4 +1,5 @@
 import type { Tool, ToolDescriptor, ToolExecutionContext } from "./types.js";
+import { withToolContract } from "./contract.js";
 
 export class ToolRegistry {
   private tools = new Map<string, Tool>();
@@ -12,7 +13,7 @@ export class ToolRegistry {
   }
 
   all(): ToolDescriptor[] {
-    return Array.from(this.tools.values()).map((t) => t.descriptor);
+    return Array.from(this.tools.values()).map((t) => withToolContract(t.descriptor));
   }
 
   async invoke(name: string, input: unknown, context?: ToolExecutionContext): Promise<unknown> {

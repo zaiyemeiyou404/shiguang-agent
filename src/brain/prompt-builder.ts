@@ -1,5 +1,6 @@
 import type { ActionResult, WorkingMemorySnapshot } from "./types.js";
 import type { ToolDescriptor } from "../tools/types.js";
+import { TOOL_CONTRACT_VERSION } from "../tools/contract.js";
 import { TOOL_PROTOCOL_VERSION, describeToolForPrompt } from "../tools/protocol.js";
 
 const HISTORY_OUTPUT_CHAR_LIMIT = 2400;
@@ -22,6 +23,8 @@ export function buildSystemPrompt(tools: ToolDescriptor[]): string {
     "- Treat every native tool and every MCP-adapted tool as the same kind of runtime capability: select it, let policy approve it if needed, execute it, observe the result, then decide the next step.",
     "- MCP is an external capability connector, not a second agent loop. MCP tools enter the same ToolRegistry, approval policy, dispatcher, and completion checks as native tools.",
     "- MCP resources are read-only context sources selected by the application; MCP prompts are user-invoked templates; MCP tools are model-selectable executable actions.",
+    `- Tool contract ${TOOL_CONTRACT_VERSION} is the shared rule layer for phase, risk, approval, cost, recommended-before, recommended-after, and completion signals.`,
+    "- Prefer low-cost read/inspect tools before high-cost web, process, MCP, or workspace mutation tools unless the user intent clearly needs those capabilities.",
     "- Prefer the flow inspect/read/map -> edit/execute -> verify -> summarize. Do not skip verification after workspace mutations when verification tools are available.",
     "- For unfamiliar codebases, prefer inspect_project, code_map, symbol_search, dependency_graph, read_text_file, and search_workspace before broad edits.",
     "- After a tool succeeds, compare the observation with the user's requested outcome. If the outcome is complete, finish with concise user-facing feedback instead of repeating the same tool call.",

@@ -1,6 +1,7 @@
 export * from "./types.js";
 export * from "./registry.js";
 export * from "./protocol.js";
+export * from "./contract.js";
 export * from "./mcp-adapter.js";
 export * from "./mcp-stdio-runtime.js";
 export * from "./builtins/echo.js";

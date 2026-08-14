@@ -1,5 +1,6 @@
 import type { BrainInput, ActionResult } from "./types.js";
 import type { ToolDescriptor } from "../tools/types.js";
+import { inferToolContract } from "../tools/contract.js";
 
 const DEFAULT_MAX_SELECTED_TOOLS = 14;
 
@@ -114,20 +115,27 @@ function scoreTool(
 ): number {
   const name = tool.name;
   const haystack = `${tool.name} ${tool.capability ?? ""} ${tool.description}`.toLowerCase();
+  const contract = tool.contract ?? inferToolContract(tool);
   let score = 0;
 
   if (CORE_INSPECTION_TOOLS.has(name)) score += intent.inspect || !intent.edit ? 24 : 12;
   if (CORE_EDIT_TOOLS.has(name)) score += intent.edit ? 26 : 3;
   if (CORE_VALIDATE_TOOLS.has(name)) score += intent.validate || intent.execute || intent.git ? 22 : 8;
+  if (contract.phase === "inspect" || contract.phase === "read") score += intent.inspect || !intent.edit ? 8 : 2;
+  if (contract.phase === "edit") score += intent.edit ? 10 : -6;
+  if (contract.phase === "verify") score += intent.validate ? 10 : 3;
+  if (contract.phase === "execute") score += intent.execute || intent.validate ? 8 : -4;
   if (name === "run_validation" && history.some((result) => result.metadata?.workspaceMutation === true)) score += 20;
   if (recentToolNames.has(name)) score += 14;
   if (tool.requiresApproval === true && !intent.edit && !intent.execute) score -= 8;
 
-  if (intent.web && (haystack.includes("web") || haystack.includes("github") || haystack.includes("fetch"))) score += 24;
-  if (intent.memory && haystack.includes("memory")) score += 24;
-  if (intent.git && (haystack.includes("git") || haystack.includes("github"))) score += 18;
-  if (intent.mcp && (name.startsWith("mcp_") || haystack.includes("mcp."))) score += 18;
-  if (intent.execute && haystack.includes("process.")) score += 16;
+  if (intent.web && (contract.category === "web" || contract.category === "github" || haystack.includes("fetch"))) score += 24;
+  if (intent.memory && contract.category === "memory") score += 24;
+  if (intent.git && (contract.category === "git" || contract.category === "github")) score += 18;
+  if (intent.mcp && contract.category === "mcp") score += 18;
+  if (intent.execute && contract.category === "process") score += 16;
+  if (contract.category === "mcp" && !intent.mcp) score -= 6;
+  if ((contract.category === "web" || contract.category === "github") && !intent.web && !intent.git) score -= 8;
 
   const terms = text
     .split(/[^a-z0-9_\-\u4e00-\u9fff]+/i)
@@ -138,5 +146,8 @@ function scoreTool(
   }
 
   if (name === "echo") score -= 20;
+  if (contract.cost === "medium" && !recentToolNames.has(name)) score -= 2;
+  if (contract.cost === "high" && !recentToolNames.has(name)) score -= intent.edit || intent.execute || intent.web || intent.git || intent.mcp ? 3 : 8;
+  if (contract.risk !== "read" && !intent.edit && !intent.execute && !intent.validate) score -= 8;
   return score;
 }

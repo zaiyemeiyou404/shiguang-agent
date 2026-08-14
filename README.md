@@ -2,16 +2,16 @@
 
 拾光 Agent 是一个轻量级桌面 AI Agent。它把对话、工作区文件操作、工具调用、审批、运行记录和上下文压缩放在一个 Electron 桌面界面里，目标是做成一个下载后即可配置使用的小型个人工作台。
 
-当前版本：`0.2.14`
+当前版本：`0.2.15`
 
 ## 下载使用
 
 在 GitHub Releases 页面下载 Windows 版本：
 
-- 安装包：`拾光 Agent Setup 0.2.14.exe`
+- 安装包：`拾光 Agent Setup 0.2.15.exe`
 - 免安装版：`win-unpacked.zip`
 
-`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.14`，才会生成新的正式 Release。
+`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.15`，才会生成新的正式 Release。
 
 如果使用免安装版，解压后运行：
 
@@ -89,6 +89,7 @@ $env:GEMINI_API_KEY="你的 key"
 - 上下文管理：保留关键运行记录，在上下文压力较高时进行压缩。
 - 费用治理：模型返回 usage 时会记录本次/累计 token；模型不返回 usage 时会用上下文长度做估算，聊天时间线会显示本步用量和工具 schema 数量。
 - 工具省 token：LLM 规划时只发送当前任务最相关的一组工具 schema，工具执行输出进入历史前会自动摘要/截断，避免每一步反复塞入全量工具定义和大段文件内容。
+- Tool Contract Registry：每个工具统一声明来源、类别、阶段、风险、审批、成本、前后置建议和完成信号；planner、审批、MCP 适配和事件日志共用这一套规则。
 - 项目 Agent Profile：工作区可以提供 `.shiguang/agents/default.md`，声明项目级角色、模型偏好、工具白名单和额外规则；运行时会自动注入 profile，并只把允许的工具暴露给 planner。
 - 循环防护：连续相同的只读工具动作会自动暂停并说明原因；模型请求数、总 token 和上下文估算 token 都有默认预算，也可通过环境变量调整。
 - 自动续跑与费用保护：Agent 每 72 个动作步作为一个内部工作分片；默认只做 1 次保护性自动续跑，仍未形成最终反馈时会暂停并说明最近动作，避免模型/工具循环持续消耗 API 余额。
@@ -294,7 +295,10 @@ Release 会上传：
 
 ## 工具协议和 MCP
 
-拾光 Agent 已新增内部工具协议 `shiguang.tool.v1`，会把每个工具统一标记为来源、类别、阶段、风险、审批策略和推荐后续工具。
+拾光 Agent 使用两层工具标准：
+
+- `shiguang.tool.v1`：面向 prompt/native tool description 的兼容协议，描述工具来源、类别、阶段、风险、审批策略和推荐后续工具。
+- `shiguang.tool.contract.v1`：面向 runtime 的 Tool Contract Registry，统一声明工具成本、前置建议、后置建议、完成信号和 effects。planner、审批、事件日志和 MCP 适配都会复用同一份 contract。
 
 MCP 会被当作外部能力接入层，而不是另一套 Agent 循环。MCP tool 接入后应适配成普通 `ToolDescriptor`，继续走同一个 `ToolRegistry`、审批策略、dispatcher、事件日志和完成判断。
 

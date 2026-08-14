@@ -2,6 +2,7 @@ import type { BrainDecision, ActionResult, ToolErrorKind } from "../brain/types.
 import type { ToolRegistry } from "../tools/registry.js";
 import type { EventSink } from "./event-sink.js";
 import type { ToolExecutionContext } from "../tools/types.js";
+import { inferToolContract } from "../tools/contract.js";
 import { randomUUID } from "node:crypto";
 
 function summarize(value: unknown, maxLength = 500): string {
@@ -154,11 +155,13 @@ export class ActionDispatcher {
           };
         }
         try {
+          const contract = tool.descriptor.contract ?? inferToolContract(tool.descriptor);
           await this.recordToolPipeline(runId, {
             phase: "executing",
             tool: action.toolName,
             input: action.toolInput,
             toolCallId,
+            contract: summarizeContractForEvent(contract),
           });
           const output = await tool.execute(action.toolInput, context);
           if (this.eventSink && runId) {
@@ -184,12 +187,12 @@ export class ActionDispatcher {
               retryable: false,
               toolName: action.toolName,
               toolCallId,
-              ...(tool.descriptor.effects?.workspaceMutation
+              ...(contract.effects.workspaceMutation
                 // workspaceMutation 会驱动 loop/planner 在下一步自动进入 validate。
                 ? { workspaceMutation: true }
                 : {}),
-              ...(tool.descriptor.effects?.validationMode
-                ? { validationMode: tool.descriptor.effects.validationMode }
+              ...(contract.effects.validationMode
+                ? { validationMode: contract.effects.validationMode }
                 : {}),
             },
           };
@@ -252,6 +255,7 @@ export class ActionDispatcher {
             capability,
             reason: action.reason,
             ...(preview ? { preview } : {}),
+            ...(action.toolName ? { contract: this.summarizeToolContract(action.toolName) } : {}),
           });
           await this.eventSink.record(runId, "approval_request", {
             approvalId,
@@ -327,8 +331,30 @@ export class ActionDispatcher {
     errorKind?: ToolErrorKind;
     retryable?: boolean;
     preview?: unknown;
+    contract?: unknown;
   }): Promise<void> {
     if (!this.eventSink || !runId) return;
     await this.eventSink.record(runId, "tool_pipeline", payload);
   }
+
+  private summarizeToolContract(toolName: string): unknown | undefined {
+    const tool = this.toolRegistry.get(toolName);
+    if (!tool) return undefined;
+    return summarizeContractForEvent(tool.descriptor.contract ?? inferToolContract(tool.descriptor));
+  }
+}
+
+function summarizeContractForEvent(contract: ReturnType<typeof inferToolContract>): Record<string, unknown> {
+  return {
+    version: contract.version,
+    source: contract.source,
+    category: contract.category,
+    phase: contract.phase,
+    risk: contract.risk,
+    approval: contract.approval,
+    cost: contract.cost,
+    recommendedBeforeTools: contract.recommendedBeforeTools,
+    recommendedAfterTools: contract.recommendedAfterTools,
+    completionSignals: contract.completionSignals,
+  };
 }

@@ -1,5 +1,6 @@
 import type { BrainDecision } from "./types.js";
 import type { ToolDescriptor } from "../tools/types.js";
+import { withToolContract } from "../tools/contract.js";
 
 export interface Policy {
   check(decision: BrainDecision): Promise<BrainDecision>;
@@ -14,7 +15,10 @@ export class ToolMetadataPolicy implements Policy {
   private readonly toolsByName: Map<string, ToolDescriptor>;
 
   constructor(tools: ToolDescriptor[], options: ToolMetadataPolicyOptions = {}) {
-    this.toolsByName = new Map(tools.map((tool) => [tool.name, tool]));
+    this.toolsByName = new Map(tools.map((tool) => {
+      const descriptor = withToolContract(tool);
+      return [descriptor.name, descriptor];
+    }));
     this.allowWithoutApproval = new Set(options.allowWithoutApproval ?? ["run_validation"]);
   }
 
@@ -28,7 +32,8 @@ export class ToolMetadataPolicy implements Policy {
       return decision;
     }
 
-    if (!descriptor.requiresApproval || this.allowWithoutApproval.has(descriptor.name)) {
+    const needsApproval = descriptor.requiresApproval ?? (descriptor.contract?.approval !== "never");
+    if (!needsApproval || this.allowWithoutApproval.has(descriptor.name)) {
       return decision;
     }
 
