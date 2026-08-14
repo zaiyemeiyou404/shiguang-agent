@@ -6,6 +6,7 @@ import {
   tryParseProviderDecision,
 } from "./shared.js";
 import { formatProviderEmptyResponse, formatProviderFetchError, formatProviderHttpError } from "./errors.js";
+import { estimateMessagesTokens, mergeLlmTokenUsage, type LlmTokenUsage } from "../usage.js";
 
 export interface AnthropicModelConfig {
   baseURL?: string;
@@ -41,6 +42,17 @@ interface AnthropicResponse {
     type?: string;
     text?: string;
   }>;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
+  };
+}
+
+interface AnthropicResult {
+  raw: string;
+  usage?: LlmTokenUsage;
 }
 
 export class AnthropicModel implements LlmPlannerModel {
@@ -58,29 +70,34 @@ export class AnthropicModel implements LlmPlannerModel {
 
   async generateDecision(request: LlmPlannerModelRequest, context?: PlannerContext): Promise<LlmPlannerModelResponse> {
     const messages = buildProviderMessages(request);
-    const raw = await this.requestMessages(messages, context?.signal ?? request.signal);
-    const parsed = tryParseProviderDecision(raw);
+    const first = await this.requestMessages(messages, context?.signal ?? request.signal);
+    const parsed = tryParseProviderDecision(first.raw);
     if (parsed.ok) {
-      return parsed.response;
+      return { ...parsed.response, usage: first.usage };
     }
 
     // Anthropic 没有直接复用 OpenAI 的 json_object 约束，所以这里同样保留一次 repair 重试。
-    const repairedRaw = await this.requestMessages(
-      buildProviderRepairMessages(messages, raw),
+    const repaired = await this.requestMessages(
+      buildProviderRepairMessages(messages, first.raw),
       context?.signal ?? request.signal,
     );
-    const repaired = tryParseProviderDecision(repairedRaw);
-    if (repaired.ok) {
+    const mergedUsage = mergeLlmTokenUsage(first.usage, repaired.usage);
+    const repairedParse = tryParseProviderDecision(repaired.raw);
+    if (repairedParse.ok) {
       return {
-        ...repaired.response,
+        ...repairedParse.response,
         reasoning: `Model repair retry succeeded after parse error: ${parsed.error}`,
+        usage: mergedUsage,
       };
     }
 
-    return parseProviderDecision(repairedRaw);
+    return {
+      ...parseProviderDecision(repaired.raw),
+      usage: mergedUsage,
+    };
   }
 
-  private async requestMessages(providerMessages: Array<{ role: "system" | "user" | "assistant"; content: string }>, signal?: AbortSignal): Promise<string> {
+  private async requestMessages(providerMessages: Array<{ role: "system" | "user" | "assistant"; content: string }>, signal?: AbortSignal): Promise<AnthropicResult> {
     // Anthropic 把 system 独立成顶层字段，非 system 消息再映射成 messages 数组。
     const system = providerMessages
       .filter((message) => message.role === "system")
@@ -126,10 +143,42 @@ export class AnthropicModel implements LlmPlannerModel {
       .map((part) => part.text ?? "")
       .join("\n")
       .trim();
+    const usage = normalizeAnthropicUsage(data.usage, {
+      provider: "anthropic",
+      model: this.model,
+      requestCount: 1,
+      promptEstimateTokens: estimateMessagesTokens(providerMessages),
+    });
     if (!raw) {
       throw formatProviderEmptyResponse("Anthropic");
     }
 
-    return raw;
+    return { raw, usage };
   }
+}
+
+function normalizeAnthropicUsage(
+  usage: AnthropicResponse["usage"] | undefined,
+  base: LlmTokenUsage,
+): LlmTokenUsage {
+  const inputTokens = numberOrUndefined(usage?.input_tokens);
+  const outputTokens = numberOrUndefined(usage?.output_tokens);
+  const cachedInputTokens = numberOrUndefined(usage?.cache_read_input_tokens);
+  const cacheCreationTokens = numberOrUndefined(usage?.cache_creation_input_tokens);
+
+  return {
+    ...base,
+    ...(typeof inputTokens === "number" ? { inputTokens } : {}),
+    ...(typeof outputTokens === "number" ? { outputTokens } : {}),
+    ...(typeof inputTokens === "number" || typeof outputTokens === "number"
+      ? { totalTokens: (inputTokens ?? 0) + (outputTokens ?? 0) }
+      : {}),
+    ...(typeof cachedInputTokens === "number" || typeof cacheCreationTokens === "number"
+      ? { cachedInputTokens: (cachedInputTokens ?? 0) + (cacheCreationTokens ?? 0) }
+      : {}),
+  };
+}
+
+function numberOrUndefined(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }

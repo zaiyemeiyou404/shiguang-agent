@@ -6,6 +6,7 @@ import {
   tryParseProviderDecision,
 } from "./shared.js";
 import { formatProviderEmptyResponse, formatProviderFetchError, formatProviderHttpError } from "./errors.js";
+import { estimateMessagesTokens, mergeLlmTokenUsage, type LlmTokenUsage } from "../usage.js";
 
 export interface GeminiModelConfig {
   baseURL?: string;
@@ -44,6 +45,18 @@ interface GeminiResponse {
       }>;
     };
   }>;
+  usageMetadata?: {
+    promptTokenCount?: number;
+    candidatesTokenCount?: number;
+    totalTokenCount?: number;
+    cachedContentTokenCount?: number;
+    thoughtsTokenCount?: number;
+  };
+}
+
+interface GeminiResult {
+  raw: string;
+  usage?: LlmTokenUsage;
 }
 
 export class GeminiModel implements LlmPlannerModel {
@@ -61,29 +74,34 @@ export class GeminiModel implements LlmPlannerModel {
 
   async generateDecision(request: LlmPlannerModelRequest, context?: PlannerContext): Promise<LlmPlannerModelResponse> {
     const messages = buildProviderMessages(request);
-    const raw = await this.requestContent(messages, context?.signal ?? request.signal);
-    const parsed = tryParseProviderDecision(raw);
+    const first = await this.requestContent(messages, context?.signal ?? request.signal);
+    const parsed = tryParseProviderDecision(first.raw);
     if (parsed.ok) {
-      return parsed.response;
+      return { ...parsed.response, usage: first.usage };
     }
 
     // Gemini 侧也沿用“原请求 -> repair 请求”的双阶段策略，统一上层行为。
-    const repairedRaw = await this.requestContent(
-      buildProviderRepairMessages(messages, raw),
+    const repaired = await this.requestContent(
+      buildProviderRepairMessages(messages, first.raw),
       context?.signal ?? request.signal,
     );
-    const repaired = tryParseProviderDecision(repairedRaw);
-    if (repaired.ok) {
+    const mergedUsage = mergeLlmTokenUsage(first.usage, repaired.usage);
+    const repairedParse = tryParseProviderDecision(repaired.raw);
+    if (repairedParse.ok) {
       return {
-        ...repaired.response,
+        ...repairedParse.response,
         reasoning: `Model repair retry succeeded after parse error: ${parsed.error}`,
+        usage: mergedUsage,
       };
     }
 
-    return parseProviderDecision(repairedRaw);
+    return {
+      ...parseProviderDecision(repaired.raw),
+      usage: mergedUsage,
+    };
   }
 
-  private async requestContent(providerMessages: Array<{ role: "system" | "user" | "assistant"; content: string }>, signal?: AbortSignal): Promise<string> {
+  private async requestContent(providerMessages: Array<{ role: "system" | "user" | "assistant"; content: string }>, signal?: AbortSignal): Promise<GeminiResult> {
     // Gemini 的 systemInstruction 与 contents 分离，因此这里先拆 system 再映射普通对话。
     const system = providerMessages
       .filter((message) => message.role === "system")
@@ -131,10 +149,41 @@ export class GeminiModel implements LlmPlannerModel {
       ?.map((part) => part.text ?? "")
       .join("\n")
       .trim();
+    const usage = normalizeGeminiUsage(data.usageMetadata, {
+      provider: "gemini",
+      model: this.model,
+      requestCount: 1,
+      promptEstimateTokens: estimateMessagesTokens(providerMessages),
+    });
     if (!raw) {
       throw formatProviderEmptyResponse("Gemini");
     }
 
-    return raw;
+    return { raw, usage };
   }
+}
+
+function normalizeGeminiUsage(
+  usage: GeminiResponse["usageMetadata"] | undefined,
+  base: LlmTokenUsage,
+): LlmTokenUsage {
+  const inputTokens = numberOrUndefined(usage?.promptTokenCount);
+  const outputTokens = numberOrUndefined(usage?.candidatesTokenCount);
+  const totalTokens = numberOrUndefined(usage?.totalTokenCount)
+    ?? (typeof inputTokens === "number" || typeof outputTokens === "number"
+      ? (inputTokens ?? 0) + (outputTokens ?? 0)
+      : undefined);
+
+  return {
+    ...base,
+    ...(typeof inputTokens === "number" ? { inputTokens } : {}),
+    ...(typeof outputTokens === "number" ? { outputTokens } : {}),
+    ...(typeof totalTokens === "number" ? { totalTokens } : {}),
+    ...(typeof usage?.cachedContentTokenCount === "number" ? { cachedInputTokens: usage.cachedContentTokenCount } : {}),
+    ...(typeof usage?.thoughtsTokenCount === "number" ? { reasoningTokens: usage.thoughtsTokenCount } : {}),
+  };
+}
+
+function numberOrUndefined(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }

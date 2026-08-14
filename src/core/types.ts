@@ -68,6 +68,7 @@ export type RunEventKind =
   | "approval_request"
   | "approval_granted"
   | "approval_denied"
+  | "model_usage"
   | "context_compacted";
 
 export interface RunEvent {

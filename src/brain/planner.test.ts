@@ -3,6 +3,7 @@ import * as assert from "node:assert/strict";
 
 import { LlmPlanner, RulePlanner } from "./planner.js";
 import type { BrainInput, ActionResult, BrainDecision, WorkingMemorySnapshot } from "./types.js";
+import type { LlmPlannerModelRequest } from "./model-types.js";
 import type { ContextBundle, ContextItem } from "../context/types.js";
 import type { ToolDescriptor } from "../tools/types.js";
 
@@ -65,11 +66,13 @@ function makeWorkspaceMutationResult(): ActionResult {
 
 class RecordingModel {
   calls = 0;
+  lastRequest: LlmPlannerModelRequest | null = null;
 
   constructor(private readonly response: BrainDecision["action"]) {}
 
-  async generateDecision(): Promise<{ action: BrainDecision["action"] }> {
+  async generateDecision(request: LlmPlannerModelRequest): Promise<{ action: BrainDecision["action"] }> {
     this.calls += 1;
+    this.lastRequest = request;
     return { action: this.response };
   }
 }
@@ -297,6 +300,51 @@ test("LlmPlanner falls back to safe deterministic tools when the model only resp
     toolInput: {},
   });
   assert.match(decision.reasoning ?? "", /safe-tool fallback/);
+});
+
+test("LlmPlanner sends a cost-aware subset of tool schemas to the model", async () => {
+  const model = new RecordingModel({
+    kind: "tool_call",
+    toolName: "patch_text_file",
+    toolInput: { path: "src/app.ts", search: "old", replace: "new" },
+  });
+  const planner = new LlmPlanner(model);
+  const availableTools: ToolDescriptor[] = [
+    "inspect_project",
+    "list_directory",
+    "stat_path",
+    "read_text_file",
+    "search_workspace",
+    "code_map",
+    "symbol_search",
+    "dependency_graph",
+    "write_text_file",
+    "patch_text_file",
+    "copy_path",
+    "move_path",
+    "delete_path",
+    "run_validation",
+    "run_terminal_command",
+    "git_status",
+    "git_diff",
+    "collect_diagnostics",
+    "search_memory",
+    "remember_fact",
+  ].map((name) => ({
+    name,
+    description: `${name} test tool`,
+    inputSchema: { type: "object" },
+  }));
+
+  await planner.decide(makeInput([], availableTools, "修一下 src/app.ts 然后运行测试"));
+
+  assert.equal(model.calls, 1);
+  assert.equal(model.lastRequest?.totalAvailableToolCount, availableTools.length);
+  assert.ok((model.lastRequest?.availableTools.length ?? 0) <= 14);
+  assert.ok((model.lastRequest?.availableTools.length ?? 0) < availableTools.length);
+  const selectedNames = new Set(model.lastRequest?.availableTools.map((tool) => tool.name) ?? []);
+  assert.ok(selectedNames.has("patch_text_file"));
+  assert.ok(selectedNames.has("run_validation"));
 });
 
 test("RulePlanner falls back to list_directory after an empty search result", async () => {

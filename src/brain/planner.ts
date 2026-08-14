@@ -2,6 +2,7 @@ import type { BrainInput, BrainDecision, ActionResult, PlannerPhase, WorkingMemo
 import type { ToolDescriptor, ValidationModeHint } from "../tools/types.js";
 import type { LlmPlannerModel, LlmPlannerModelRequest, PlannerContext } from "./model-types.js";
 import { renderPrompt, type RenderedPrompt } from "../context/render.js";
+import { selectToolsForPlanner } from "./tool-selection.js";
 
 export interface Planner {
   decide(input: BrainInput, context?: PlannerContext): Promise<BrainDecision>;
@@ -30,11 +31,13 @@ export class LlmPlanner implements Planner {
 
   private buildRequest(input: BrainInput): LlmPlannerModelRequest {
     const prompt: RenderedPrompt = renderPrompt(input.context, input.priorTurns);
+    const toolSelection = selectToolsForPlanner(input);
 
     return {
       systemPrompt: prompt.system || undefined,
       messages: prompt.messages,
-      availableTools: input.availableTools,
+      availableTools: toolSelection.selected,
+      totalAvailableToolCount: toolSelection.total,
       history: input.history,
       workingMemory: input.workingMemory,
     };

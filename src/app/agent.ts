@@ -8,6 +8,7 @@ import { ToolMetadataPolicy, type Policy } from "../brain/policy.js";
 import { BasicEvaluator } from "../brain/evaluator.js";
 import type { ActionResult, BrainDecision, BrainInput } from "../brain/types.js";
 import { applyActionResultToWorkingMemory, runLoop, type LoopState } from "../brain/loop.js";
+import { emptyRunTokenUsage, type LlmTokenUsage, type RunTokenUsage } from "../brain/usage.js";
 import { ActionDispatcher } from "../runtime/dispatcher.js";
 import { ToolRegistry } from "../tools/registry.js";
 import type { Tool } from "../tools/types.js";
@@ -157,6 +158,7 @@ export class Agent {
           lastResult: approvedResult,
           stopReason: initialAction.reason,
           stopSummary: initialAction.summary ?? null,
+          usage: emptyRunTokenUsage(),
         };
       } else {
         const brainInput = {
@@ -196,6 +198,7 @@ export class Agent {
   ): Promise<LoopState> {
     let nextInput = input;
     let latestState: LoopState | null = null;
+    let runUsage = emptyRunTokenUsage();
 
     for (let continuationIndex = 0; continuationIndex <= MAX_AUTO_STEP_CONTINUATIONS; continuationIndex++) {
       const seededSteps = nextInput.workingMemory?.step ?? nextInput.history.length;
@@ -210,7 +213,15 @@ export class Agent {
           evaluator: this.evaluator,
         },
         seededSteps + stepBudget,
-        context,
+        {
+          signal: context?.signal,
+          initialUsage: runUsage,
+          usageBudget: readUsageBudgetFromEnv(),
+          onUsage: async (usage, total) => {
+            runUsage = total;
+            await this.emitModelUsageEvent(input.runId, usage, total);
+          },
+        },
       );
 
       if (latestState.stopReason !== "step_limit") {
@@ -275,6 +286,30 @@ export class Agent {
     await this.options.eventSink.record(runId, "message", { content });
   }
 
+  private async emitModelUsageEvent(runId: string, usage: LlmTokenUsage, total: RunTokenUsage): Promise<void> {
+    if (!this.options.eventSink) return;
+    await this.options.eventSink.record(runId, "model_usage", {
+      provider: usage.provider,
+      model: usage.model,
+      mode: usage.mode,
+      request: total.requestCount,
+      requestCount: usage.requestCount,
+      inputTokens: usage.inputTokens ?? null,
+      outputTokens: usage.outputTokens ?? null,
+      totalTokens: usage.totalTokens ?? null,
+      cachedInputTokens: usage.cachedInputTokens ?? null,
+      reasoningTokens: usage.reasoningTokens ?? null,
+      promptEstimateTokens: usage.promptEstimateTokens ?? null,
+      selectedToolSchemaCount: usage.selectedToolSchemaCount ?? null,
+      totalToolSchemaCount: usage.totalToolSchemaCount ?? null,
+      cumulativeInputTokens: total.inputTokens,
+      cumulativeOutputTokens: total.outputTokens,
+      cumulativeTotalTokens: total.totalTokens,
+      cumulativePromptEstimateTokens: total.promptEstimateTokens,
+      message: formatUsageMessage(usage, total),
+    });
+  }
+
   private async emitContextCompactionEvent(runId: string, diagnostics: ContextBuildDiagnostics): Promise<void> {
     const { compression, usedLlmCompactor } = diagnostics;
     if (!shouldEmitContextCompactionEvent(compression, usedLlmCompactor) || !this.options.eventSink) return;
@@ -297,6 +332,39 @@ export class Agent {
       usedLlmCompactor,
     });
   }
+}
+
+function readUsageBudgetFromEnv(): {
+  maxModelRequests?: number;
+  maxTotalTokens?: number;
+  maxPromptEstimateTokens?: number;
+} {
+  const maxModelRequests = readPositiveIntEnv("SHIGUANG_MAX_MODEL_REQUESTS");
+  const maxTotalTokens = readPositiveIntEnv("SHIGUANG_MAX_TOTAL_TOKENS");
+  const maxPromptEstimateTokens = readPositiveIntEnv("SHIGUANG_MAX_PROMPT_ESTIMATE_TOKENS");
+  return {
+    ...(maxModelRequests ? { maxModelRequests } : {}),
+    ...(maxTotalTokens ? { maxTotalTokens } : {}),
+    ...(maxPromptEstimateTokens ? { maxPromptEstimateTokens } : {}),
+  };
+}
+
+function readPositiveIntEnv(name: string): number | undefined {
+  const raw = process.env[name];
+  if (!raw) return undefined;
+  const value = Number.parseInt(raw, 10);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function formatUsageMessage(usage: LlmTokenUsage, total: RunTokenUsage): string {
+  const input = usage.inputTokens ?? usage.promptEstimateTokens ?? 0;
+  const output = usage.outputTokens ?? 0;
+  const totalTokens = usage.totalTokens ?? input + output;
+  const cache = usage.cachedInputTokens ? `，缓存命中 ${usage.cachedInputTokens}` : "";
+  const tools = typeof usage.selectedToolSchemaCount === "number" && typeof usage.totalToolSchemaCount === "number"
+    ? `，工具 schema ${usage.selectedToolSchemaCount}/${usage.totalToolSchemaCount}`
+    : "";
+  return `模型调用 ${usage.provider}/${usage.model}：本次约 ${totalTokens} token（输入 ${input}，输出 ${output}${cache}）${tools}；本轮累计约 ${total.totalTokens || total.promptEstimateTokens} token，${total.requestCount} 次请求。`;
 }
 
 function shouldEmitContextCompactionEvent(
@@ -351,6 +419,14 @@ function summarizeAssistantTurn(state: LoopState): string {
     if (state.stopReason === "step_limit") {
       return state.stopSummary
         ?? `已暂停：本轮达到 ${state.steps} 步安全预算，还没有形成最终反馈。可以继续工作，Agent 会结合最近运行摘要、工具结果和工作区现状往下推进。`;
+    }
+    if (state.stopReason === "usage_limit") {
+      return state.stopSummary
+        ?? "已暂停：本轮模型调用或上下文 token 预算已达到上限。可以补充更具体目标，或继续工作从当前 checkpoint 接着推进。";
+    }
+    if (state.stopReason === "no_progress") {
+      return state.stopSummary
+        ?? "已暂停：检测到连续重复的无写入工具动作，Agent 先停下来避免空转和继续消耗 token。";
     }
     return state.stopSummary
       ? `Run stopped: ${state.stopReason}: ${state.stopSummary}`

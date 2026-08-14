@@ -10,6 +10,7 @@ import type { Planner } from "./planner.js";
 import type { Policy } from "./policy.js";
 import type { Evaluator, LoopStopReason } from "./evaluator.js";
 import type { ToolExecutionContext, ValidationModeHint } from "../tools/types.js";
+import { addUsageToRunUsage, emptyRunTokenUsage, type LlmTokenUsage, type RunTokenUsage } from "./usage.js";
 
 export interface LoopDeps {
   planner: Planner;
@@ -22,6 +23,13 @@ export interface LoopDeps {
 
 export interface LoopContext {
   signal?: AbortSignal;
+  initialUsage?: RunTokenUsage;
+  usageBudget?: {
+    maxModelRequests?: number;
+    maxTotalTokens?: number;
+    maxPromptEstimateTokens?: number;
+  };
+  onUsage?(usage: LlmTokenUsage, total: RunTokenUsage): Promise<void> | void;
 }
 
 export interface LoopState {
@@ -32,10 +40,16 @@ export interface LoopState {
   lastResult: ActionResult | null;
   stopReason: LoopStopReason | null;
   stopSummary: string | null;
+  usage: RunTokenUsage;
 }
 
 const MAX_REPAIR_VALIDATION_FAILURES_PER_SUSPECT = 2;
 const MAX_REPAIR_ATTEMPT_HISTORY = 6;
+const DEFAULT_USAGE_BUDGET = {
+  maxModelRequests: 32,
+  maxTotalTokens: 180_000,
+  maxPromptEstimateTokens: 220_000,
+};
 
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
@@ -977,6 +991,27 @@ export function applyActionResultToWorkingMemory(
   return updateWorkingMemory(previous, step, result);
 }
 
+function shouldStopForUsageBudget(
+  total: RunTokenUsage,
+  latest: LlmTokenUsage,
+  budget: LoopContext["usageBudget"] | undefined,
+): string | null {
+  const maxModelRequests = budget?.maxModelRequests ?? DEFAULT_USAGE_BUDGET.maxModelRequests;
+  const maxTotalTokens = budget?.maxTotalTokens ?? DEFAULT_USAGE_BUDGET.maxTotalTokens;
+  const maxPromptEstimateTokens = budget?.maxPromptEstimateTokens ?? DEFAULT_USAGE_BUDGET.maxPromptEstimateTokens;
+
+  if (maxModelRequests > 0 && total.requestCount >= maxModelRequests) {
+    return `已达到本轮 ${maxModelRequests} 次模型调用预算，先暂停以避免继续消耗余额。最近一次模型：${latest.provider}/${latest.model}。`;
+  }
+  if (maxTotalTokens > 0 && total.totalTokens >= maxTotalTokens) {
+    return `已达到本轮约 ${total.totalTokens} token 用量预算，先暂停以避免继续消耗余额。`;
+  }
+  if (maxPromptEstimateTokens > 0 && total.promptEstimateTokens >= maxPromptEstimateTokens) {
+    return `已达到本轮约 ${total.promptEstimateTokens} token 的上下文估算预算，先暂停以避免长上下文循环。`;
+  }
+  return null;
+}
+
 export async function runLoop(
   input: BrainInput,
   deps: LoopDeps,
@@ -993,6 +1028,7 @@ export async function runLoop(
     lastResult: seededHistory.length > 0 ? seededHistory[seededHistory.length - 1] ?? null : null,
     stopReason: null,
     stopSummary: null,
+    usage: context?.initialUsage ?? emptyRunTokenUsage(),
   };
   input = { ...input, history: state.history, workingMemory: state.workingMemory };
 
@@ -1006,6 +1042,17 @@ export async function runLoop(
     }
 
     const rawDecision = await deps.planner.decide(input, { signal: context?.signal });
+    if (rawDecision.usage) {
+      state.usage = addUsageToRunUsage(state.usage, rawDecision.usage);
+      await context?.onUsage?.(rawDecision.usage, state.usage);
+      const budgetStop = shouldStopForUsageBudget(state.usage, rawDecision.usage, context?.usageBudget);
+      if (budgetStop) {
+        state.lastDecision = rawDecision;
+        state.stopReason = "usage_limit";
+        state.stopSummary = budgetStop;
+        break;
+      }
+    }
     const duplicateResolution = resolveDuplicateWorkspaceMutation(rawDecision, state.history, input.availableTools);
     if (duplicateResolution.kind === "observation") {
       state.lastDecision = duplicateResolution.decision;

@@ -10,6 +10,8 @@ export type LoopStopReason =
   | "fail"
   | "needs_approval"
   | "step_limit"
+  | "usage_limit"
+  | "no_progress"
   | "non_retryable_tool_error"
   | "repeated_retryable_tool_error";
 
@@ -42,6 +44,14 @@ export class BasicEvaluator implements Evaluator {
     }
 
     if (!isToolError(result)) {
+      const repeatedNoProgress = detectRepeatedNoProgress(history);
+      if (repeatedNoProgress) {
+        return {
+          kind: "stop",
+          reason: "no_progress",
+          summary: repeatedNoProgress,
+        };
+      }
       return { kind: "continue" };
     }
 
@@ -65,6 +75,37 @@ export class BasicEvaluator implements Evaluator {
 
     return { kind: "continue" };
   }
+}
+
+function detectRepeatedNoProgress(history: ActionResult[]): string | null {
+  const recentToolCalls = history
+    .filter((item) => item.action.kind === "tool_call")
+    .slice(-3);
+  if (recentToolCalls.length < 3) return null;
+
+  const latest = recentToolCalls[recentToolCalls.length - 1]!;
+  const latestToolName = toolName(latest);
+  if (!latestToolName || latest.metadata?.workspaceMutation === true) return null;
+  if (latestToolName === "run_validation" || latestToolName === "completion_check") return null;
+
+  const signatures = recentToolCalls.map(noProgressSignature);
+  if (!signatures.every((signature) => signature === signatures[0])) return null;
+
+  return [
+    `连续 3 次执行了相同的无写入工具动作：${latestToolName}。`,
+    "为避免重复工具循环和继续消耗模型 token，运行已暂停。",
+    latest.metadata?.summary ? `最近结果：${latest.metadata.summary}` : null,
+    "请补充更具体的目标，或让 Agent 换一种检查路径继续。",
+  ].filter(Boolean).join(" ");
+}
+
+function noProgressSignature(result: ActionResult): string {
+  return [
+    toolName(result) ?? "",
+    stableJson(result.action.toolInput ?? null),
+    result.metadata?.summary ?? "",
+    result.ok ? "ok" : "failed",
+  ].join("|");
 }
 
 function isToolError(result?: ActionResult): result is ToolErrorResult {
@@ -102,4 +143,14 @@ function summarizeToolError(result: ActionResult): string {
   ].filter(Boolean);
 
   return parts.join(": ");
+}
+
+function stableJson(value: unknown): string {
+  if (typeof value === "undefined") return "undefined";
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map((item) => stableJson(item)).join(",")}]`;
+  return `{${Object.entries(value as Record<string, unknown>)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, nested]) => `${JSON.stringify(key)}:${stableJson(nested)}`)
+    .join(",")}}`;
 }

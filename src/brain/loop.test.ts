@@ -87,6 +87,67 @@ test("runLoop pauses with step_limit when the step budget is exhausted", async (
   assert.equal(state.history.length, 2);
 });
 
+test("runLoop pauses on model usage budget before dispatching another tool", async () => {
+  const decision: BrainDecision = {
+    action: { kind: "tool_call", toolName: "list_directory", toolInput: { path: "." } },
+    reasoning: "Inspect workspace.",
+    usage: {
+      provider: "test",
+      model: "metered",
+      requestCount: 1,
+      inputTokens: 900,
+      outputTokens: 50,
+      totalTokens: 950,
+      promptEstimateTokens: 900,
+    },
+  };
+  const usageEvents: number[] = [];
+
+  const state = await runLoop(
+    {
+      context: makeContext("inspect this large project"),
+      runId: "run_usage_limit",
+      priorTurns: [],
+      history: [],
+      availableTools: [],
+    },
+    {
+      planner: {
+        async decide(): Promise<BrainDecision> {
+          return decision;
+        },
+      },
+      policy: {
+        async check(next): Promise<BrainDecision> {
+          return next;
+        },
+      },
+      dispatcher: {
+        async dispatch(): Promise<ActionResult> {
+          throw new Error("dispatcher should not run after usage budget is exhausted");
+        },
+      },
+      evaluator: {
+        async evaluate() {
+          return { kind: "continue" } as const;
+        },
+      },
+    },
+    10,
+    {
+      usageBudget: { maxModelRequests: 1 },
+      onUsage: async (_usage, total) => {
+        usageEvents.push(total.requestCount);
+      },
+    },
+  );
+
+  assert.equal(state.stopReason, "usage_limit");
+  assert.equal(state.history.length, 0);
+  assert.equal(state.usage.requestCount, 1);
+  assert.deepEqual(usageEvents, [1]);
+});
+
 test("runLoop tracks the latest validation failure in working memory", async () => {
   const decision: BrainDecision = {
     action: { kind: "tool_call", toolName: "run_validation", toolInput: { mode: "typecheck" } },

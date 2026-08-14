@@ -1,6 +1,7 @@
 import type { ContextBundle } from "../context/types.js";
 import type { Turn } from "../core/types.js";
 import type { ToolDescriptor, ValidationModeHint } from "../tools/types.js";
+import type { LlmTokenUsage } from "./usage.js";
 
 export interface BrainInput {
   // 本轮决策可见的上下文快照，包含用户输入、压缩记忆和运行时注入内容。
@@ -30,6 +31,7 @@ export interface BrainAction {
 export interface BrainDecision {
   action: BrainAction;
   reasoning?: string;
+  usage?: LlmTokenUsage;
 }
 
 export interface WorkingMemorySnapshot {

@@ -80,6 +80,7 @@ function createOpenAICompatibleProvider(config: ResolvedLlmConfig): ModelFactory
 
   return {
     model: new OpenAICompatibleModel({
+      provider: config.provider,
       apiKey,
       baseURL: config.baseURL,
       model: config.model,

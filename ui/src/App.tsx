@@ -66,7 +66,8 @@ const CODEX_PROVIDER_HINT = "先做 Hermes 风格 API provider registry：Codex 
 
 const SESSION_PIN_STORAGE_KEY = "shiguang:pinned-sessions";
 const SESSION_DRAFT_STORAGE_KEY = "shiguang:session-drafts";
-const MAX_TIMELINE_RENDER_ITEMS = 180;
+const MAX_TIMELINE_SOURCE_EVENTS = 320;
+const MAX_TIMELINE_RENDER_ITEMS = 120;
 const RUN_REFRESH_MIN_INTERVAL_MS = 1500;
 
 const PROVIDER_PRESETS: ProviderDraft[] = [
@@ -358,6 +359,7 @@ function formatEventKindLabel(kind: DesktopEvent["kind"]) {
     approval_request: "请求审批",
     approval_granted: "审批通过",
     approval_denied: "审批拒绝",
+    model_usage: "模型用量",
     context_compacted: "上下文压缩",
   };
   return labels[kind] ?? kind.replaceAll("_", " ");
@@ -425,7 +427,7 @@ function eventTone(kind: DesktopEvent["kind"]): SignalTone {
   if (kind === "error") return "danger";
   if (kind === "approval_request" || kind === "approval_granted" || kind === "approval_denied") return "warn";
   if (kind === "tool_result") return "success";
-  if (kind === "tool_call" || kind === "tool_pipeline" || kind === "context_compacted") return "accent";
+  if (kind === "tool_call" || kind === "tool_pipeline" || kind === "context_compacted" || kind === "model_usage") return "accent";
   return "neutral";
 }
 
@@ -434,7 +436,7 @@ function eventLane(kind: DesktopEvent["kind"]): string {
   if (kind === "tool_call" || kind === "tool_result" || kind === "tool_pipeline") return "tools";
   if (kind === "approval_request" || kind === "approval_granted" || kind === "approval_denied") return "approvals";
   if (kind === "error") return "errors";
-  if (kind === "context_compacted") return "context";
+  if (kind === "context_compacted" || kind === "model_usage") return "context";
   return "system";
 }
 
@@ -684,7 +686,7 @@ function SimpleChatTranscript({
 
   const liveItems: ChatTranscriptItem[] = !showLiveEvents ? [] : liveEvents.flatMap((event): ChatTranscriptItem[] => {
     const payload = eventPayloadRecord(event);
-    if (event.kind === "context_compacted") return [];
+    if (event.kind === "context_compacted" || event.kind === "model_usage") return [];
     if (event.kind === "message") {
       if (payload.role === "user") return [];
       const content = typeof payload.content === "string" ? payload.content.trim() : "";
@@ -1809,6 +1811,48 @@ function EventCard({ event }: { event: DesktopEvent }) {
     );
   }
 
+  if (kind === "model_usage") {
+    const provider = typeof p?.provider === "string" ? p.provider : "provider";
+    const model = typeof p?.model === "string" ? p.model : "model";
+    const request = typeof p?.request === "number" ? p.request : null;
+    const inputTokens = typeof p?.inputTokens === "number" ? p.inputTokens : null;
+    const outputTokens = typeof p?.outputTokens === "number" ? p.outputTokens : null;
+    const totalTokens = typeof p?.totalTokens === "number" ? p.totalTokens : null;
+    const promptEstimateTokens = typeof p?.promptEstimateTokens === "number" ? p.promptEstimateTokens : null;
+    const selectedTools = typeof p?.selectedToolSchemaCount === "number" ? p.selectedToolSchemaCount : null;
+    const totalTools = typeof p?.totalToolSchemaCount === "number" ? p.totalToolSchemaCount : null;
+    const cumulative = typeof p?.cumulativeTotalTokens === "number" ? p.cumulativeTotalTokens : null;
+    const cumulativeEstimate = typeof p?.cumulativePromptEstimateTokens === "number" ? p.cumulativePromptEstimateTokens : null;
+    const displayedTotal = totalTokens ?? promptEstimateTokens ?? 0;
+    const cumulativeTotal = cumulative ?? cumulativeEstimate ?? 0;
+    const toolLine = selectedTools !== null && totalTools !== null
+      ? `本步只发送 ${selectedTools}/${totalTools} 个工具 schema，减少无关工具定义占用。`
+      : "本步使用按需工具 schema，避免每次把所有工具都塞进上下文。";
+    return (
+      <article className={`timeline-node event lane-${lane}`}>
+        <div className="timeline-rail">
+          <div className={`timeline-dot ${tone}`} />
+        </div>
+        <div className="timeline-body">
+          <div className="timeline-node-head">
+            <SignalPill tone={tone}>{formatEventKindLabel(kind)}</SignalPill>
+            <div className="message-meta"><span>{provider}/{model}</span><span>{new Date(createdAt).toLocaleTimeString()}</span></div>
+          </div>
+          <div className="event-card timeline-surface context compact-system-event">
+            <p className="muted" style={{ marginBottom: 8 }}>
+              第 {request ?? "?"} 次模型请求：本次约 {displayedTotal} token
+              {inputTokens !== null ? ` · 输入 ${inputTokens}` : ""}
+              {outputTokens !== null ? ` · 输出 ${outputTokens}` : ""}
+              {promptEstimateTokens !== null && totalTokens === null ? ` · 上下文估算 ${promptEstimateTokens}` : ""}
+              {cumulativeTotal ? `；本轮累计约 ${cumulativeTotal}` : ""}。
+            </p>
+            <p className="muted" style={{ margin: 0 }}>{toolLine}</p>
+          </div>
+        </div>
+      </article>
+    );
+  }
+
   if (isAutoContinuationEvent(event)) {
     const stepBudget = typeof p?.stepBudget === "number" ? p.stepBudget : null;
     const segment = typeof p?.segment === "number" ? p.segment + 1 : null;
@@ -1931,6 +1975,22 @@ function summarizeTimelineEvent(event: DesktopEvent): { title: string; detail: s
       detail: truncateInline(summarizeToolBlockValue(eventPayloadRecord(event).output), 140) || "工具结果已返回。",
     };
   }
+  if (event.kind === "model_usage") {
+    const payload = eventPayloadRecord(event);
+    const provider = typeof payload.provider === "string" ? payload.provider : "provider";
+    const model = typeof payload.model === "string" ? payload.model : "model";
+    const totalTokens = typeof payload.totalTokens === "number"
+      ? payload.totalTokens
+      : typeof payload.promptEstimateTokens === "number"
+        ? payload.promptEstimateTokens
+        : null;
+    const selectedTools = typeof payload.selectedToolSchemaCount === "number" ? payload.selectedToolSchemaCount : null;
+    const totalTools = typeof payload.totalToolSchemaCount === "number" ? payload.totalToolSchemaCount : null;
+    return {
+      title: "模型用量",
+      detail: `${provider}/${model}${totalTokens !== null ? ` · 本次约 ${totalTokens} token` : ""}${selectedTools !== null && totalTools !== null ? ` · 工具 ${selectedTools}/${totalTools}` : ""}`,
+    };
+  }
   if (event.kind === "approval_request") {
     const requestSummary = summarizeApprovalRequest(eventPayloadRecord(event).request);
     return {
@@ -1977,6 +2037,10 @@ function RunTimeline({ events, streamState }: { events: DesktopEvent[]; streamSt
   const filteredEvents = activeFilter === "all"
     ? events
     : events.filter((evt) => eventLane(evt.kind) === activeFilter);
+  const hiddenSourceEventCount = Math.max(0, filteredEvents.length - MAX_TIMELINE_SOURCE_EVENTS);
+  const timelineSourceEvents = hiddenSourceEventCount > 0
+    ? filteredEvents.slice(-MAX_TIMELINE_SOURCE_EVENTS)
+    : filteredEvents;
 
   const timelineItems: Array<
     | { type: "event"; event: DesktopEvent }
@@ -1985,16 +2049,16 @@ function RunTimeline({ events, streamState }: { events: DesktopEvent[]; streamSt
 
   const matchedResultIds = new Set<string>();
 
-  for (let index = 0; index < filteredEvents.length; index += 1) {
-    const event = filteredEvents[index];
+  for (let index = 0; index < timelineSourceEvents.length; index += 1) {
+    const event = timelineSourceEvents[index];
     if (event.kind === "tool_call") {
       const callToolName = toolEventName(event);
       const callToolCallId = toolEventCallId(event);
       let matchedResultIndex = -1;
       let pairingMode: "call_id" | "fallback" | "pending" = "pending";
 
-      for (let lookahead = index + 1; lookahead < filteredEvents.length; lookahead += 1) {
-        const candidate = filteredEvents[lookahead];
+      for (let lookahead = index + 1; lookahead < timelineSourceEvents.length; lookahead += 1) {
+        const candidate = timelineSourceEvents[lookahead];
         if (candidate.kind !== "tool_result" || matchedResultIds.has(candidate.id)) continue;
 
         const candidateToolCallId = toolEventCallId(candidate);
@@ -2012,7 +2076,7 @@ function RunTimeline({ events, streamState }: { events: DesktopEvent[]; streamSt
       }
 
       if (matchedResultIndex >= 0) {
-        const resultEvent = filteredEvents[matchedResultIndex];
+        const resultEvent = timelineSourceEvents[matchedResultIndex];
         matchedResultIds.add(resultEvent.id);
         timelineItems.push({
           type: "tool_block",
@@ -2036,8 +2100,9 @@ function RunTimeline({ events, streamState }: { events: DesktopEvent[]; streamSt
     timelineItems.push({ type: "event", event });
   }
 
-  const hiddenTimelineItemCount = Math.max(0, timelineItems.length - MAX_TIMELINE_RENDER_ITEMS);
-  const visibleTimelineItems = hiddenTimelineItemCount > 0
+  const hiddenRenderedItemCount = Math.max(0, timelineItems.length - MAX_TIMELINE_RENDER_ITEMS);
+  const hiddenTimelineItemCount = hiddenSourceEventCount + hiddenRenderedItemCount;
+  const visibleTimelineItems = hiddenRenderedItemCount > 0
     ? timelineItems.slice(-MAX_TIMELINE_RENDER_ITEMS)
     : timelineItems;
   const latestVisibleEvent = filteredEvents[filteredEvents.length - 1] ?? null;

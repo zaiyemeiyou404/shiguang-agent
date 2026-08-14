@@ -52,7 +52,7 @@ export interface DesktopEvent {
   id: string;
   runId: string;
   seq: number;
-  kind: "thinking" | "message" | "tool_call" | "tool_result" | "tool_pipeline" | "error" | "system" | "approval_request" | "approval_granted" | "approval_denied" | "context_compacted";
+  kind: "thinking" | "message" | "tool_call" | "tool_result" | "tool_pipeline" | "error" | "system" | "approval_request" | "approval_granted" | "approval_denied" | "model_usage" | "context_compacted";
   payload: unknown;
   createdAt: string;
 }

@@ -1422,7 +1422,7 @@ function deriveRunStatus(state: { stopReason: string | null; lastDecision: { act
   if (state.lastDecision?.action.kind === "needs_approval" || state.stopReason === "needs_approval") {
     return "needs_approval";
   }
-  if (state.stopReason === "step_limit") {
+  if (state.stopReason === "step_limit" || state.stopReason === "usage_limit" || state.stopReason === "no_progress") {
     return "paused";
   }
   if (state.lastDecision?.action.kind === "fail" || state.stopReason === "fail" || state.stopReason === "non_retryable_tool_error" || state.stopReason === "repeated_retryable_tool_error") {
@@ -1810,6 +1810,10 @@ function coreEventToConversationEntry(sessionId: string, event: RunEvent): Deskt
     : undefined;
 
   if (event.kind === "system" && payload?.autoContinuation === true) {
+    return null;
+  }
+
+  if (event.kind === "model_usage") {
     return null;
   }
 
