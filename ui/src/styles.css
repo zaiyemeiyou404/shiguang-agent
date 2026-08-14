@@ -1143,7 +1143,29 @@ body {
   outline: none;
 }
 
-.composer-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.composer-actions,
+.composer-right-actions,
+.composer-model-switch {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.composer-right-actions {
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
+.model-quick-switch {
+  min-width: 58px;
+}
+
+.model-quick-switch.active {
+  color: var(--text);
+  border-color: rgba(85, 224, 189, 0.42);
+  background: rgba(85, 224, 189, 0.12);
+}
 
 .composer-action, .send-btn {
   padding: 10px 12px;
@@ -1850,6 +1872,11 @@ body {
 
 .provider-action-row-tight {
   justify-content: flex-end;
+}
+
+.model-preset-row {
+  justify-content: flex-start;
+  margin-top: 8px;
 }
 
 .provider-preset-grid {

@@ -2,16 +2,16 @@
 
 拾光 Agent 是一个轻量级桌面 AI Agent。它把对话、工作区文件操作、工具调用、审批、运行记录和上下文压缩放在一个 Electron 桌面界面里，目标是做成一个下载后即可配置使用的小型个人工作台。
 
-当前版本：`0.2.12`
+当前版本：`0.2.13`
 
 ## 下载使用
 
 在 GitHub Releases 页面下载 Windows 版本：
 
-- 安装包：`拾光 Agent Setup 0.2.12.exe`
+- 安装包：`拾光 Agent Setup 0.2.13.exe`
 - 免安装版：`win-unpacked.zip`
 
-`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.12`，才会生成新的正式 Release。
+`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.13`，才会生成新的正式 Release。
 
 如果使用免安装版，解压后运行：
 
@@ -50,12 +50,14 @@ G:\CodexData\shiguang-agent-data\
 
 | Provider | 类型 | 默认模型 |
 |---|---|---|
-| DeepSeek | OpenAI-compatible | `deepseek-chat` |
+| DeepSeek | OpenAI-compatible | `deepseek-v4-flash` |
 | OpenAI / Codex API | OpenAI-compatible | `gpt-5` |
 | OpenRouter | OpenAI-compatible | `openai/gpt-5` |
 | Anthropic | Anthropic Messages API | `claude-3-5-sonnet-latest` |
 | Gemini | Gemini API | `gemini-2.5-pro` |
 | Ollama | 本地 OpenAI-compatible | `qwen2.5-coder:14b` |
+
+DeepSeek 设置页提供 `Flash` / `Pro` 快捷切换，对应官方 API 模型 `deepseek-v4-flash` 和 `deepseek-v4-pro`。旧 `deepseek-chat` / `deepseek-reasoner` 仍可手动填写或通过兼容按钮选择，但建议新配置优先使用 V4 模型名。
 
 API Key 可以在设置里直接填写，也可以通过环境变量提供，例如：
 

@@ -20,6 +20,12 @@ type ProviderDraft = {
   maxTokens: string;
 };
 
+type ProviderModelOption = {
+  label: string;
+  value: string;
+  hint: string;
+};
+
 type SignalTone = "neutral" | "success" | "warn" | "danger" | "accent";
 type MainSurface = "home" | "running" | "approval";
 
@@ -71,7 +77,7 @@ const MAX_TIMELINE_RENDER_ITEMS = 120;
 const RUN_REFRESH_MIN_INTERVAL_MS = 1500;
 
 const PROVIDER_PRESETS: ProviderDraft[] = [
-  { key: "deepseek", type: "openai-compatible", authMode: "api_key", baseURL: "https://api.deepseek.com/v1", apiKey: "", apiKeyMasked: "", hasStoredApiKey: false, apiKeyEnv: "DEEPSEEK_API_KEY", model: "deepseek-chat", maxTokens: "4096" },
+  { key: "deepseek", type: "openai-compatible", authMode: "api_key", baseURL: "https://api.deepseek.com/v1", apiKey: "", apiKeyMasked: "", hasStoredApiKey: false, apiKeyEnv: "DEEPSEEK_API_KEY", model: "deepseek-v4-flash", maxTokens: "4096" },
   { key: "openai", type: "openai-compatible", authMode: "api_key", baseURL: "https://api.openai.com/v1", apiKey: "", apiKeyMasked: "", hasStoredApiKey: false, apiKeyEnv: "OPENAI_API_KEY", model: "gpt-5", maxTokens: "4096" },
   { key: "codex-api", type: "openai-compatible", authMode: "api_key", baseURL: "https://api.openai.com/v1", apiKey: "", apiKeyMasked: "", hasStoredApiKey: false, apiKeyEnv: "OPENAI_API_KEY", model: "gpt-5", maxTokens: "4096" },
   { key: "openrouter", type: "openai-compatible", authMode: "api_key", baseURL: "https://openrouter.ai/api/v1", apiKey: "", apiKeyMasked: "", hasStoredApiKey: false, apiKeyEnv: "OPENROUTER_API_KEY", model: "openai/gpt-5", maxTokens: "4096" },
@@ -80,8 +86,21 @@ const PROVIDER_PRESETS: ProviderDraft[] = [
   { key: "ollama", type: "openai-compatible", authMode: "none", baseURL: "http://127.0.0.1:11434/v1", apiKey: "", apiKeyMasked: "", hasStoredApiKey: false, apiKeyEnv: "", model: "qwen2.5-coder:14b", maxTokens: "4096" },
 ];
 
+const DEEPSEEK_MODEL_OPTIONS: ProviderModelOption[] = [
+  { label: "Flash", value: "deepseek-v4-flash", hint: "默认推荐，速度/成本更适合日常 Agent" },
+  { label: "Pro", value: "deepseek-v4-pro", hint: "更强，适合复杂工程和长任务" },
+  { label: "Legacy Chat", value: "deepseek-chat", hint: "旧兼容名，建议逐步切到 Flash" },
+  { label: "Legacy Reasoner", value: "deepseek-reasoner", hint: "旧思考兼容名，建议逐步切到 Pro/Flash" },
+];
+
 function findProviderPreset(key: string): ProviderDraft | null {
   return PROVIDER_PRESETS.find((preset) => preset.key === key) ?? null;
+}
+
+function modelOptionsForProvider(key: string, draft: ProviderDraft): ProviderModelOption[] {
+  const marker = `${key} ${draft.baseURL}`.toLowerCase();
+  if (marker.includes("deepseek")) return DEEPSEEK_MODEL_OPTIONS;
+  return [];
 }
 
 function readPinnedSessions(): string[] {
@@ -3102,6 +3121,7 @@ function SettingsDrawer({
 
   const connectionTone = connectionResult ? (connectionResult.ok ? "success" : "danger") : providerTone(providerDraft);
   const connectionLabel = connectionResult ? (connectionResult.ok ? "已连通" : "失败") : providerLabel(providerDraft);
+  const activeProviderModelOptions = modelOptionsForProvider(activeProvider, providerDraft);
   const authSummary = providerDraft.authMode === "none"
     ? "当前 provider 不要求 API Key。"
     : providerDraft.apiKey.trim()
@@ -3131,6 +3151,13 @@ function SettingsDrawer({
     : providerDraft.maxTokens.trim()
       ? `provider 默认 maxTokens · ${providerDraft.maxTokens.trim()}`
       : "运行时默认值";
+
+  const applyProviderModelOption = (option: ProviderModelOption) => {
+    setActiveModel(option.value);
+    patchActiveProvider((prev) => ({ ...prev, model: option.value }));
+    setSaveState(`已切换到 ${option.label}（${option.value}），保存后生效。`);
+  };
+
   const providerDiffItems = [
     { label: "provider 标识", current: activeProvider, saved: selectedSavedDraft.key },
     { label: "协议", current: providerDraft.type, saved: selectedSavedDraft.type },
@@ -3256,7 +3283,22 @@ function SettingsDrawer({
           <div className="settings-inline-grid">
             <div>
               <label className="tiny">模型</label>
-              <input className="settings-input" value={activeModel} onChange={(e) => setActiveModel(e.target.value)} placeholder="deepseek-chat / gpt-5 / openai/gpt-5" />
+              <input className="settings-input" value={activeModel} onChange={(e) => setActiveModel(e.target.value)} placeholder="deepseek-v4-flash / gpt-5 / openai/gpt-5" />
+              {activeProviderModelOptions.length > 0 ? (
+                <div className="provider-action-row provider-action-row-tight model-preset-row">
+                  {activeProviderModelOptions.map((option) => (
+                    <button
+                      key={`runtime-${option.value}`}
+                      className={`tool-btn${activeModel.trim() === option.value ? " primary" : ""}`}
+                      type="button"
+                      title={option.hint}
+                      onClick={() => applyProviderModelOption(option)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </div>
             <div>
               <label className="tiny">最大 Tokens</label>
@@ -3358,9 +3400,29 @@ function SettingsDrawer({
             </div>
             <div>
               <label className="tiny">默认模型</label>
-              <input className="settings-input" value={providerDraft.model} onChange={(e) => patchActiveProvider((prev) => ({ ...prev, model: e.target.value }))} placeholder="deepseek-chat" />
+              <input className="settings-input" value={providerDraft.model} onChange={(e) => patchActiveProvider((prev) => ({ ...prev, model: e.target.value }))} placeholder="deepseek-v4-flash" />
+              {activeProviderModelOptions.length > 0 ? (
+                <div className="provider-action-row provider-action-row-tight model-preset-row">
+                  {activeProviderModelOptions.map((option) => (
+                    <button
+                      key={`provider-${option.value}`}
+                      className={`tool-btn${providerDraft.model.trim() === option.value ? " primary" : ""}`}
+                      type="button"
+                      title={option.hint}
+                      onClick={() => applyProviderModelOption(option)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </div>
           </div>
+          {activeProviderModelOptions.length > 0 ? (
+            <p className="muted" style={{ margin: 0 }}>
+              DeepSeek 官方新模型为 <code>deepseek-v4-flash</code> 和 <code>deepseek-v4-pro</code>；旧 <code>deepseek-chat</code> / <code>deepseek-reasoner</code> 仅作为兼容入口保留。
+            </p>
+          ) : null}
           <div>
             <label className="tiny">说明</label>
             <div className="detail-row" style={{ justifyContent: "flex-start" }}>
@@ -3467,6 +3529,7 @@ export default function App() {
   const [decisionState, setDecisionState] = useState<Record<string, "approving" | "approved" | "denied">>({});
   const [runActionState, setRunActionState] = useState<"idle" | "cancelling" | "pausing" | "retrying">("idle");
   const [branchingRunId, setBranchingRunId] = useState<string | null>(null);
+  const [quickModelSaving, setQuickModelSaving] = useState<string | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -3516,6 +3579,13 @@ export default function App() {
   const currentProvider = settings?.providers[settings?.llm.provider ?? ""];
   const providerLabel = settings?.llm.provider ?? "未设置";
   const modelLabel = settings?.llm.model ?? currentProvider?.model ?? "未设置";
+  const quickModelOptions = useMemo(() => {
+    if (!settings) return [];
+    const providerKey = settings.llm.provider || "deepseek";
+    const draft = providerDraftFromSettings(settings, providerKey);
+    return modelOptionsForProvider(providerKey, draft)
+      .filter((option) => option.value === "deepseek-v4-flash" || option.value === "deepseek-v4-pro");
+  }, [settings]);
   const workspaceLabel = settings?.workspaceRoot?.trim() ? settings.workspaceRoot : "未设置";
   const runtimeLabel = activeRun ? formatRunStatus(activeRun.status) : (activeSessionId ? "就绪" : "无会话");
   const streamLabel = formatStreamStateLabel(activeRunId ? streamState : "idle");
@@ -3628,6 +3698,13 @@ export default function App() {
       && runActionState === "idle"
       && (isProcessingRun || composerHasPayload || activeRun?.status === "paused"),
   );
+  const canQuickSwitchModel = Boolean(
+    settings
+      && quickModelOptions.length > 0
+      && !isProcessingRun
+      && !sending
+      && runActionState === "idle",
+  );
   const composerTone: SignalTone = isRunAwaitingApproval
     ? "warn"
     : streamState === "error"
@@ -3656,6 +3733,39 @@ export default function App() {
           : settingsError
             ? "先修好模型设置，再启动下一次运行。"
             : "Shift+Enter 换行 · Enter 发送";
+
+  const handleQuickModelSwitch = async (option: ProviderModelOption) => {
+    if (!settings || quickModelSaving || !canQuickSwitchModel) return;
+    const providerKey = settings.llm.provider || "deepseek";
+    const previousProvider = settings.providers[providerKey] ?? {};
+    const nextSettings: DesktopSettings = {
+      ...settings,
+      llm: {
+        ...settings.llm,
+        provider: providerKey,
+        model: option.value,
+      },
+      providers: {
+        ...settings.providers,
+        [providerKey]: {
+          ...previousProvider,
+          model: option.value,
+        },
+      },
+    };
+    setQuickModelSaving(option.value);
+    try {
+      const saved = await requireDesktopBridge().saveSettings(nextSettings);
+      setSettings(saved);
+      setSettingsError(null);
+      setActionError(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setSettingsError(`切换 DeepSeek 模型失败：${message}`);
+    } finally {
+      setQuickModelSaving(null);
+    }
+  };
 
   useEffect(() => {
     if (!desktopBridge) {
@@ -4420,9 +4530,30 @@ export default function App() {
                     <button className="composer-action" type="button" onClick={() => { void handlePickAttachments(); }} disabled={!activeSessionId || sending || isProcessingRun || runActionState !== "idle"}>📎 附件{selectedAttachments.length > 0 ? ` (${selectedAttachments.length})` : ""}</button>
                     <button className="composer-action" type="button" onClick={() => { void openSettings(); }}>⚙ 模型</button>
                   </div>
-                  <button className={`send-btn ${isProcessingRun ? (composerHasPayload ? "supplement" : "pause") : ""}`} type="button" onClick={() => { void handleSend(); }} disabled={!canSubmitComposer}>
-                    {composerSendLabel}
-                  </button>
+                  <div className="composer-right-actions">
+                    {quickModelOptions.length > 0 ? (
+                      <div className="composer-model-switch" aria-label="DeepSeek 模型快捷切换">
+                        {quickModelOptions.map((option) => {
+                          const active = modelLabel === option.value;
+                          return (
+                            <button
+                              key={option.value}
+                              className={`composer-action model-quick-switch${active ? " active" : ""}`}
+                              type="button"
+                              title={active ? `当前正在使用 ${option.value}` : option.hint}
+                              disabled={!canQuickSwitchModel || quickModelSaving !== null || active}
+                              onClick={() => { void handleQuickModelSwitch(option); }}
+                            >
+                              {quickModelSaving === option.value ? "切换中..." : option.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                    <button className={`send-btn ${isProcessingRun ? (composerHasPayload ? "supplement" : "pause") : ""}`} type="button" onClick={() => { void handleSend(); }} disabled={!canSubmitComposer}>
+                      {composerSendLabel}
+                    </button>
+                  </div>
                   </div>
                 </section>
               </>

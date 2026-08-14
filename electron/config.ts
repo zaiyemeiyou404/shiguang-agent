@@ -117,7 +117,7 @@ function defaultProviderCatalog(): Record<string, DesktopProviderSettings> {
       authMode: "api_key",
       baseURL: "https://api.deepseek.com/v1",
       apiKeyEnv: "DEEPSEEK_API_KEY",
-      model: "deepseek-chat",
+      model: "deepseek-v4-flash",
       maxTokens: 4096,
     },
     openai: {
