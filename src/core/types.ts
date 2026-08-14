@@ -62,6 +62,7 @@ export type RunEventKind =
   | "message"
   | "tool_call"
   | "tool_result"
+  | "tool_pipeline"
   | "error"
   | "system"
   | "approval_request"

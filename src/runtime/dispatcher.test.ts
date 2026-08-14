@@ -25,6 +25,9 @@ test("ActionDispatcher emits approval_request for needs_approval actions", async
   assert.equal(result.metadata?.errorKind, "permission_denied");
   const events = await sink.list("run_1");
   assert.equal(events.some((event) => event.kind === "approval_request"), true);
+  const pipelineEvent = events.find((event) => event.kind === "tool_pipeline");
+  assert.equal((pipelineEvent?.payload as { phase?: unknown }).phase, "approval_required");
+  assert.equal((pipelineEvent?.payload as { approvalId?: unknown }).approvalId, "appr_write");
   const approvalEvent = events.find((event) => event.kind === "approval_request");
   assert.equal(typeof approvalEvent?.payload, "object");
   assert.equal((approvalEvent?.payload as { capability?: string }).capability, "fs.write");
@@ -141,4 +144,39 @@ test("ActionDispatcher tags tool_call and tool_result with the same toolCallId",
   assert.equal(typeof toolCallId, "string");
   assert.equal(toolResultId, toolCallId);
   assert.equal(result.metadata?.toolCallId, toolCallId);
+});
+
+test("ActionDispatcher emits tool_pipeline phases around successful tool calls", async () => {
+  const sink = new InMemoryEventSink();
+  const registry = new ToolRegistry();
+  registry.register({
+    descriptor: {
+      name: "pipeline_echo",
+      description: "Echo test tool",
+      inputSchema: { type: "object", properties: { value: { type: "string" } } },
+    },
+    async execute(input) {
+      return { echoed: input };
+    },
+  });
+  const dispatcher = new ActionDispatcher(registry, sink);
+
+  const result = await dispatcher.dispatch({
+    action: {
+      kind: "tool_call",
+      toolName: "pipeline_echo",
+      toolInput: { value: "hello" },
+    },
+    reasoning: "run pipeline echo",
+  }, "run_pipeline");
+
+  assert.equal(result.ok, true);
+  const events = await sink.list("run_pipeline");
+  const pipelineEvents = events.filter((event) => event.kind === "tool_pipeline");
+  assert.deepEqual(
+    pipelineEvents.map((event) => (event.payload as { phase?: unknown }).phase),
+    ["pre_execute", "executing", "completed"],
+  );
+  const ids = pipelineEvents.map((event) => (event.payload as { toolCallId?: unknown }).toolCallId);
+  assert.ok(ids.every((id) => typeof id === "string" && id === result.metadata?.toolCallId));
 });

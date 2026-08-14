@@ -350,6 +350,7 @@ function formatEventKindLabel(kind: DesktopEvent["kind"]) {
     message: "消息",
     tool_call: "工具调用",
     tool_result: "工具结果",
+    tool_pipeline: "工具管线",
     error: "错误",
     system: "系统",
     approval_request: "请求审批",
@@ -422,13 +423,13 @@ function eventTone(kind: DesktopEvent["kind"]): SignalTone {
   if (kind === "error") return "danger";
   if (kind === "approval_request" || kind === "approval_granted" || kind === "approval_denied") return "warn";
   if (kind === "tool_result") return "success";
-  if (kind === "tool_call" || kind === "context_compacted") return "accent";
+  if (kind === "tool_call" || kind === "tool_pipeline" || kind === "context_compacted") return "accent";
   return "neutral";
 }
 
 function eventLane(kind: DesktopEvent["kind"]): string {
   if (kind === "message") return "conversation";
-  if (kind === "tool_call" || kind === "tool_result") return "tools";
+  if (kind === "tool_call" || kind === "tool_result" || kind === "tool_pipeline") return "tools";
   if (kind === "approval_request" || kind === "approval_granted" || kind === "approval_denied") return "approvals";
   if (kind === "error") return "errors";
   if (kind === "context_compacted") return "context";
@@ -916,6 +917,68 @@ function summarizeToolActivityDetail(toolName: string | null, input: unknown): s
   if (query) return `查询：${query}`;
   if (path) return `目标：${path}`;
   return summarizeToolBlockValue(input);
+}
+
+function toolPipelinePhase(event: DesktopEvent | null): string | null {
+  if (!event || event.kind !== "tool_pipeline") return null;
+  const phase = eventPayloadRecord(event).phase;
+  return typeof phase === "string" ? phase : null;
+}
+
+function latestToolPipelineEvent(events: DesktopEvent[]): DesktopEvent | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event.kind === "tool_pipeline") return event;
+  }
+  return null;
+}
+
+function summarizeToolPipelineEvent(event: DesktopEvent | null): {
+  label: string;
+  detail: string;
+  tone: SignalTone;
+} | null {
+  if (!event || event.kind !== "tool_pipeline") return null;
+  const payload = eventPayloadRecord(event);
+  const phase = toolPipelinePhase(event);
+  const toolName = toolEventName(event);
+  const toolLabel = formatToolActivityName(toolName);
+  const inputDetail = payload.input !== undefined
+    ? summarizeToolActivityDetail(toolName, payload.input)
+    : "等待工具输入。";
+  const outputDetail = payload.output !== undefined
+    ? summarizeToolBlockValue(payload.output)
+    : "工具执行完成。";
+  const errorDetail = typeof payload.error === "string" && payload.error.trim()
+    ? payload.error.trim()
+    : "工具执行失败。";
+
+  if (phase === "approval_required") {
+    return {
+      label: `等待审批：${toolLabel}`,
+      detail: typeof payload.reason === "string" && payload.reason.trim() ? payload.reason.trim() : inputDetail,
+      tone: "warn",
+    };
+  }
+  if (phase === "approved") {
+    return { label: `已批准：${toolLabel}`, detail: "审批通过，准备恢复这条工具调用。", tone: "success" };
+  }
+  if (phase === "denied") {
+    return { label: `已拒绝：${toolLabel}`, detail: "审批被拒绝，本轮不会执行这条工具调用。", tone: "danger" };
+  }
+  if (phase === "executing") {
+    return { label: `正在${toolLabel}`, detail: inputDetail, tone: "accent" };
+  }
+  if (phase === "completed") {
+    return { label: `${toolLabel}完成`, detail: outputDetail, tone: "success" };
+  }
+  if (phase === "failed") {
+    return { label: `${toolLabel}失败`, detail: errorDetail, tone: "danger" };
+  }
+  if (phase === "pre_execute") {
+    return { label: `准备${toolLabel}`, detail: inputDetail, tone: "accent" };
+  }
+  return null;
 }
 
 function toolEventCallId(event: DesktopEvent): string | null {
@@ -1407,6 +1470,7 @@ function describeRunActivity(
   const latestAssistantMessage = [...events].reverse().find((event) => event.kind === "message" && eventPayloadRecord(event).role !== "user") ?? null;
   const latestErrorEvent = [...events].reverse().find((event) => event.kind === "error") ?? null;
   const pendingApproval = pendingApprovals.find((approval) => approval.runId === run.id) ?? null;
+  const latestPipelineSummary = summarizeToolPipelineEvent(latestToolPipelineEvent(events));
   const latestPendingToolCall = findLatestToolCallWithoutResult(events);
   const latestToolResult = [...events].reverse().find((event) => event.kind === "tool_result") ?? null;
   const latestToolResultPayload = latestToolResult ? eventPayloadRecord(latestToolResult) : null;
@@ -1434,6 +1498,10 @@ function describeRunActivity(
       ? payload.message
       : (run.reason ?? "时间线记录了一次错误事件。") ;
     tone = "danger";
+  } else if (latestPipelineSummary && (run.status === "running" || run.status === "pending")) {
+    label = latestPipelineSummary.label;
+    detail = latestPipelineSummary.detail;
+    tone = latestPipelineSummary.tone;
   } else if (latestPendingToolCall) {
     const payload = eventPayloadRecord(latestPendingToolCall);
     const toolName = toolEventName(latestPendingToolCall) ?? "工具";
@@ -1509,6 +1577,7 @@ function describeRunPhase(
   const latestEvent = events[events.length - 1] ?? null;
   const latestThinkingEvent = [...events].reverse().find((event) => event.kind === "thinking") ?? null;
   const latestAssistantMessage = [...events].reverse().find((event) => event.kind === "message" && eventPayloadRecord(event).role !== "user") ?? null;
+  const latestPipelineSummary = summarizeToolPipelineEvent(latestToolPipelineEvent(events));
   const latestPendingToolCall = findLatestToolCallWithoutResult(events);
   const latestToolResult = findLatestToolResult(events);
   const latestErrorEvent = [...events].reverse().find((event) => event.kind === "error") ?? null;
@@ -1535,6 +1604,11 @@ function describeRunPhase(
     label = "运行受阻";
     detail = run.reason ?? "最近一次运行在处理中遇到错误。";
     tone = "danger";
+  } else if (latestPipelineSummary && (run.status === "running" || run.status === "pending")) {
+    currentStep = "tool";
+    label = latestPipelineSummary.label;
+    detail = latestPipelineSummary.detail;
+    tone = latestPipelineSummary.tone;
   } else if (latestPendingToolCall || latestToolResult) {
     currentStep = "tool";
     label = latestPendingToolCall ? "工具执行中" : "工具已返回";

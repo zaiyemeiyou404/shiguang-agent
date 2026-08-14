@@ -58,6 +58,15 @@ function createApprovalId(runId: string | undefined, toolName: string | undefine
   return `appr_${safeRunId}_${safeToolName}_${Date.now()}_${randomUUID().slice(0, 8)}`;
 }
 
+type ToolPipelinePhase =
+  | "pre_execute"
+  | "approval_required"
+  | "approved"
+  | "denied"
+  | "executing"
+  | "completed"
+  | "failed";
+
 export class ActionDispatcher {
   constructor(
     private toolRegistry: ToolRegistry,
@@ -106,6 +115,12 @@ export class ActionDispatcher {
         }
         const toolCallId = randomUUID();
         if (this.eventSink && runId) {
+          await this.recordToolPipeline(runId, {
+            phase: "pre_execute",
+            tool: action.toolName,
+            input: action.toolInput,
+            toolCallId,
+          });
           await this.eventSink.record(runId, "tool_call", {
             tool: action.toolName,
             input: action.toolInput,
@@ -114,6 +129,14 @@ export class ActionDispatcher {
         }
         const tool = this.toolRegistry.get(action.toolName);
         if (!tool) {
+          await this.recordToolPipeline(runId, {
+            phase: "failed",
+            tool: action.toolName,
+            input: action.toolInput,
+            toolCallId,
+            error: `Tool not found: ${action.toolName}`,
+            errorKind: "tool_missing",
+          });
           return {
             action,
             ok: false,
@@ -131,6 +154,12 @@ export class ActionDispatcher {
           };
         }
         try {
+          await this.recordToolPipeline(runId, {
+            phase: "executing",
+            tool: action.toolName,
+            input: action.toolInput,
+            toolCallId,
+          });
           const output = await tool.execute(action.toolInput, context);
           if (this.eventSink && runId) {
             await this.eventSink.record(runId, "tool_result", {
@@ -139,6 +168,12 @@ export class ActionDispatcher {
               toolCallId,
             });
           }
+          await this.recordToolPipeline(runId, {
+            phase: "completed",
+            tool: action.toolName,
+            output,
+            toolCallId,
+          });
           return {
             action,
             ok: true,
@@ -161,6 +196,16 @@ export class ActionDispatcher {
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
           const classification = classifyToolError(err, msg);
+          await this.recordToolPipeline(runId, {
+            phase: "failed",
+            tool: action.toolName,
+            input: action.toolInput,
+            toolCallId,
+            error: msg,
+            errorType: errorType(err),
+            errorKind: classification.kind,
+            retryable: classification.retryable,
+          });
           return {
             action,
             ok: false,
@@ -199,6 +244,15 @@ export class ActionDispatcher {
           ? await this.previewApproval(action.toolName, action.toolInput, context)
           : null;
         if (this.eventSink && runId) {
+          await this.recordToolPipeline(runId, {
+            phase: "approval_required",
+            tool: action.toolName,
+            input: action.toolInput,
+            approvalId,
+            capability,
+            reason: action.reason,
+            ...(preview ? { preview } : {}),
+          });
           await this.eventSink.record(runId, "approval_request", {
             approvalId,
             pluginId: "builtin",
@@ -257,5 +311,24 @@ export class ActionDispatcher {
         warnings: [message],
       };
     }
+  }
+
+  private async recordToolPipeline(runId: string | undefined, payload: {
+    phase: ToolPipelinePhase;
+    tool?: string;
+    input?: unknown;
+    output?: unknown;
+    toolCallId?: string;
+    approvalId?: string;
+    capability?: string;
+    reason?: string;
+    error?: string;
+    errorType?: string;
+    errorKind?: ToolErrorKind;
+    retryable?: boolean;
+    preview?: unknown;
+  }): Promise<void> {
+    if (!this.eventSink || !runId) return;
+    await this.eventSink.record(runId, "tool_pipeline", payload);
   }
 }

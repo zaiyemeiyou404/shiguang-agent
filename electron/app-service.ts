@@ -564,7 +564,15 @@ export class DesktopAppService {
     }
 
     const sink = this.createRunEventSink();
-    const event = await sink.record(
+    const approvedAction = extractApprovedToolAction(approval);
+    await sink.record(approval.runId, "tool_pipeline", {
+      phase: decision === "granted" ? "approved" : "denied",
+      tool: approvedAction?.toolName,
+      input: approvedAction?.toolInput,
+      approvalId: approval.id,
+      capability: approval.capability,
+    });
+    await sink.record(
       approval.runId,
       decision === "granted" ? "approval_granted" : "approval_denied",
       {
