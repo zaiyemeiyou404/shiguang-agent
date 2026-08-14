@@ -59,3 +59,51 @@ test("Agent auto-continues after a step budget slice before returning final feed
     return event.kind === "system" && payload.autoContinuation === true;
   }), true);
 });
+
+test("Agent caps automatic continuations to avoid runaway model spend", async () => {
+  let decisions = 0;
+  const planner: Planner = {
+    async decide(): Promise<BrainDecision> {
+      decisions++;
+      return {
+        action: { kind: "tool_call", toolName: "echo", toolInput: `loop ${decisions}` },
+        reasoning: "Keep looping so the cost guard has to stop the run.",
+      };
+    },
+  };
+
+  const sink = new InMemoryEventSink();
+  const agent = new Agent({ eventSink: sink, planner });
+  const now = new Date("2026-01-01T00:00:00.000Z");
+  const output = await agent.run({
+    runId: "run_auto_continue_guard",
+    userMessage: "loop forever",
+    contextInput: {
+      task: {
+        id: "task_auto_continue_guard",
+        sessionId: "sess_auto_continue_guard",
+        parentTaskId: null,
+        title: "Auto continue guard",
+        description: null,
+        status: "in_progress",
+        priority: 0,
+        createdAt: now,
+        updatedAt: now,
+      },
+      recentRuns: [],
+      linkedArtifacts: [],
+      memories: [],
+    },
+  });
+
+  assert.equal(output.state.stopReason, "step_limit");
+  assert.equal(output.state.steps, 144);
+  assert.match(output.state.stopSummary ?? "", /避免继续消耗模型 token/);
+
+  const events = await sink.list("run_auto_continue_guard");
+  const continuations = events.filter((event) => {
+    const payload = event.payload as { autoContinuation?: boolean };
+    return event.kind === "system" && payload.autoContinuation === true;
+  });
+  assert.equal(continuations.length, 1);
+});

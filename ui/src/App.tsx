@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useDesktopSessions, useRunEvents } from "./hooks/useDesktopSessions";
 import { getDesktopBridge, getDesktopBridgeErrorMessage, requireDesktopBridge } from "./bridge";
 import type { DesktopSession, DesktopRun, DesktopConversationEntry, DesktopEvent, DesktopSettings, DesktopApproval, DesktopArtifact, DesktopProviderConnectionResult, DesktopAttachment, ToolApprovalMode } from "./bridge";
@@ -66,6 +66,8 @@ const CODEX_PROVIDER_HINT = "先做 Hermes 风格 API provider registry：Codex 
 
 const SESSION_PIN_STORAGE_KEY = "shiguang:pinned-sessions";
 const SESSION_DRAFT_STORAGE_KEY = "shiguang:session-drafts";
+const MAX_TIMELINE_RENDER_ITEMS = 180;
+const RUN_REFRESH_MIN_INTERVAL_MS = 1500;
 
 const PROVIDER_PRESETS: ProviderDraft[] = [
   { key: "deepseek", type: "openai-compatible", authMode: "api_key", baseURL: "https://api.deepseek.com/v1", apiKey: "", apiKeyMasked: "", hasStoredApiKey: false, apiKeyEnv: "DEEPSEEK_API_KEY", model: "deepseek-chat", maxTokens: "4096" },
@@ -852,6 +854,10 @@ function eventPayloadRecord(event: DesktopEvent): Record<string, unknown> {
   return (typeof event.payload === "object" && event.payload !== null)
     ? event.payload as Record<string, unknown>
     : {};
+}
+
+function isAutoContinuationEvent(event: DesktopEvent): boolean {
+  return event.kind === "system" && eventPayloadRecord(event).autoContinuation === true;
 }
 
 function isMeaningfulCompactionEvent(event: DesktopEvent): boolean {
@@ -1803,7 +1809,34 @@ function EventCard({ event }: { event: DesktopEvent }) {
     );
   }
 
+  if (isAutoContinuationEvent(event)) {
+    const stepBudget = typeof p?.stepBudget === "number" ? p.stepBudget : null;
+    const segment = typeof p?.segment === "number" ? p.segment + 1 : null;
+    const recentWorkSummary = typeof p?.recentWorkSummary === "string" ? p.recentWorkSummary.trim() : "";
+    return (
+      <article className={`timeline-node event lane-${lane}`}>
+        <div className="timeline-rail">
+          <div className={`timeline-dot ${tone}`} />
+        </div>
+        <div className="timeline-body">
+          <div className="timeline-node-head">
+            <SignalPill tone="warn">自动续跑</SignalPill>
+            <div className="message-meta"><span>动作步，不是 token</span><span>{new Date(createdAt).toLocaleTimeString()}</span></div>
+          </div>
+          <div className="event-card timeline-surface system compact-system-event">
+            <p className="muted">
+              {stepBudget ? `${stepBudget} 个动作步用完，` : ""}已进入第 {segment ?? "下一"} 段；自动续跑现在有上限，避免继续烧模型余额。
+            </p>
+            {recentWorkSummary ? <p className="muted compact-event-detail">最近动作：{truncateInline(recentWorkSummary, 220)}</p> : null}
+          </div>
+        </div>
+      </article>
+    );
+  }
+
   if (kind === "tool_call") {
+    const toolNameText = typeof p?.tool === "string" ? p.tool : null;
+    const summary = summarizeToolActivityDetail(toolNameText, p?.input);
     return (
       <article className={`timeline-node event lane-${lane}`}>
         <div className="timeline-rail">
@@ -1815,6 +1848,7 @@ function EventCard({ event }: { event: DesktopEvent }) {
             <div className="message-meta"><span>{String(toolName)}</span><span>{new Date(createdAt).toLocaleTimeString()}</span></div>
           </div>
           <div className="event-card timeline-surface tool-call">
+            <p className="muted tool-human-summary">准备{formatToolActivityName(toolNameText)}：{summary}</p>
             <pre className="tool-json">{formatPayload(p?.input ?? "")}</pre>
           </div>
         </div>
@@ -1823,6 +1857,8 @@ function EventCard({ event }: { event: DesktopEvent }) {
   }
 
   if (kind === "tool_result") {
+    const toolNameText = typeof p?.tool === "string" ? p.tool : null;
+    const summary = summarizeToolBlockValue(p?.output);
     const outStr = formatPayload(p?.output);
     const truncated = outStr.length > 500 ? outStr.slice(0, 500) + "..." : outStr;
     return (
@@ -1836,6 +1872,7 @@ function EventCard({ event }: { event: DesktopEvent }) {
             <div className="message-meta"><span>{String(toolName)}</span><span>{new Date(createdAt).toLocaleTimeString()}</span></div>
           </div>
           <div className="event-card timeline-surface tool-result">
+            <p className="muted tool-human-summary">{formatToolActivityName(toolNameText)}完成：{summary}</p>
             <pre className="tool-json">{truncated}</pre>
           </div>
         </div>
@@ -1863,6 +1900,17 @@ function EventCard({ event }: { event: DesktopEvent }) {
 }
 
 function summarizeTimelineEvent(event: DesktopEvent): { title: string; detail: string } {
+  if (isAutoContinuationEvent(event)) {
+    const payload = eventPayloadRecord(event);
+    const stepBudget = typeof payload.stepBudget === "number" ? payload.stepBudget : 72;
+    const recentWorkSummary = typeof payload.recentWorkSummary === "string" ? payload.recentWorkSummary.trim() : "";
+    return {
+      title: "自动续跑",
+      detail: recentWorkSummary
+        ? `${stepBudget} 个动作步用完，继续下一段。最近动作：${truncateInline(recentWorkSummary, 120)}`
+        : `${stepBudget} 个动作步用完，继续下一段；这是动作步预算，不是 token。`,
+    };
+  }
   if (event.kind === "message") {
     const payload = eventPayloadRecord(event);
     const role = payload.role === "user" ? "输入" : "助手回复";
@@ -1988,6 +2036,10 @@ function RunTimeline({ events, streamState }: { events: DesktopEvent[]; streamSt
     timelineItems.push({ type: "event", event });
   }
 
+  const hiddenTimelineItemCount = Math.max(0, timelineItems.length - MAX_TIMELINE_RENDER_ITEMS);
+  const visibleTimelineItems = hiddenTimelineItemCount > 0
+    ? timelineItems.slice(-MAX_TIMELINE_RENDER_ITEMS)
+    : timelineItems;
   const latestVisibleEvent = filteredEvents[filteredEvents.length - 1] ?? null;
   const latestVisibleSummary = latestVisibleEvent ? summarizeTimelineEvent(latestVisibleEvent) : null;
   const latestVisibleAge = formatAgeFromTimestamp(latestVisibleEvent?.createdAt ?? null, nowTick);
@@ -2016,7 +2068,7 @@ function RunTimeline({ events, streamState }: { events: DesktopEvent[]; streamSt
     requestAnimationFrame(() => {
       tailRef.current?.scrollIntoView({ block: "end" });
     });
-  }, [activeFilter, autoFollow, timelineItems.length]);
+  }, [activeFilter, autoFollow, visibleTimelineItems.length]);
 
   const handleTimelineScroll = () => {
     const container = scrollHostRef.current;
@@ -2119,7 +2171,16 @@ function RunTimeline({ events, streamState }: { events: DesktopEvent[]; streamSt
         <div className="event-card timeline-surface system">
           <p className="muted">当前筛选下没有事件。</p>
         </div>
-      ) : timelineItems.map((item) => {
+      ) : (
+        <>
+          {hiddenTimelineItemCount > 0 ? (
+            <div className="event-card timeline-surface system timeline-omitted-card">
+              <p className="muted">
+                已折叠较早 {hiddenTimelineItemCount} 个时间线节点，运行中只渲染最近 {MAX_TIMELINE_RENDER_ITEMS} 个以保持界面流畅。
+              </p>
+            </div>
+          ) : null}
+          {visibleTimelineItems.map((item) => {
         const isLatestItem = item.type === "tool_block"
           ? item.callEvent.id === latestVisibleItemId || item.resultEvent?.id === latestVisibleItemId
           : item.event.id === latestVisibleItemId;
@@ -2129,6 +2190,9 @@ function RunTimeline({ events, streamState }: { events: DesktopEvent[]; streamSt
           const callPayload = (callEvent.payload as Record<string, unknown> | undefined) ?? {};
           const resultPayload = (resultEvent?.payload as Record<string, unknown> | undefined) ?? {};
           const toolLabel = String(callPayload.tool ?? callPayload.role ?? "tool");
+          const toolNameText = typeof callPayload.tool === "string" ? callPayload.tool : null;
+          const inputSummary = summarizeToolActivityDetail(toolNameText, callPayload.input);
+          const resultSummary = resultEvent ? summarizeToolBlockValue(resultPayload.output) : "等待中";
           const expanded = Boolean(expandedToolBlocks[id]);
           const pairingLabel = pairingMode === "call_id"
             ? "按 call id 配对"
@@ -2149,7 +2213,11 @@ function RunTimeline({ events, streamState }: { events: DesktopEvent[]; streamSt
                   <div className="tool-block-head">
                     <div>
                       <strong>{toolLabel}</strong>
-                      <p className="muted">{resultEvent ? "工具调用和结果已合并成一个执行块。" : "工具调用还在等待结果返回。"}</p>
+                      <p className="muted">
+                        {resultEvent
+                          ? `${formatToolActivityName(toolNameText)}完成：${resultSummary}`
+                          : `准备${formatToolActivityName(toolNameText)}：${inputSummary}`}
+                      </p>
                     </div>
                     <div className="tool-block-head-actions">
                       {isLatestItem ? <SignalPill tone="success">最新</SignalPill> : null}
@@ -2162,11 +2230,11 @@ function RunTimeline({ events, streamState }: { events: DesktopEvent[]; streamSt
                   <div className="tool-block-summary">
                     <div className="tool-block-chip">
                       <span className="tiny">输入</span>
-                      <span className="detail-value">{summarizeToolBlockValue(callPayload.input)}</span>
+                      <span className="detail-value">{inputSummary}</span>
                     </div>
                     <div className="tool-block-chip">
                       <span className="tiny">结果</span>
-                      <span className="detail-value">{resultEvent ? summarizeToolBlockValue(resultPayload.output) : "等待中"}</span>
+                      <span className="detail-value">{resultSummary}</span>
                     </div>
                   </div>
                   {expanded ? (
@@ -2213,7 +2281,9 @@ function RunTimeline({ events, streamState }: { events: DesktopEvent[]; streamSt
             <EventCard event={evt} />
           </div>
         );
-      })}
+          })}
+        </>
+      )}
       <div ref={tailRef} />
     </div>
   );
@@ -3349,7 +3419,10 @@ export default function App() {
   const [sessionLifecycleBusy, setSessionLifecycleBusy] = useState(false);
   const [sessionLifecycleError, setSessionLifecycleError] = useState<string | null>(null);
   const { events, eventsError, streamState } = useRunEvents(activeRunId);
+  const deferredEvents = useDeferredValue(events);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const detailRefreshClockRef = useRef(0);
+  const detailRefreshTimerRef = useRef<number | null>(null);
 
   const activeRun = detail?.runs?.find((r) => r.id === activeRunId) ?? null;
   const sessionTurns = detail?.turns ?? [];
@@ -3368,7 +3441,7 @@ export default function App() {
   );
   const pendingApprovals = workspaceSnapshot?.pendingApprovals ?? [];
   const artifacts = workspaceSnapshot?.artifacts ?? [];
-  const sortedEvents = [...events].sort((a, b) => a.seq - b.seq);
+  const sortedEvents = useMemo(() => [...deferredEvents].sort((a, b) => a.seq - b.seq), [deferredEvents]);
   const latestErrorEvent = [...sortedEvents].reverse().find((event) => event.kind === "error");
   const canShowCompactionBanner = activeRun?.status === "running" || activeRun?.status === "paused" || activeRun?.status === "needs_approval";
   const latestCompactionEvent = canShowCompactionBanner
@@ -3555,9 +3628,36 @@ export default function App() {
 
   useEffect(() => {
     if (!activeSessionId) return;
-    void refreshDetail();
-    void refreshSessions();
-  }, [activeSessionId, sortedEvents.length, refreshDetail, refreshSessions]);
+    const refreshNow = () => {
+      detailRefreshClockRef.current = Date.now();
+      void refreshDetail();
+      void refreshSessions();
+    };
+    const activeStatus = activeRun?.status;
+    const isLiveRun = activeStatus === "pending" || activeStatus === "running";
+    if (!isLiveRun) {
+      refreshNow();
+      return;
+    }
+    const elapsed = Date.now() - detailRefreshClockRef.current;
+    if (elapsed >= RUN_REFRESH_MIN_INTERVAL_MS) {
+      refreshNow();
+      return;
+    }
+    if (detailRefreshTimerRef.current !== null) {
+      window.clearTimeout(detailRefreshTimerRef.current);
+    }
+    detailRefreshTimerRef.current = window.setTimeout(() => {
+      detailRefreshTimerRef.current = null;
+      refreshNow();
+    }, RUN_REFRESH_MIN_INTERVAL_MS - elapsed);
+    return () => {
+      if (detailRefreshTimerRef.current !== null) {
+        window.clearTimeout(detailRefreshTimerRef.current);
+        detailRefreshTimerRef.current = null;
+      }
+    };
+  }, [activeSessionId, activeRun?.status, sortedEvents.length, refreshDetail, refreshSessions]);
 
   const handleApprovalDecision = async (approvalId: string, decision: "granted" | "denied") => {
     const approval = pendingApprovals.find((candidate) => candidate.id === approvalId);

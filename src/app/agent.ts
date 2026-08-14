@@ -6,7 +6,7 @@ import type { Turn } from "../core/types.js";
 import { RulePlanner, type Planner } from "../brain/planner.js";
 import { ToolMetadataPolicy, type Policy } from "../brain/policy.js";
 import { BasicEvaluator } from "../brain/evaluator.js";
-import type { BrainDecision, BrainInput } from "../brain/types.js";
+import type { ActionResult, BrainDecision, BrainInput } from "../brain/types.js";
 import { applyActionResultToWorkingMemory, runLoop, type LoopState } from "../brain/loop.js";
 import { ActionDispatcher } from "../runtime/dispatcher.js";
 import { ToolRegistry } from "../tools/registry.js";
@@ -19,7 +19,7 @@ import { randomUUID } from "node:crypto";
 
 const DEFAULT_RUN_STEP_BUDGET = 72;
 const APPROVAL_RESUME_STEP_BUDGET = 72;
-const MAX_AUTO_STEP_CONTINUATIONS = 8;
+const MAX_AUTO_STEP_CONTINUATIONS = 1;
 
 export interface AgentOptions {
   eventSink: EventSink;
@@ -217,16 +217,28 @@ export class Agent {
         return latestState;
       }
 
+      const recentWorkSummary = summarizeRecentWork(latestState.history);
       if (continuationIndex >= MAX_AUTO_STEP_CONTINUATIONS) {
-        latestState.stopSummary = `已自动续跑 ${MAX_AUTO_STEP_CONTINUATIONS} 次、累计 ${latestState.steps} 步后仍未形成最终反馈。为避免真实工具循环，运行已暂停；请补充更具体的目标或缩小任务范围。`;
+        latestState.stopSummary = [
+          `已用完 ${stepBudget} 个动作步并自动续跑 ${MAX_AUTO_STEP_CONTINUATIONS} 次，累计 ${latestState.steps} 步后仍未形成最终反馈。`,
+          "为避免继续消耗模型 token 和重复工具调用，运行已暂停。",
+          recentWorkSummary ? `最近动作：${recentWorkSummary}` : null,
+          "可以补充更具体的目标，或点继续让 Agent 从当前 checkpoint 接着推进。",
+        ].filter(Boolean).join(" ");
         return latestState;
       }
 
       await this.options.eventSink.record(input.runId, "system", {
-        message: `本段 ${stepBudget} 步预算已用完，自动继续第 ${continuationIndex + 2} 段。`,
+        message: `本段 ${stepBudget} 个动作步预算已用完（不是 token），自动续跑第 ${continuationIndex + 2} 段。`,
         autoContinuation: true,
         segment: continuationIndex + 1,
         steps: latestState.steps,
+        stepBudget,
+        costGuard: {
+          maxAutoContinuations: MAX_AUTO_STEP_CONTINUATIONS,
+          note: "自动续跑有次数上限，避免模型/工具循环持续消耗余额。",
+        },
+        recentWorkSummary,
       });
 
       nextInput = {
@@ -351,6 +363,38 @@ function summarizeAssistantTurn(state: LoopState): string {
 function summarizeFailureTurn(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return `Run failed before completion: ${message}`;
+}
+
+function summarizeRecentWork(history: ActionResult[], limit = 4): string {
+  const labels: Record<string, string> = {
+    inspect_project: "检查项目",
+    list_directory: "浏览目录",
+    stat_path: "读取路径信息",
+    search_workspace: "搜索工作区",
+    read_text_file: "读取文件",
+    write_text_file: "写入文件",
+    patch_text_file: "修改文件",
+    run_terminal_command: "运行命令",
+    run_validation: "验证结果",
+    completion_check: "确认完成度",
+    search_memory: "搜索记忆",
+    remember_fact: "写入记忆",
+    forget_memory: "删除记忆",
+  };
+  const recent = history
+    .filter((result) => result.action.kind === "tool_call")
+    .slice(-limit)
+    .map((result) => {
+      if (result.action.kind !== "tool_call") return null;
+      const toolName = result.action.toolName ?? "tool";
+      const label = labels[toolName] ?? toolName.replace(/_/g, " ");
+      const summary = result.metadata?.summary
+        ? String(result.metadata.summary).replace(/\s+/g, " ").trim()
+        : "";
+      return summary ? `${label}：${summary}` : label;
+    })
+    .filter((item): item is string => Boolean(item));
+  return recent.join("；");
 }
 
 export { ToolRegistry };

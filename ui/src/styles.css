@@ -2446,6 +2446,21 @@ body::before {
   background: rgba(255, 255, 255, 0.025);
 }
 
+.compact-system-event,
+.timeline-omitted-card {
+  padding: 10px 12px;
+}
+
+.compact-event-detail,
+.tool-human-summary {
+  margin-top: 0;
+  margin-bottom: 8px;
+}
+
+.tool-human-summary {
+  color: var(--text-soft);
+}
+
 .message {
   max-width: 82%;
   background: rgba(255, 255, 255, 0.03);

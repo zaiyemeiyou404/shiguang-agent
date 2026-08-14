@@ -1809,6 +1809,10 @@ function coreEventToConversationEntry(sessionId: string, event: RunEvent): Deskt
     ? event.payload as Record<string, unknown>
     : undefined;
 
+  if (event.kind === "system" && payload?.autoContinuation === true) {
+    return null;
+  }
+
   if (event.kind === "error") {
     const content = typeof payload?.message === "string"
       ? payload.message.trim()

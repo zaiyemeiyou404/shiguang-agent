@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { startTransition, useState, useEffect, useCallback } from "react";
 import { getDesktopBridgeErrorMessage, requireDesktopBridge } from "../bridge";
 import type { DesktopSession, DesktopRun, DesktopEvent, DesktopSessionDetail, DesktopWorkspaceSnapshot } from "../bridge";
 
@@ -169,7 +169,9 @@ export function useRunEvents(runId: string | null) {
 
     void bridge.getRunEvents(runId).then((persisted) => {
       if (cancelled) return;
-      setEvents(persisted.sort((a, b) => a.seq - b.seq));
+      startTransition(() => {
+        setEvents(persisted.sort((a, b) => a.seq - b.seq));
+      });
       setEventsError(null);
       setStreamState("live");
     }).catch((error) => {
@@ -182,12 +184,17 @@ export function useRunEvents(runId: string | null) {
     let unsub = () => {};
     try {
       unsub = bridge.subscribeRunEvents(runId, (event) => {
-        setStreamState("live");
-        setEventsError(null);
-        setEvents((prev) => {
-          const exists = prev.some((e) => e.id === event.id);
-          if (exists) return prev;
-          return [...prev, event].sort((a, b) => a.seq - b.seq);
+        startTransition(() => {
+          setStreamState("live");
+          setEventsError(null);
+          setEvents((prev) => {
+            const exists = prev.some((e) => e.id === event.id);
+            if (exists) return prev;
+            if (prev.length === 0 || prev[prev.length - 1]!.seq <= event.seq) {
+              return [...prev, event];
+            }
+            return [...prev, event].sort((a, b) => a.seq - b.seq);
+          });
         });
       });
     } catch (error) {
