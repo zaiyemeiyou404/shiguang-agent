@@ -9,6 +9,11 @@ import { BasicEvaluator } from "../brain/evaluator.js";
 import type { ActionResult, BrainDecision, BrainInput } from "../brain/types.js";
 import { applyActionResultToWorkingMemory, runLoop, type LoopState } from "../brain/loop.js";
 import { emptyRunTokenUsage, type LlmTokenUsage, type RunTokenUsage } from "../brain/usage.js";
+import {
+  applyAgentProfileToolAllowlist,
+  formatAgentProfileInstructions,
+  type AgentProfile,
+} from "../brain/agent-profile.js";
 import { ActionDispatcher } from "../runtime/dispatcher.js";
 import { ToolRegistry } from "../tools/registry.js";
 import type { Tool } from "../tools/types.js";
@@ -31,6 +36,7 @@ export interface AgentOptions {
   allowToolsWithoutApproval?: string[];
   memoryService?: MemoryService;
   workspaceRoot?: string;
+  agentProfile?: AgentProfile | null;
 }
 
 export interface AgentInput {
@@ -65,9 +71,12 @@ export class Agent {
 
   constructor(private options: AgentOptions) {
     this.toolRegistry = new ToolRegistry();
-    this.toolRegistry.register(echoTool);
+    if (this.isProfileToolAllowed(echoTool.descriptor.name)) {
+      this.toolRegistry.register(echoTool);
+    }
     if (options.tools) {
       for (const tool of options.tools) {
+        if (!this.isProfileToolAllowed(tool.descriptor.name)) continue;
         this.toolRegistry.register(tool);
       }
     }
@@ -93,6 +102,7 @@ export class Agent {
       const { bundle, diagnostics } = await this.contextService.buildAndRender({
         userTurn: input.userMessage,
         ...input.contextInput,
+        systemInstructions: this.mergedSystemInstructions(input.contextInput.systemInstructions),
       });
       await this.emitContextCompactionEvent(input.runId, diagnostics);
 
@@ -101,7 +111,7 @@ export class Agent {
         runId: input.runId,
         priorTurns,
         history: [],
-        availableTools: this.toolRegistry.all(),
+        availableTools: this.availableToolDescriptors(),
       };
 
       const state = await this.runLoopUntilFinal(
@@ -127,6 +137,7 @@ export class Agent {
       const { bundle, diagnostics } = await this.contextService.buildAndRender({
         userTurn: input.userMessage,
         ...input.contextInput,
+        systemInstructions: this.mergedSystemInstructions(input.contextInput.systemInstructions),
       });
       await this.emitContextCompactionEvent(input.runId, diagnostics);
 
@@ -167,7 +178,7 @@ export class Agent {
           priorTurns,
           history: initialHistory,
           workingMemory: initialWorkingMemory,
-          availableTools: this.toolRegistry.all(),
+          availableTools: this.availableToolDescriptors(),
         };
 
         state = await this.runLoopUntilFinal(
@@ -189,6 +200,15 @@ export class Agent {
   private async loadPriorTurns(sessionId: string): Promise<Turn[]> {
     if (!this.options.turnRepository) return [];
     return this.options.turnRepository.listBySession(sessionId, this.options.recentTurnLimit ?? 20);
+  }
+
+  private availableToolDescriptors() {
+    return applyAgentProfileToolAllowlist(this.toolRegistry.all(), this.options.agentProfile ?? null);
+  }
+
+  private isProfileToolAllowed(toolName: string): boolean {
+    const allowlist = this.options.agentProfile?.tools;
+    return !allowlist || allowlist.length === 0 || allowlist.includes(toolName);
   }
 
   private async runLoopUntilFinal(
@@ -266,12 +286,18 @@ export class Agent {
     if (!this.options.turnRepository) return;
 
     const sessionId = input.contextInput.task.sessionId;
-    const systemInstructions = input.contextInput.systemInstructions?.trim();
+    const systemInstructions = this.mergedSystemInstructions(input.contextInput.systemInstructions)?.trim();
     if (systemInstructions && shouldPersistSystemTurn(priorTurns, systemInstructions)) {
       await this.options.turnRepository.create(makeTurn(sessionId, "system", systemInstructions));
     }
 
     await this.options.turnRepository.create(makeTurn(sessionId, "user", input.userMessage));
+  }
+
+  private mergedSystemInstructions(systemInstructions: string | undefined): string | undefined {
+    const profileInstructions = formatAgentProfileInstructions(this.options.agentProfile ?? null);
+    const merged = [profileInstructions, systemInstructions?.trim()].filter(Boolean).join("\n\n");
+    return merged || undefined;
   }
 
   private async persistAssistantTurn(sessionId: string, content: string): Promise<void> {

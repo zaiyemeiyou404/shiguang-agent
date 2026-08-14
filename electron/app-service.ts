@@ -70,6 +70,7 @@ import {
   type McpStdioServerConfig,
 } from "../dist/tools/mcp-stdio-runtime.js";
 import { createPlanner } from "./planner-factory.js";
+import { loadProjectAgentProfile } from "../dist/brain/agent-profile.js";
 import {
   loadDesktopConfig,
   getDesktopSettings,
@@ -819,8 +820,12 @@ export class DesktopAppService {
     workspaceRoot: string;
   }> {
     const desktopConfig = loadDesktopConfig();
-    const { planner, label } = createPlanner(desktopConfig.llm);
     const workspaceRoot = resolve(normalize(desktopConfig.workspaceRoot));
+    const agentProfile = loadProjectAgentProfile(workspaceRoot);
+    const llmConfig = agentProfile?.model
+      ? { ...desktopConfig.llm, model: agentProfile.model }
+      : desktopConfig.llm;
+    const { planner, label } = createPlanner(llmConfig);
     const tools = await this.createDesktopTools(desktopConfig, workspaceRoot);
     const agent = new Agent({
       eventSink: sink,
@@ -830,9 +835,11 @@ export class DesktopAppService {
       turnRepository: this.turnRepository,
       memoryService: this.memoryService,
       workspaceRoot,
+      agentProfile,
     });
 
-    return { agent, label, workspaceRoot };
+    const runtimeLabel = agentProfile ? `${label} · profile:${agentProfile.name}` : label;
+    return { agent, label: runtimeLabel, workspaceRoot };
   }
 
   private async createDesktopTools(desktopConfig: ResolvedDesktopConfig, workspaceRoot: string): Promise<Tool[]> {

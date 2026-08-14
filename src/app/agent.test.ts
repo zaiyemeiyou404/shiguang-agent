@@ -5,6 +5,7 @@ import { Agent } from "./agent.js";
 import type { BrainDecision } from "../brain/types.js";
 import type { Planner } from "../brain/planner.js";
 import { InMemoryEventSink } from "../runtime/event-sink.js";
+import type { Tool } from "../tools/types.js";
 
 test("Agent auto-continues after a step budget slice before returning final feedback", async () => {
   let decisions = 0;
@@ -107,3 +108,66 @@ test("Agent caps automatic continuations to avoid runaway model spend", async ()
   });
   assert.equal(continuations.length, 1);
 });
+
+test("Agent profile allowlist limits the planner-visible tool registry", async () => {
+  const seenToolNames: string[][] = [];
+  const planner: Planner = {
+    async decide(input): Promise<BrainDecision> {
+      seenToolNames.push(input.availableTools.map((tool) => tool.name));
+      return {
+        action: { kind: "respond", content: "profile applied" },
+        reasoning: "Verified profile tool allowlist.",
+      };
+    },
+  };
+
+  const sink = new InMemoryEventSink();
+  const agent = new Agent({
+    eventSink: sink,
+    planner,
+    tools: [testTool("allowed_tool"), testTool("blocked_tool")],
+    agentProfile: {
+      name: "safe",
+      tools: ["allowed_tool"],
+      sourcePath: ".shiguang/agents/safe.md",
+      instructions: "Use only the allowed tool.",
+    },
+  });
+  const now = new Date("2026-01-01T00:00:00.000Z");
+  const output = await agent.run({
+    runId: "run_profile_allowlist",
+    userMessage: "check profile",
+    contextInput: {
+      task: {
+        id: "task_profile_allowlist",
+        sessionId: "sess_profile_allowlist",
+        parentTaskId: null,
+        title: "Profile allowlist",
+        description: null,
+        status: "in_progress",
+        priority: 0,
+        createdAt: now,
+        updatedAt: now,
+      },
+      recentRuns: [],
+      linkedArtifacts: [],
+      memories: [],
+    },
+  });
+
+  assert.equal(output.state.stopReason, "respond");
+  assert.deepEqual(seenToolNames[0], ["allowed_tool"]);
+});
+
+function testTool(name: string): Tool {
+  return {
+    descriptor: {
+      name,
+      description: `${name} test tool`,
+      inputSchema: {},
+    },
+    async execute() {
+      return `${name} executed`;
+    },
+  };
+}

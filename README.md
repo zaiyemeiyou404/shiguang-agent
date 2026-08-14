@@ -2,16 +2,16 @@
 
 拾光 Agent 是一个轻量级桌面 AI Agent。它把对话、工作区文件操作、工具调用、审批、运行记录和上下文压缩放在一个 Electron 桌面界面里，目标是做成一个下载后即可配置使用的小型个人工作台。
 
-当前版本：`0.2.13`
+当前版本：`0.2.14`
 
 ## 下载使用
 
 在 GitHub Releases 页面下载 Windows 版本：
 
-- 安装包：`拾光 Agent Setup 0.2.13.exe`
+- 安装包：`拾光 Agent Setup 0.2.14.exe`
 - 免安装版：`win-unpacked.zip`
 
-`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.13`，才会生成新的正式 Release。
+`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.14`，才会生成新的正式 Release。
 
 如果使用免安装版，解压后运行：
 
@@ -89,6 +89,7 @@ $env:GEMINI_API_KEY="你的 key"
 - 上下文管理：保留关键运行记录，在上下文压力较高时进行压缩。
 - 费用治理：模型返回 usage 时会记录本次/累计 token；模型不返回 usage 时会用上下文长度做估算，聊天时间线会显示本步用量和工具 schema 数量。
 - 工具省 token：LLM 规划时只发送当前任务最相关的一组工具 schema，工具执行输出进入历史前会自动摘要/截断，避免每一步反复塞入全量工具定义和大段文件内容。
+- 项目 Agent Profile：工作区可以提供 `.shiguang/agents/default.md`，声明项目级角色、模型偏好、工具白名单和额外规则；运行时会自动注入 profile，并只把允许的工具暴露给 planner。
 - 循环防护：连续相同的只读工具动作会自动暂停并说明原因；模型请求数、总 token 和上下文估算 token 都有默认预算，也可通过环境变量调整。
 - 自动续跑与费用保护：Agent 每 72 个动作步作为一个内部工作分片；默认只做 1 次保护性自动续跑，仍未形成最终反馈时会暂停并说明最近动作，避免模型/工具循环持续消耗 API 余额。
 - 多语言轻量校验：没有 `package.json` 的工作区也能识别并校验常见文件。
@@ -123,6 +124,40 @@ $env:GEMINI_API_KEY="你的 key"
 | `code_map` / `symbol_search` / `dependency_graph` | 生成工程地图、查找符号、分析 import/use 依赖 |
 | `start_background_process` / `stop_background_process` | 启动或停止 dev server 等后台进程，需要审批 |
 | `search_memory` / `remember_fact` / `forget_memory` | 搜索、写入、删除本地记忆，删除需要审批 |
+
+### 项目 Agent Profile
+
+拾光现在支持类似 PiAgent 的轻量项目 profile。把 Markdown 文件放到当前工作区：
+
+```text
+.shiguang/agents/default.md
+```
+
+示例可以参考 `examples/default-agent-profile.md`：
+
+```markdown
+---
+name: default
+description: Conservative project coding profile
+model: deepseek-v4-flash
+thinking: medium
+tools:
+  - inspect_project
+  - read_text_file
+  - search_workspace
+  - patch_text_file
+  - run_validation
+---
+
+Inspect before editing, make the smallest safe change, then validate.
+```
+
+启动新 run 时，拾光会自动读取当前工作区的默认 profile：
+
+- `model` 会作为本项目的优先模型。
+- `tools` 会作为工具白名单，未列出的工具不会发送给 planner。
+- Markdown 正文会作为项目级 system instruction 注入上下文。
+- 可通过环境变量 `SHIGUANG_AGENT_PROFILE=reviewer` 选择 `.shiguang/agents/reviewer.md`；找不到时回退到 `default.md`。
 
 ### MCP 扩展工具
 
