@@ -223,6 +223,37 @@ test("OpenAIModel falls back to plain JSON prompting when json_object mode is em
   }
 });
 
+test("OpenAIModel uses plain JSON directly for local Ollama contracts", async () => {
+  const model = new OpenAIModel({
+    provider: "ollama",
+    apiKey: "ollama",
+    baseURL: "http://127.0.0.1:11434/v1",
+    model: "qwen2.5-coder:14b",
+  });
+  const requestBodies: string[] = [];
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    requestBodies.push(String(init?.body ?? ""));
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ kind: "finish", content: "done" }) } }] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  try {
+    const result = await model.generateDecision(makeRequest());
+    assert.equal(result.action.kind, "finish");
+    assert.equal(requestBodies.length, 1);
+
+    const body = JSON.parse(requestBodies[0] ?? "{}") as { tools?: unknown; response_format?: unknown };
+    assert.equal(body.tools, undefined);
+    assert.equal(body.response_format, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("OpenAIModel retries once with a repair prompt after malformed output", async () => {
   const model = new OpenAIModel({ apiKey: "test-key", baseURL: "https://example.invalid/v1", model: "fake-model" });
   const requestBodies: string[] = [];

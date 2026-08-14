@@ -5,6 +5,11 @@ import type { LlmPlannerModel, LlmPlannerModelResponse } from "../dist/brain/mod
 import { AnthropicModel } from "../dist/brain/providers/anthropic.js";
 import { GeminiModel } from "../dist/brain/providers/gemini.js";
 import { OpenAICompatibleModel } from "../dist/brain/providers/openai-compatible.js";
+import {
+  inferProviderContract,
+  providerRequiresApiKey,
+  type ProviderContract,
+} from "../dist/brain/providers/contract.js";
 import type { ProviderProtocol, ResolvedLlmConfig } from "./config.js";
 
 export interface PlannerFactoryResult {
@@ -16,9 +21,10 @@ interface ModelFactoryResult {
   model?: LlmPlannerModel;
   label: string;
   errorReason?: string;
+  providerContract?: ProviderContract;
 }
 
-type ProviderModelFactory = (config: ResolvedLlmConfig) => ModelFactoryResult;
+type ProviderModelFactory = (config: ResolvedLlmConfig, contract: ProviderContract) => ModelFactoryResult;
 
 const providerFactories: Record<ProviderProtocol, ProviderModelFactory> = {
   "openai-compatible": createOpenAICompatibleProvider,
@@ -58,23 +64,33 @@ export function createPlanner(config?: ResolvedLlmConfig): PlannerFactoryResult 
 
 export function createModelProvider(config: ResolvedLlmConfig): ModelFactoryResult {
   const factory = providerFactories[config.providerType];
+  const contract = inferProviderContract({
+    provider: config.provider,
+    protocol: config.providerType,
+    authMode: config.authMode,
+    baseURL: config.baseURL,
+    model: config.model,
+    maxTokens: config.maxTokens,
+  });
   if (!factory) {
     return {
       label: `llm:unsupported:${config.providerType}`,
       errorReason: `Provider type "${config.providerType}" is not supported yet for provider "${config.provider}".`,
+      providerContract: contract,
     };
   }
 
-  return factory(config);
+  return factory(config, contract);
 }
 
-function createOpenAICompatibleProvider(config: ResolvedLlmConfig): ModelFactoryResult {
+function createOpenAICompatibleProvider(config: ResolvedLlmConfig, contract: ProviderContract): ModelFactoryResult {
   const apiKey = resolveProviderApiKey(config);
 
-  if (!apiKey) {
+  if (providerRequiresApiKey(contract) && !apiKey) {
     return {
       label: `llm:missing-auth:${config.provider}`,
       errorReason: `Provider "${config.provider}" requires authentication, but no API key is configured.`,
+      providerContract: contract,
     };
   }
 
@@ -85,18 +101,21 @@ function createOpenAICompatibleProvider(config: ResolvedLlmConfig): ModelFactory
       baseURL: config.baseURL,
       model: config.model,
       maxTokens: config.maxTokens,
+      providerContract: contract,
     }),
     label: `llm:${config.provider}`,
+    providerContract: contract,
   };
 }
 
-function createAnthropicProvider(config: ResolvedLlmConfig): ModelFactoryResult {
+function createAnthropicProvider(config: ResolvedLlmConfig, contract: ProviderContract): ModelFactoryResult {
   const apiKey = resolveProviderApiKey(config);
 
-  if (!apiKey) {
+  if (providerRequiresApiKey(contract) && !apiKey) {
     return {
       label: `llm:missing-auth:${config.provider}`,
       errorReason: `Provider "${config.provider}" requires authentication, but no API key is configured.`,
+      providerContract: contract,
     };
   }
 
@@ -106,18 +125,21 @@ function createAnthropicProvider(config: ResolvedLlmConfig): ModelFactoryResult 
       baseURL: config.baseURL,
       model: config.model,
       maxTokens: config.maxTokens,
+      providerContract: contract,
     }),
     label: `llm:${config.provider}`,
+    providerContract: contract,
   };
 }
 
-function createGeminiProvider(config: ResolvedLlmConfig): ModelFactoryResult {
+function createGeminiProvider(config: ResolvedLlmConfig, contract: ProviderContract): ModelFactoryResult {
   const apiKey = resolveProviderApiKey(config);
 
-  if (!apiKey) {
+  if (providerRequiresApiKey(contract) && !apiKey) {
     return {
       label: `llm:missing-auth:${config.provider}`,
       errorReason: `Provider "${config.provider}" requires authentication, but no API key is configured.`,
+      providerContract: contract,
     };
   }
 
@@ -127,8 +149,10 @@ function createGeminiProvider(config: ResolvedLlmConfig): ModelFactoryResult {
       baseURL: config.baseURL,
       model: config.model,
       maxTokens: config.maxTokens,
+      providerContract: contract,
     }),
     label: `llm:${config.provider}`,
+    providerContract: contract,
   };
 }
 

@@ -6,3 +6,4 @@ export * from "./policy.js";
 export * from "./evaluator.js";
 export * from "./loop.js";
 export * from "./agent-profile.js";
+export * from "./providers/contract.js";

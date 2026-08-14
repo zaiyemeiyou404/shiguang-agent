@@ -2,6 +2,11 @@ import type { LlmPlannerModel, LlmPlannerModelRequest, LlmPlannerModelResponse, 
 import type { ToolDescriptor } from "../../tools/types.js";
 import { describeToolForNativeFunction } from "../../tools/protocol.js";
 import {
+  buildOpenAICompatibleCompletionModes,
+  inferProviderContract,
+  type ProviderContract,
+} from "./contract.js";
+import {
   buildProviderMessages,
   buildProviderRepairMessages,
   parseProviderDecision,
@@ -17,6 +22,7 @@ export interface OpenAIModelConfig {
   apiKey?: string;
   model?: string;
   maxTokens?: number;
+  providerContract?: ProviderContract;
 }
 
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
@@ -91,6 +97,7 @@ export class OpenAICompatibleModel implements LlmPlannerModel {
   private apiKey: string;
   private model: string;
   private maxTokens: number;
+  private providerContract: ProviderContract;
 
   constructor(config: OpenAIModelConfig = {}) {
     this.provider = config.provider ?? inferProviderName(config.baseURL ?? process.env.SHIGUANG_LLM_BASE_URL);
@@ -98,6 +105,13 @@ export class OpenAICompatibleModel implements LlmPlannerModel {
     this.apiKey = config.apiKey ?? process.env.SHIGUANG_LLM_API_KEY ?? "";
     this.model = config.model ?? process.env.SHIGUANG_LLM_MODEL ?? DEFAULT_MODEL;
     this.maxTokens = config.maxTokens ?? 2048;
+    this.providerContract = config.providerContract ?? inferProviderContract({
+      provider: this.provider,
+      protocol: "openai-compatible",
+      baseURL: this.baseURL,
+      model: this.model,
+      maxTokens: this.maxTokens,
+    });
   }
 
   get isConfigured(): boolean {
@@ -173,7 +187,8 @@ export class OpenAICompatibleModel implements LlmPlannerModel {
     mode?: CompletionMode,
     usageHints?: Partial<LlmTokenUsage>,
   ): Promise<CompletionResult> {
-    const completionMode = mode ?? (nativeTools.length > 0 ? "native_tools" : "json_object");
+    const completionModes = buildOpenAICompatibleCompletionModes(this.providerContract, nativeTools.length);
+    const completionMode = mode ?? completionModes[0] ?? "plain_json";
     const useNativeTools = completionMode === "native_tools" && nativeTools.length > 0;
     const body: ChatCompletionRequest = {
       model: this.model,
@@ -203,10 +218,12 @@ export class OpenAICompatibleModel implements LlmPlannerModel {
     if (!response.ok) {
       const text = await response.text().catch(() => "unknown error");
       if (useNativeTools && isNativeToolUnsupported(response.status, text)) {
-        return this.requestCompletion(messages, signal, [], "json_object", usageHints);
+        const fallback = nextFallbackMode(completionMode, completionModes);
+        if (fallback) return this.requestCompletion(messages, signal, [], fallback, usageHints);
       }
       if (completionMode === "json_object" && isJsonModeUnsupported(response.status, text)) {
-        return this.requestCompletion(messages, signal, [], "plain_json", usageHints);
+        const fallback = nextFallbackMode(completionMode, completionModes);
+        if (fallback) return this.requestCompletion(messages, signal, [], fallback, usageHints);
       }
       throw formatProviderHttpError("OpenAI-compatible", response.status, text);
     }
@@ -220,7 +237,7 @@ export class OpenAICompatibleModel implements LlmPlannerModel {
     });
     const message = data.choices?.[0]?.message;
     if (!message) {
-      const fallback = nextFallbackMode(completionMode);
+      const fallback = nextFallbackMode(completionMode, completionModes);
       if (fallback) {
         const fallbackResult = await this.requestCompletion(messages, signal, [], fallback, usageHints);
         return { ...fallbackResult, usage: mergeLlmTokenUsage(usage, fallbackResult.usage) };
@@ -228,7 +245,7 @@ export class OpenAICompatibleModel implements LlmPlannerModel {
       throw formatProviderEmptyResponse("OpenAI-compatible");
     }
     if (!normalizeMessageContent(message) && !hasToolCalls(message)) {
-      const fallback = nextFallbackMode(completionMode);
+      const fallback = nextFallbackMode(completionMode, completionModes);
       if (fallback) {
         const fallbackResult = await this.requestCompletion(messages, signal, [], fallback, usageHints);
         return { ...fallbackResult, usage: mergeLlmTokenUsage(usage, fallbackResult.usage) };
@@ -377,8 +394,8 @@ function isJsonModeUnsupported(status: number, message: string): boolean {
   return /\b(response_format|json_object|json mode)\b/i.test(message);
 }
 
-function nextFallbackMode(mode: CompletionMode): CompletionMode | null {
-  if (mode === "native_tools") return "json_object";
-  if (mode === "json_object") return "plain_json";
-  return null;
+function nextFallbackMode(mode: CompletionMode, modes: CompletionMode[]): CompletionMode | null {
+  const index = modes.indexOf(mode);
+  if (index < 0) return null;
+  return modes[index + 1] ?? null;
 }

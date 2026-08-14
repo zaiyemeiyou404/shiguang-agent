@@ -7,12 +7,14 @@ import {
 } from "./shared.js";
 import { formatProviderEmptyResponse, formatProviderFetchError, formatProviderHttpError } from "./errors.js";
 import { estimateMessagesTokens, mergeLlmTokenUsage, type LlmTokenUsage } from "../usage.js";
+import { inferProviderContract, type ProviderContract } from "./contract.js";
 
 export interface AnthropicModelConfig {
   baseURL?: string;
   apiKey?: string;
   model?: string;
   maxTokens?: number;
+  providerContract?: ProviderContract;
 }
 
 const DEFAULT_BASE_URL = "https://api.anthropic.com/v1";
@@ -60,12 +62,21 @@ export class AnthropicModel implements LlmPlannerModel {
   private apiKey: string;
   private model: string;
   private maxTokens: number;
+  private providerContract: ProviderContract;
 
   constructor(config: AnthropicModelConfig = {}) {
     this.baseURL = (config.baseURL ?? process.env.SHIGUANG_LLM_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
     this.apiKey = config.apiKey ?? process.env.SHIGUANG_LLM_API_KEY ?? "";
     this.model = config.model ?? process.env.SHIGUANG_LLM_MODEL ?? DEFAULT_MODEL;
     this.maxTokens = config.maxTokens ?? 2048;
+    this.providerContract = config.providerContract ?? inferProviderContract({
+      provider: "anthropic",
+      protocol: "anthropic",
+      authMode: this.apiKey ? "api_key" : undefined,
+      baseURL: this.baseURL,
+      model: this.model,
+      maxTokens: this.maxTokens,
+    });
   }
 
   async generateDecision(request: LlmPlannerModelRequest, context?: PlannerContext): Promise<LlmPlannerModelResponse> {
@@ -144,9 +155,10 @@ export class AnthropicModel implements LlmPlannerModel {
       .join("\n")
       .trim();
     const usage = normalizeAnthropicUsage(data.usage, {
-      provider: "anthropic",
+      provider: this.providerContract.provider,
       model: this.model,
       requestCount: 1,
+      mode: this.providerContract.preferredRequestMode,
       promptEstimateTokens: estimateMessagesTokens(providerMessages),
     });
     if (!raw) {

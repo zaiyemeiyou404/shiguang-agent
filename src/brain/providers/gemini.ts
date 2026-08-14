@@ -7,12 +7,14 @@ import {
 } from "./shared.js";
 import { formatProviderEmptyResponse, formatProviderFetchError, formatProviderHttpError } from "./errors.js";
 import { estimateMessagesTokens, mergeLlmTokenUsage, type LlmTokenUsage } from "../usage.js";
+import { inferProviderContract, type ProviderContract } from "./contract.js";
 
 export interface GeminiModelConfig {
   baseURL?: string;
   apiKey?: string;
   model?: string;
   maxTokens?: number;
+  providerContract?: ProviderContract;
 }
 
 const DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
@@ -64,12 +66,21 @@ export class GeminiModel implements LlmPlannerModel {
   private apiKey: string;
   private model: string;
   private maxTokens: number;
+  private providerContract: ProviderContract;
 
   constructor(config: GeminiModelConfig = {}) {
     this.baseURL = (config.baseURL ?? process.env.SHIGUANG_LLM_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
     this.apiKey = config.apiKey ?? process.env.SHIGUANG_LLM_API_KEY ?? "";
     this.model = config.model ?? process.env.SHIGUANG_LLM_MODEL ?? DEFAULT_MODEL;
     this.maxTokens = config.maxTokens ?? 2048;
+    this.providerContract = config.providerContract ?? inferProviderContract({
+      provider: "gemini",
+      protocol: "gemini",
+      authMode: this.apiKey ? "api_key" : undefined,
+      baseURL: this.baseURL,
+      model: this.model,
+      maxTokens: this.maxTokens,
+    });
   }
 
   async generateDecision(request: LlmPlannerModelRequest, context?: PlannerContext): Promise<LlmPlannerModelResponse> {
@@ -150,9 +161,10 @@ export class GeminiModel implements LlmPlannerModel {
       .join("\n")
       .trim();
     const usage = normalizeGeminiUsage(data.usageMetadata, {
-      provider: "gemini",
+      provider: this.providerContract.provider,
       model: this.model,
       requestCount: 1,
+      mode: this.providerContract.preferredRequestMode,
       promptEstimateTokens: estimateMessagesTokens(providerMessages),
     });
     if (!raw) {

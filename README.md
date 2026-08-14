@@ -2,16 +2,16 @@
 
 拾光 Agent 是一个轻量级桌面 AI Agent。它把对话、工作区文件操作、工具调用、审批、运行记录和上下文压缩放在一个 Electron 桌面界面里，目标是做成一个下载后即可配置使用的小型个人工作台。
 
-当前版本：`0.2.15`
+当前版本：`0.2.16`
 
 ## 下载使用
 
 在 GitHub Releases 页面下载 Windows 版本：
 
-- 安装包：`拾光 Agent Setup 0.2.15.exe`
+- 安装包：`拾光 Agent Setup 0.2.16.exe`
 - 免安装版：`win-unpacked.zip`
 
-`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.15`，才会生成新的正式 Release。
+`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.16`，才会生成新的正式 Release。
 
 如果使用免安装版，解压后运行：
 
@@ -59,6 +59,8 @@ G:\CodexData\shiguang-agent-data\
 
 DeepSeek 设置页提供 `Flash` / `Pro` 快捷切换，对应官方 API 模型 `deepseek-v4-flash` 和 `deepseek-v4-pro`。旧 `deepseek-chat` / `deepseek-reasoner` 仍可手动填写或通过兼容按钮选择，但建议新配置优先使用 V4 模型名。
 
+Provider Contract Registry 会为每个 provider 统一声明协议、认证方式、请求模式、工具调用能力、JSON 输出能力、usage 能力、本地/远程成本等级和诊断提示。OpenAI-compatible、Anthropic、Gemini、Ollama 都会先进入这层 contract，再由 planner factory 创建具体模型适配器。
+
 API Key 可以在设置里直接填写，也可以通过环境变量提供，例如：
 
 ```powershell
@@ -90,6 +92,7 @@ $env:GEMINI_API_KEY="你的 key"
 - 费用治理：模型返回 usage 时会记录本次/累计 token；模型不返回 usage 时会用上下文长度做估算，聊天时间线会显示本步用量和工具 schema 数量。
 - 工具省 token：LLM 规划时只发送当前任务最相关的一组工具 schema，工具执行输出进入历史前会自动摘要/截断，避免每一步反复塞入全量工具定义和大段文件内容。
 - Tool Contract Registry：每个工具统一声明来源、类别、阶段、风险、审批、成本、前后置建议和完成信号；planner、审批、MCP 适配和事件日志共用这一套规则。
+- Provider Contract Registry：每个模型服务统一声明 native tools、JSON mode、system prompt 形态、usage、fallback 请求模式和本地/远程成本等级；例如 Ollama 会直接走 plain JSON，避免多打一次不支持的 native tool/json_object 请求。
 - 项目 Agent Profile：工作区可以提供 `.shiguang/agents/default.md`，声明项目级角色、模型偏好、工具白名单和额外规则；运行时会自动注入 profile，并只把允许的工具暴露给 planner。
 - 循环防护：连续相同的只读工具动作会自动暂停并说明原因；模型请求数、总 token 和上下文估算 token 都有默认预算，也可通过环境变量调整。
 - 自动续跑与费用保护：Agent 每 72 个动作步作为一个内部工作分片；默认只做 1 次保护性自动续跑，仍未形成最终反馈时会暂停并说明最近动作，避免模型/工具循环持续消耗 API 余额。
@@ -306,4 +309,14 @@ MCP 会被当作外部能力接入层，而不是另一套 Agent 循环。MCP to
 
 ```text
 docs/tool-protocol.md
+```
+
+## 模型 Provider Contract
+
+拾光 Agent 也新增了 `shiguang.provider.contract.v1`。它会在创建具体模型适配器前，统一描述 provider 的协议、认证方式、native tool 能力、JSON mode 能力、system prompt 形态、usage 能力、fallback 请求模式和成本等级。
+
+详细设计见：
+
+```text
+docs/provider-contract.md
 ```
