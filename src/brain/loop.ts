@@ -1041,7 +1041,7 @@ export async function runLoop(
   finalizeDanglingCompletionCheck(state);
   if (!state.stopReason && state.steps >= maxSteps) {
     state.stopReason = "step_limit";
-    state.stopSummary = `Reached the ${maxSteps}-step budget before producing a final answer. Continue the run to keep working from the latest checkpoint.`;
+    state.stopSummary = `已到达本轮 ${maxSteps} 步安全预算，还没有形成最终反馈。为避免工具循环或长任务空转，运行已暂停；可以继续工作，Agent 会结合最近运行摘要、工具结果和当前工作区状态接着推进。`;
   }
   return state;
 }

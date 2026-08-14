@@ -80,7 +80,7 @@ import {
   type ToolApprovalMode,
 } from "./config.js";
 import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, statSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 let seqCounter = 0;
@@ -94,6 +94,86 @@ function approvalAllowlistForMode(mode: ToolApprovalMode): string[] {
     allowed.push("write_text_file", "patch_text_file");
   }
   return allowed;
+}
+
+type StateDatabase = ReturnType<typeof openStateDatabase>;
+
+function resolveDedicatedMemoryDatabasePath(userDataPath: string): string {
+  const memoryDir = join(userDataPath, "memory");
+  mkdirSync(memoryDir, { recursive: true });
+  return join(memoryDir, "shiguang-memory.sqlite");
+}
+
+function migrateLegacyMemoriesToDedicatedDatabase(stateDbPath: string, memoryDb: StateDatabase): void {
+  if (!existsSync(stateDbPath)) return;
+
+  let attached = false;
+  try {
+    memoryDb.exec(`ATTACH DATABASE '${escapeSqliteString(stateDbPath)}' AS legacy_state`);
+    attached = true;
+    const hasMemories = memoryDb
+      .prepare("SELECT name FROM legacy_state.sqlite_master WHERE type = 'table' AND name = 'memories'")
+      .get();
+    if (!hasMemories) return;
+
+    memoryDb.exec(`
+      INSERT OR IGNORE INTO memories (
+        id,
+        scope,
+        workspace_scope,
+        kind,
+        summary,
+        content,
+        salience,
+        last_accessed_at,
+        source_type,
+        source_id,
+        confidence,
+        created_at,
+        updated_at
+      )
+      SELECT
+        id,
+        scope,
+        workspace_scope,
+        kind,
+        summary,
+        content,
+        salience,
+        last_accessed_at,
+        source_type,
+        source_id,
+        confidence,
+        created_at,
+        updated_at
+      FROM legacy_state.memories
+    `);
+
+    const hasLinks = memoryDb
+      .prepare("SELECT name FROM legacy_state.sqlite_master WHERE type = 'table' AND name = 'memory_links'")
+      .get();
+    if (hasLinks) {
+      memoryDb.exec(`
+        INSERT OR IGNORE INTO memory_links (memory_id, target_type, target_id)
+        SELECT memory_id, target_type, target_id
+        FROM legacy_state.memory_links
+      `);
+    }
+  } catch (error) {
+    console.warn("Failed to migrate Shiguang memories into dedicated memory database:", error);
+  } finally {
+    if (attached) {
+      try {
+        memoryDb.exec("DETACH DATABASE legacy_state");
+      } catch {
+        // Best effort; a failed detach should not block app startup.
+      }
+    }
+  }
+}
+
+function escapeSqliteString(value: string): string {
+  return value.replace(/'/g, "''");
 }
 
 export class DesktopAppService {
@@ -114,7 +194,11 @@ export class DesktopAppService {
 
   constructor(store: DesktopStore) {
     this.store = store;
-    const db = openStateDatabase(join(app.getPath("userData"), "shiguang-state.sqlite"));
+    const userDataPath = app.getPath("userData");
+    const stateDbPath = join(userDataPath, "shiguang-state.sqlite");
+    const db = openStateDatabase(stateDbPath);
+    const memoryDb = openStateDatabase(resolveDedicatedMemoryDatabasePath(userDataPath));
+    migrateLegacyMemoriesToDedicatedDatabase(stateDbPath, memoryDb);
     this.sessionRepository = new SqliteSessionRepository(db);
     this.taskRepository = new SqliteTaskRepository(db);
     this.runRepository = new SqliteRunRepository(db);
@@ -122,7 +206,7 @@ export class DesktopAppService {
     this.turnRepository = new SqliteTurnRepository(db);
     this.approvalRepository = new SqliteApprovalRepository(db);
     this.artifactRepository = new SqliteArtifactRepository(db);
-    this.memoryRepository = new SqliteMemoryRepository(db);
+    this.memoryRepository = new SqliteMemoryRepository(memoryDb);
     this.memoryService = new MemoryService(this.memoryRepository);
   }
 

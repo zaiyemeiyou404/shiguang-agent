@@ -1438,14 +1438,31 @@ function buildRunQuickRepairPrompt(run: DesktopRun, artifactCount = 0): string {
   if (run.summary) {
     lines.push(`摘要：${truncateInline(run.summary, 240)}`);
   }
-  if (run.reason) {
-    lines.push(`原因：${truncateInline(run.reason, 240)}`);
+  const displayReason = formatRunReasonForDisplay(run.reason);
+  if (displayReason) {
+    lines.push(`原因：${truncateInline(displayReason, 240)}`);
   }
   if (artifactCount > 0) {
     lines.push(`这个运行已有 ${artifactCount} 个产物，先看产物再继续。`);
   }
   lines.push("先检查这次运行的结果、报错和产物，再决定下一步；如果需要修复，做最小改动并重新验证。");
   return lines.join("\n");
+}
+
+function formatRunReasonForDisplay(reason: string | null | undefined): string | null {
+  const value = reason?.trim();
+  if (!value) return null;
+
+  const stepLimitMatch = value.match(/Reached the\s+(\d+)-step budget before producing a final answer/i);
+  if (stepLimitMatch) {
+    return `本轮达到 ${stepLimitMatch[1]} 步安全预算，还没有形成最终反馈。运行已暂停以避免工具循环；继续工作会结合最近运行摘要、工具结果和工作区现状往下推进。`;
+  }
+
+  if (/Paused by user/i.test(value)) {
+    return "已手动暂停。可以补充一句新要求，或直接点继续工作沿当前上下文推进。";
+  }
+
+  return value;
 }
 
 function describeRunActivity(
@@ -1474,9 +1491,10 @@ function describeRunActivity(
   const latestPendingToolCall = findLatestToolCallWithoutResult(events);
   const latestToolResult = [...events].reverse().find((event) => event.kind === "tool_result") ?? null;
   const latestToolResultPayload = latestToolResult ? eventPayloadRecord(latestToolResult) : null;
+  const displayReason = formatRunReasonForDisplay(run.reason);
 
   let label = formatRunStatus(run.status);
-  let detail = run.reason ?? "等待新的运行事件。";
+  let detail = displayReason ?? "等待新的运行事件。";
   let tone = signalToneForRunStatus(run.status);
 
   if (run.status === "needs_approval") {
@@ -1489,7 +1507,7 @@ function describeRunActivity(
     tone = "warn";
   } else if (run.status === "paused") {
     label = "等待继续";
-    detail = run.reason ?? "本轮到达步骤预算，已保留现场。点击继续工作后会沿着最近的检查点继续推进。";
+    detail = displayReason ?? "本轮到达步骤预算，已保留现场。点击继续工作后会结合最近运行摘要和工具结果继续推进。";
     tone = "warn";
   } else if (latestErrorEvent) {
     const payload = eventPayloadRecord(latestErrorEvent);
@@ -1582,10 +1600,11 @@ function describeRunPhase(
   const latestToolResult = findLatestToolResult(events);
   const latestErrorEvent = [...events].reverse().find((event) => event.kind === "error") ?? null;
   const pendingApproval = pendingApprovals.find((approval) => approval.runId === run.id) ?? null;
+  const displayReason = formatRunReasonForDisplay(run.reason);
 
   let currentStep: RunPhaseStep["key"] = run.status === "pending" ? "boot" : "plan";
   let label = "规划中";
-  let detail = run.reason ?? "正在整理当前任务并决定下一步。";
+  let detail = displayReason ?? "正在整理当前任务并决定下一步。";
   let tone: SignalTone = signalToneForRunStatus(run.status);
 
   if (run.status === "needs_approval") {
@@ -1597,7 +1616,7 @@ function describeRunPhase(
   } else if (run.status === "paused") {
     currentStep = "reply";
     label = "等待继续";
-    detail = run.reason ?? "本轮到达步骤预算，已保留现场。继续工作会沿最近的检查点往下推进。";
+    detail = displayReason ?? "本轮到达步骤预算，已保留现场。继续工作会沿最近运行摘要和工具结果往下推进。";
     tone = "warn";
   } else if (latestErrorEvent || run.status === "failed") {
     currentStep = latestPendingToolCall || latestToolResult ? "tool" : "reply";
@@ -1680,11 +1699,13 @@ function RunLiveReadout({
   const status = run.status;
   const isLive = status === "pending" || status === "running";
   const meta = [
+    `${Math.round(progressPercent)}%`,
     phase.latestEventLabel ? `最新 ${phase.latestEventLabel}` : null,
     phase.elapsedLabel ? `运行 ${phase.elapsedLabel}` : null,
     phase.silenceLabel ? `静默 ${phase.silenceLabel}` : null,
   ].filter((item): item is string => Boolean(item));
-  const detail = activity.stalledDetail ?? activity.detail ?? phase.detail;
+  const detail = activity.stalledDetail ?? activity.detail ?? phase.detail ?? "正在推进当前任务。";
+  const label = activity.label || phase.label || formatRunStatus(run.status);
 
   return (
     <section className={`live-run-readout ${status}${isLive ? " live" : ""}`} aria-live="polite">
@@ -1692,7 +1713,7 @@ function RunLiveReadout({
         <span className="live-run-orb" aria-hidden="true" />
         <div className="live-run-copy">
           <div className="live-run-line">
-            <span className="live-run-label">{activity.label || phase.label}</span>
+            <span className="live-run-label">{label}</span>
             <span className="live-run-chevron">›</span>
             <span className="live-run-detail">{detail}</span>
           </div>
@@ -1702,7 +1723,7 @@ function RunLiveReadout({
         </div>
         {meta.length > 0 ? (
           <div className="live-run-meta">
-            {meta.slice(0, 2).map((item) => <span key={item}>{item}</span>)}
+            {meta.slice(0, 3).map((item) => <span key={item}>{item}</span>)}
           </div>
         ) : null}
       </div>
@@ -4147,16 +4168,15 @@ export default function App() {
                   detail="阻塞动作已被通过，Agent 正从暂停点继续执行。"
                 />
               ) : null}
+              {showChatView && activeRun && activeRun.status !== "completed" && activeRun.status !== "cancelled" ? (
+                <RunLiveReadout
+                  run={activeRun}
+                  phase={runPhase}
+                  activity={runActivity}
+                  progressPercent={runProgressPercent}
+                />
+              ) : null}
             </section>
-
-            {showChatView && activeRun && activeRun.status !== "completed" && activeRun.status !== "cancelled" ? (
-              <RunLiveReadout
-                run={activeRun}
-                phase={runPhase}
-                activity={runActivity}
-                progressPercent={runProgressPercent}
-              />
-            ) : null}
 
             {!showChatView ? (
               <section className="chat-home">

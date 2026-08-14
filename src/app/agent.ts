@@ -6,7 +6,7 @@ import type { Turn } from "../core/types.js";
 import { RulePlanner, type Planner } from "../brain/planner.js";
 import { ToolMetadataPolicy, type Policy } from "../brain/policy.js";
 import { BasicEvaluator } from "../brain/evaluator.js";
-import type { BrainDecision } from "../brain/types.js";
+import type { BrainDecision, BrainInput } from "../brain/types.js";
 import { applyActionResultToWorkingMemory, runLoop, type LoopState } from "../brain/loop.js";
 import { ActionDispatcher } from "../runtime/dispatcher.js";
 import { ToolRegistry } from "../tools/registry.js";
@@ -17,8 +17,9 @@ import type { TurnRepository } from "../state/repositories.js";
 import type { MemoryService } from "../memory/service.js";
 import { randomUUID } from "node:crypto";
 
-const DEFAULT_RUN_STEP_BUDGET = 36;
-const APPROVAL_RESUME_STEP_BUDGET = 30;
+const DEFAULT_RUN_STEP_BUDGET = 72;
+const APPROVAL_RESUME_STEP_BUDGET = 72;
+const MAX_AUTO_STEP_CONTINUATIONS = 8;
 
 export interface AgentOptions {
   eventSink: EventSink;
@@ -102,16 +103,8 @@ export class Agent {
         availableTools: this.toolRegistry.all(),
       };
 
-      const state = await runLoop(
+      const state = await this.runLoopUntilFinal(
         brainInput,
-        {
-          planner: this.planner,
-          policy: this.policy,
-          dispatcher: {
-            dispatch: (decision, context) => this.dispatcher.dispatch(decision, input.runId, context),
-          },
-          evaluator: this.evaluator,
-        },
         DEFAULT_RUN_STEP_BUDGET,
         { signal: input.signal },
       );
@@ -175,16 +168,8 @@ export class Agent {
           availableTools: this.toolRegistry.all(),
         };
 
-        state = await runLoop(
+        state = await this.runLoopUntilFinal(
           brainInput,
-          {
-            planner: this.planner,
-            policy: this.policy,
-            dispatcher: {
-              dispatch: (decision, context) => this.dispatcher.dispatch(decision, input.runId, context),
-            },
-            evaluator: this.evaluator,
-          },
           APPROVAL_RESUME_STEP_BUDGET,
           { signal: input.signal },
         );
@@ -202,6 +187,56 @@ export class Agent {
   private async loadPriorTurns(sessionId: string): Promise<Turn[]> {
     if (!this.options.turnRepository) return [];
     return this.options.turnRepository.listBySession(sessionId, this.options.recentTurnLimit ?? 20);
+  }
+
+  private async runLoopUntilFinal(
+    input: BrainInput,
+    stepBudget: number,
+    context?: { signal?: AbortSignal },
+  ): Promise<LoopState> {
+    let nextInput = input;
+    let latestState: LoopState | null = null;
+
+    for (let continuationIndex = 0; continuationIndex <= MAX_AUTO_STEP_CONTINUATIONS; continuationIndex++) {
+      const seededSteps = nextInput.workingMemory?.step ?? nextInput.history.length;
+      latestState = await runLoop(
+        nextInput,
+        {
+          planner: this.planner,
+          policy: this.policy,
+          dispatcher: {
+            dispatch: (decision, dispatchContext) => this.dispatcher.dispatch(decision, input.runId, dispatchContext),
+          },
+          evaluator: this.evaluator,
+        },
+        seededSteps + stepBudget,
+        context,
+      );
+
+      if (latestState.stopReason !== "step_limit") {
+        return latestState;
+      }
+
+      if (continuationIndex >= MAX_AUTO_STEP_CONTINUATIONS) {
+        latestState.stopSummary = `已自动续跑 ${MAX_AUTO_STEP_CONTINUATIONS} 次、累计 ${latestState.steps} 步后仍未形成最终反馈。为避免真实工具循环，运行已暂停；请补充更具体的目标或缩小任务范围。`;
+        return latestState;
+      }
+
+      await this.options.eventSink.record(input.runId, "system", {
+        message: `本段 ${stepBudget} 步预算已用完，自动继续第 ${continuationIndex + 2} 段。`,
+        autoContinuation: true,
+        segment: continuationIndex + 1,
+        steps: latestState.steps,
+      });
+
+      nextInput = {
+        ...nextInput,
+        history: latestState.history,
+        workingMemory: latestState.workingMemory,
+      };
+    }
+
+    return latestState!;
   }
 
   private async persistCurrentTurns(input: AgentInput, priorTurns: Turn[]): Promise<void> {
@@ -303,7 +338,7 @@ function summarizeAssistantTurn(state: LoopState): string {
   if (state.stopReason) {
     if (state.stopReason === "step_limit") {
       return state.stopSummary
-        ?? `Paused after ${state.steps} steps. Continue the run to keep working from the latest checkpoint.`;
+        ?? `已暂停：本轮达到 ${state.steps} 步安全预算，还没有形成最终反馈。可以继续工作，Agent 会结合最近运行摘要、工具结果和工作区现状往下推进。`;
     }
     return state.stopSummary
       ? `Run stopped: ${state.stopReason}: ${state.stopSummary}`

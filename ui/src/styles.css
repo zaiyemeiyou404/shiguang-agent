@@ -4491,3 +4491,61 @@ body,
     text-align: left;
   }
 }
+
+/* Keep the live run readout visible as a real status card, not a clipped progress sliver. */
+.chat-banner-stack .live-run-readout {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  width: min(980px, 100%);
+  min-height: 78px;
+  margin: 0 auto;
+  overflow: visible;
+}
+
+.chat-banner-stack .live-run-readout-main {
+  min-height: 76px;
+  align-items: start;
+  padding: 14px 16px;
+}
+
+.chat-banner-stack .live-run-orb {
+  margin-top: 4px;
+}
+
+.chat-banner-stack .live-run-line {
+  flex-wrap: wrap;
+  align-items: baseline;
+  row-gap: 4px;
+  line-height: 1.45;
+}
+
+.chat-banner-stack .live-run-detail {
+  flex: 1 1 320px;
+  min-width: 180px;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.chat-banner-stack .live-run-track {
+  height: 6px;
+  margin-top: 2px;
+}
+
+.chat-banner-stack .live-run-meta {
+  align-self: start;
+  min-width: 150px;
+  padding-top: 1px;
+}
+
+@media (max-width: 760px) {
+  .chat-banner-stack .live-run-readout-main {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .chat-banner-stack .live-run-meta {
+    grid-column: 2;
+    justify-content: flex-start;
+    min-width: 0;
+  }
+}

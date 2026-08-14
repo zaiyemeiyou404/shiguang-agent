@@ -83,7 +83,7 @@ test("runLoop pauses with step_limit when the step budget is exhausted", async (
 
   assert.equal(state.steps, 2);
   assert.equal(state.stopReason, "step_limit");
-  assert.match(state.stopSummary ?? "", /2-step budget/);
+  assert.match(state.stopSummary ?? "", /2 步安全预算/);
   assert.equal(state.history.length, 2);
 });
 

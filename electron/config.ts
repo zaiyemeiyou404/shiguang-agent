@@ -6,6 +6,7 @@ const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_MODEL = "gpt-4o-mini";
 const DEFAULT_MAX_TOKENS = 2048;
 const DEFAULT_TOOL_APPROVAL_MODE = "ask";
+const DEFAULT_WORKSPACE_DIR_NAME = "workspace";
 
 export type ProviderProtocol = "openai-compatible" | "anthropic" | "gemini";
 export type ProviderAuthMode = "api_key" | "none";
@@ -230,11 +231,7 @@ export function loadDesktopConfig(): ResolvedDesktopConfig {
     ),
   };
 
-  const workspaceRoot = resolve(normalize(
-    process.env.SHIGUANG_WORKSPACE_ROOT
-    ?? fileConfig.workspaceRoot
-    ?? process.cwd(),
-  ));
+  const workspaceRoot = resolveWorkspaceRoot(fileConfig.workspaceRoot);
 
   return {
     configPath,
@@ -250,7 +247,7 @@ export function getDesktopSettings(): DesktopSettings {
   const fileConfig = readMigratedConfigFile(configPath);
   return {
     configPath,
-    workspaceRoot: fileConfig.workspaceRoot ?? process.cwd(),
+    workspaceRoot: resolveWorkspaceRoot(fileConfig.workspaceRoot),
     toolApprovalMode: normalizeToolApprovalMode(fileConfig.toolApprovalMode),
     llm: {
       provider: fileConfig.llm?.provider ?? "openai",
@@ -260,6 +257,20 @@ export function getDesktopSettings(): DesktopSettings {
     providers: sanitizeDesktopProviderCatalog(mergeProviderCatalog(fileConfig.providers)),
     mcpServers: sanitizeMcpServers(fileConfig.mcpServers),
   };
+}
+
+function resolveWorkspaceRoot(configuredWorkspaceRoot?: string): string {
+  const workspaceRoot = resolve(normalize(
+    process.env.SHIGUANG_WORKSPACE_ROOT
+    ?? configuredWorkspaceRoot
+    ?? defaultWorkspaceRoot(),
+  ));
+  mkdirSync(workspaceRoot, { recursive: true });
+  return workspaceRoot;
+}
+
+function defaultWorkspaceRoot(): string {
+  return join(app.getPath("userData"), DEFAULT_WORKSPACE_DIR_NAME);
 }
 
 export function saveDesktopSettings(settings: DesktopSettings): DesktopSettings {

@@ -2,16 +2,16 @@
 
 拾光 Agent 是一个轻量级桌面 AI Agent。它把对话、工作区文件操作、工具调用、审批、运行记录和上下文压缩放在一个 Electron 桌面界面里，目标是做成一个下载后即可配置使用的小型个人工作台。
 
-当前版本：`0.2.9`
+当前版本：`0.2.10`
 
 ## 下载使用
 
 在 GitHub Releases 页面下载 Windows 版本：
 
-- 安装包：`拾光 Agent Setup 0.2.9.exe`
+- 安装包：`拾光 Agent Setup 0.2.10.exe`
 - 免安装版：`win-unpacked.zip`
 
-`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.9`，才会生成新的正式 Release。
+`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.10`，才会生成新的正式 Release。
 
 如果使用免安装版，解压后运行：
 
@@ -20,6 +20,29 @@ win-unpacked/拾光 Agent.exe
 ```
 
 首次启动后，进入左侧或顶部的“设置”，配置模型服务后即可开始新会话。
+
+## 本地数据、记忆和工作区
+
+拾光会把用户数据放在应用目录外，避免重新打包或升级时误删历史。
+
+开发/免安装本地测试版默认目录：
+
+```text
+shiguang-agent-data/
+  shiguang-state.sqlite          # 会话、run、事件、审批、产物等状态
+  shiguang-store.json            # 会话列表和摘要索引
+  shiguang.config.json           # provider、模型、MCP、工作区配置
+  memory/shiguang-memory.sqlite  # 专门的长期记忆库
+  workspace/                     # 默认工作区，工具读写和命令执行都在这里
+```
+
+Windows 安装版默认优先使用：
+
+```text
+G:\CodexData\shiguang-agent-data\
+```
+
+如果没有 `G:` 盘，则回退到安装目录旁边的 `shiguang-agent-data`。也可以通过设置页修改工作区，或用环境变量 `SHIGUANG_USER_DATA_DIR` / `SHIGUANG_WORKSPACE_ROOT` 覆盖。
 
 ## 支持的模型服务
 
@@ -62,7 +85,7 @@ $env:GEMINI_API_KEY="你的 key"
 - 错误诊断：模型请求失败、空响应、HTTP 错误和代理/TLS 问题会显示中文排查建议，方便定位 API Key、Base URL 或网络配置问题。
 - 工作区切换：可以在对话中要求切换工作区，也可以通过设置调整。
 - 上下文管理：保留关键运行记录，在上下文压力较高时进行压缩。
-- 检查点续跑：普通运行预算提升到 36 步；如果大工程分析仍达到预算上限，会显示“待继续”并保留现场，而不是误标成“已完成”。
+- 自动续跑：Agent 每 72 步作为一个内部工作分片；如果分片用完但还没最终输出，会自动从 checkpoint 继续下一段，不需要用户手动点“继续”。
 - 多语言轻量校验：没有 `package.json` 的工作区也能识别并校验常见文件。
 
 当前 `run_validation` 支持：
