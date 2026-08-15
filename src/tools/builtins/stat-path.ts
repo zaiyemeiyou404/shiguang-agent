@@ -1,7 +1,7 @@
 import { accessSync, constants, statSync } from "node:fs";
-import { basename, normalize, relative, resolve } from "node:path";
+import { basename } from "node:path";
 import type { Tool, ToolExecutionContext } from "../types.js";
-import { toPortablePath } from "./path-format.js";
+import { resolveWorkspacePath, toPortablePath } from "./path-format.js";
 
 export interface StatPathOutput {
   path: string;
@@ -23,15 +23,6 @@ function resolveInput(input: unknown): string {
     if (typeof obj.path === "string") return obj.path;
   }
   throw new Error("stat_path: input must be a path string or { path: string }");
-}
-
-function resolveWorkspacePath(workspaceRoot: string, userPath: string): string {
-  const candidate = resolve(workspaceRoot, normalize(userPath));
-  const rel = relative(workspaceRoot, candidate);
-  if (rel.startsWith("..") || rel.startsWith("/")) {
-    throw new Error(`Path escapes workspace root: ${userPath}`);
-  }
-  return candidate;
 }
 
 export function createStatPathTool(workspaceRoot: string): Tool {

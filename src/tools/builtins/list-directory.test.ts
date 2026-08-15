@@ -77,3 +77,37 @@ test("list_directory rejects escaping the workspace root", async () => {
     /workspace root/i,
   );
 });
+
+test("list_directory strips a repeated workspace directory prefix when the corrected path exists", async () => {
+  const { createListDirectoryTool } = await loadModule();
+  const parent = await makeWorkspace();
+  const workspaceRoot = join(parent, "worktest");
+  await mkdir(join(workspaceRoot, "traintime_pda-main", "lib"), { recursive: true });
+  const tool = createListDirectoryTool(workspaceRoot);
+
+  const result = await tool.execute({ path: "worktest/traintime_pda-main" });
+
+  assertOutput(result);
+  assert.match(result.path, /traintime_pda-main$/);
+  assert.deepEqual(
+    result.entries.map((entry) => ({ name: entry.name, kind: entry.kind })),
+    [{ name: "lib", kind: "directory" }],
+  );
+});
+
+test("list_directory strips a repeated workspace prefix from absolute paths", async () => {
+  const { createListDirectoryTool } = await loadModule();
+  const parent = await makeWorkspace();
+  const workspaceRoot = join(parent, "worktest");
+  await mkdir(join(workspaceRoot, "traintime_pda-main", "lib"), { recursive: true });
+  const tool = createListDirectoryTool(workspaceRoot);
+
+  const result = await tool.execute({ path: join(workspaceRoot, "worktest", "traintime_pda-main") });
+
+  assertOutput(result);
+  assert.match(result.path, /traintime_pda-main$/);
+  assert.deepEqual(
+    result.entries.map((entry) => ({ name: entry.name, kind: entry.kind })),
+    [{ name: "lib", kind: "directory" }],
+  );
+});

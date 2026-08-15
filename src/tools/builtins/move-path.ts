@@ -1,7 +1,7 @@
 import { mkdirSync, renameSync, statSync } from "node:fs";
-import { dirname, normalize, relative, resolve } from "node:path";
+import { dirname } from "node:path";
 import type { Tool, ToolExecutionContext } from "../types.js";
-import { toPortablePath } from "./path-format.js";
+import { resolveWorkspacePath, toPortablePath } from "./path-format.js";
 
 export interface MovePathInput {
   sourcePath: string;
@@ -31,15 +31,6 @@ function resolveInput(input: unknown): MovePathInput {
   return { sourcePath: obj.sourcePath, destinationPath: obj.destinationPath };
 }
 
-function resolveWorkspacePath(workspaceRoot: string, userPath: string): string {
-  const candidate = resolve(workspaceRoot, normalize(userPath));
-  const rel = relative(workspaceRoot, candidate);
-  if (rel.startsWith("..") || rel.startsWith("/")) {
-    throw new Error(`Path escapes workspace root: ${userPath}`);
-  }
-  return candidate;
-}
-
 export function createMovePathTool(workspaceRoot: string): Tool {
   return {
     descriptor: {
@@ -65,7 +56,7 @@ export function createMovePathTool(workspaceRoot: string): Tool {
       throwIfAborted(context?.signal);
       const { sourcePath, destinationPath } = resolveInput(input);
       const sourceFullPath = resolveWorkspacePath(workspaceRoot, sourcePath);
-      const destinationFullPath = resolveWorkspacePath(workspaceRoot, destinationPath);
+      const destinationFullPath = resolveWorkspacePath(workspaceRoot, destinationPath, { forWrite: true });
       const sourceStats = statSync(sourceFullPath);
       mkdirSync(dirname(destinationFullPath), { recursive: true });
       renameSync(sourceFullPath, destinationFullPath);

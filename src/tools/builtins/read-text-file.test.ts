@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -71,4 +71,19 @@ test("read_text_file rejects paths that escape the workspace root", async () => 
     () => tool.execute({ path: "../outside.ts" }),
     /workspace root/i,
   );
+});
+
+test("read_text_file strips a repeated workspace directory prefix when the corrected file exists", async () => {
+  const { createReadTextFileTool } = await loadModule();
+  const parent = await makeWorkspace();
+  const workspaceRoot = join(parent, "worktest");
+  await mkdir(join(workspaceRoot, "traintime_pda-main"), { recursive: true });
+  await writeFile(join(workspaceRoot, "traintime_pda-main", "pubspec.yaml"), "name: watermeter\n", "utf8");
+  const tool = createReadTextFileTool(workspaceRoot);
+
+  const result = await tool.execute({ path: "worktest/traintime_pda-main/pubspec.yaml" });
+
+  assertOutput(result);
+  assert.match(result.path, /traintime_pda-main[\\/]pubspec\.yaml$/);
+  assert.equal(result.content, "name: watermeter\n");
 });

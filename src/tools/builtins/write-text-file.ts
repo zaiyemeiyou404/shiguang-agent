@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, resolve, normalize, relative } from "node:path";
+import { dirname, relative } from "node:path";
 import type { Tool, ToolExecutionContext } from "../types.js";
-import { toPortablePath } from "./path-format.js";
+import { resolveWorkspacePath, toPortablePath } from "./path-format.js";
 import { createTextDiffPreview } from "./approval-preview.js";
 
 export interface WriteTextFileInput {
@@ -25,15 +25,6 @@ function resolveInput(input: unknown): WriteTextFileInput {
   }
 
   return { path: obj.path, content: obj.content };
-}
-
-function resolvePath(workspaceRoot: string, userPath: string): string {
-  const candidate = resolve(workspaceRoot, normalize(userPath));
-  const rel = relative(workspaceRoot, candidate);
-  if (rel.startsWith("..") || rel.startsWith("/")) {
-    throw new Error(`Path escapes workspace root: ${userPath}`);
-  }
-  return candidate;
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -65,7 +56,7 @@ export function createWriteTextFileTool(workspaceRoot: string): Tool {
     },
     previewApproval(input: unknown): ReturnType<NonNullable<Tool["previewApproval"]>> {
       const { path, content } = resolveInput(input);
-      const fullPath = resolvePath(workspaceRoot, path);
+      const fullPath = resolveWorkspacePath(workspaceRoot, path, { forWrite: true });
       const relativePath = toPortablePath(relative(workspaceRoot, fullPath));
       const warnings: string[] = [];
       let before = "";
@@ -101,7 +92,7 @@ export function createWriteTextFileTool(workspaceRoot: string): Tool {
     async execute(input: unknown, context?: ToolExecutionContext): Promise<WriteTextFileOutput> {
       throwIfAborted(context?.signal);
       const { path, content } = resolveInput(input);
-      const fullPath = resolvePath(workspaceRoot, path);
+      const fullPath = resolveWorkspacePath(workspaceRoot, path, { forWrite: true });
       mkdirSync(dirname(fullPath), { recursive: true });
       writeFileSync(fullPath, content, "utf8");
       return {

@@ -1,6 +1,7 @@
 import { readdirSync, statSync } from "node:fs";
-import { basename, normalize, relative, resolve } from "node:path";
+import { basename, relative, resolve } from "node:path";
 import type { Tool, ToolExecutionContext } from "../types.js";
+import { resolveWorkspacePath } from "./path-format.js";
 
 export interface ListDirectoryInput {
   path?: string;
@@ -20,15 +21,6 @@ function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw new DOMException("Run cancelled", "AbortError");
   }
-}
-
-function resolveWorkspacePath(workspaceRoot: string, userPath = "."): string {
-  const candidate = resolve(workspaceRoot, normalize(userPath));
-  const rel = relative(workspaceRoot, candidate);
-  if (rel.startsWith("..") || rel.startsWith("/")) {
-    throw new Error(`Path escapes workspace root: ${userPath}`);
-  }
-  return candidate;
 }
 
 function resolveInput(input: unknown): string {

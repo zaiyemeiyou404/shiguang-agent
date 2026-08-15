@@ -1,6 +1,6 @@
 import { existsSync, rmSync, statSync } from "node:fs";
-import { normalize, relative, resolve } from "node:path";
 import type { Tool, ToolExecutionContext } from "../types.js";
+import { resolveWorkspacePath } from "./path-format.js";
 
 export interface DeletePathInput {
   path: string;
@@ -30,15 +30,6 @@ function resolveInput(input: unknown): DeletePathInput {
     throw new Error("delete_path: recursive must be boolean when provided");
   }
   return { path: obj.path, recursive: obj.recursive as boolean | undefined };
-}
-
-function resolveWorkspacePath(workspaceRoot: string, userPath: string): string {
-  const candidate = resolve(workspaceRoot, normalize(userPath));
-  const rel = relative(workspaceRoot, candidate);
-  if (rel.startsWith("..") || rel.startsWith("/")) {
-    throw new Error(`Path escapes workspace root: ${userPath}`);
-  }
-  return candidate;
 }
 
 export function createDeletePathTool(workspaceRoot: string): Tool {

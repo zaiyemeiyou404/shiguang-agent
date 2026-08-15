@@ -1,7 +1,7 @@
-import { normalize, relative, resolve } from "node:path";
+import { relative } from "node:path";
 import type { Tool, ToolExecutionContext } from "../types.js";
 import { runGit } from "./git-utils.js";
-import { toPortablePath } from "./path-format.js";
+import { resolveWorkspacePath, toPortablePath } from "./path-format.js";
 
 export interface GitDiffInput {
   path?: string;
@@ -41,11 +41,8 @@ function resolveInput(input: unknown): GitDiffInput {
 }
 
 function resolveWorkspaceRelativePath(workspaceRoot: string, userPath: string): string {
-  const candidate = resolve(workspaceRoot, normalize(userPath));
+  const candidate = resolveWorkspacePath(workspaceRoot, userPath);
   const rel = relative(workspaceRoot, candidate);
-  if (rel.startsWith("..") || rel.startsWith("/")) {
-    throw new Error(`Path escapes workspace root: ${userPath}`);
-  }
   return toPortablePath(rel);
 }
 

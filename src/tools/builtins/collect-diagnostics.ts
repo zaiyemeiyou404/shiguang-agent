@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { extname, join, normalize, relative, resolve } from "node:path";
+import { extname, join } from "node:path";
 import { promisify } from "node:util";
 import type { Tool, ToolExecutionContext } from "../types.js";
+import { resolveWorkspacePath } from "./path-format.js";
 
 const execFileAsync = promisify(execFile);
 const MAX_OUTPUT = 12_000;
@@ -41,15 +42,6 @@ function isMode(value: unknown): value is DiagnosticsMode {
     || value === "javascript"
     || value === "python"
     || value === "json";
-}
-
-function resolveWorkspacePath(workspaceRoot: string, userPath?: string): string {
-  const candidate = userPath ? resolve(workspaceRoot, normalize(userPath)) : workspaceRoot;
-  const rel = relative(workspaceRoot, candidate);
-  if (rel.startsWith("..") || rel.startsWith("/")) {
-    throw new Error(`Path escapes workspace root: ${userPath}`);
-  }
-  return candidate;
 }
 
 function inferMode(path: string | undefined, workspaceRoot: string): DiagnosticsMode {

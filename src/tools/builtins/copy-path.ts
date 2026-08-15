@@ -1,7 +1,7 @@
 import { copyFileSync, mkdirSync, statSync } from "node:fs";
-import { dirname, normalize, relative, resolve } from "node:path";
+import { dirname } from "node:path";
 import type { Tool, ToolExecutionContext } from "../types.js";
-import { toPortablePath } from "./path-format.js";
+import { resolveWorkspacePath, toPortablePath } from "./path-format.js";
 
 export interface CopyPathInput {
   sourcePath: string;
@@ -31,15 +31,6 @@ function resolveInput(input: unknown): CopyPathInput {
   return { sourcePath: obj.sourcePath, destinationPath: obj.destinationPath };
 }
 
-function resolveWorkspacePath(workspaceRoot: string, userPath: string): string {
-  const candidate = resolve(workspaceRoot, normalize(userPath));
-  const rel = relative(workspaceRoot, candidate);
-  if (rel.startsWith("..") || rel.startsWith("/")) {
-    throw new Error(`Path escapes workspace root: ${userPath}`);
-  }
-  return candidate;
-}
-
 export function createCopyPathTool(workspaceRoot: string): Tool {
   return {
     descriptor: {
@@ -65,7 +56,7 @@ export function createCopyPathTool(workspaceRoot: string): Tool {
       throwIfAborted(context?.signal);
       const { sourcePath, destinationPath } = resolveInput(input);
       const sourceFullPath = resolveWorkspacePath(workspaceRoot, sourcePath);
-      const destinationFullPath = resolveWorkspacePath(workspaceRoot, destinationPath);
+      const destinationFullPath = resolveWorkspacePath(workspaceRoot, destinationPath, { forWrite: true });
       const sourceStats = statSync(sourceFullPath);
       if (!sourceStats.isFile()) {
         throw new Error(`copy_path: source is not a file: ${sourcePath}`);

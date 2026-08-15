@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { normalize, relative, resolve } from "node:path";
 import type { Tool, ToolExecutionContext, ToolApprovalPreview } from "../types.js";
+import { resolveWorkspacePath } from "./path-format.js";
 
 const MAX_BUFFER = 20_000;
 
@@ -19,15 +19,6 @@ interface ProcessRecord {
 }
 
 const processes = new Map<string, ProcessRecord>();
-
-function resolveWorkspacePath(workspaceRoot: string, userPath?: string): string {
-  const candidate = userPath ? resolve(workspaceRoot, normalize(userPath)) : workspaceRoot;
-  const rel = relative(workspaceRoot, candidate);
-  if (rel.startsWith("..") || rel.startsWith("/")) {
-    throw new Error(`Path escapes workspace root: ${userPath}`);
-  }
-  return candidate;
-}
 
 function appendBuffer(current: string, chunk: Buffer | string): string {
   const next = current + chunk.toString();

@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
-import { resolve, normalize, relative } from "node:path";
+import { relative } from "node:path";
 import type { Tool, ToolExecutionContext } from "../types.js";
-import { toPortablePath } from "./path-format.js";
+import { resolveWorkspacePath, toPortablePath } from "./path-format.js";
 import { createTextDiffPreview } from "./approval-preview.js";
 
 export interface PatchTextFileInput {
@@ -39,15 +39,6 @@ function resolveInput(input: unknown): PatchTextFileInput {
     newString: obj.newString,
     replaceAll: obj.replaceAll,
   };
-}
-
-function resolveWorkspacePath(workspaceRoot: string, userPath: string): string {
-  const candidate = resolve(workspaceRoot, normalize(userPath));
-  const rel = relative(workspaceRoot, candidate);
-  if (rel.startsWith("..") || rel.startsWith("/")) {
-    throw new Error(`Path escapes workspace root: ${userPath}`);
-  }
-  return candidate;
 }
 
 function countOccurrences(text: string, needle: string): number {

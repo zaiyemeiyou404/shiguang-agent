@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
-import { resolve, normalize, relative } from "node:path";
 import type { Tool, ToolExecutionContext } from "../types.js";
+import { resolveWorkspacePath } from "./path-format.js";
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 const MAX_OUTPUT_CHARS = 8_000;
@@ -42,16 +42,6 @@ function resolveInput(input: unknown): RunTerminalCommandInput {
     cwd: obj.cwd,
     timeoutMs: obj.timeoutMs,
   };
-}
-
-function resolveWorkspacePath(workspaceRoot: string, userPath?: string): string {
-  const base = userPath ? resolve(workspaceRoot, normalize(userPath)) : workspaceRoot;
-  const rel = relative(workspaceRoot, base);
-  // 即使是 execute 工具，也只允许在 workspace 内跑，避免 cwd 越界。
-  if (rel.startsWith("..") || rel.startsWith("/")) {
-    throw new Error(`Path escapes workspace root: ${userPath}`);
-  }
-  return base;
 }
 
 function trimOutput(value: string): string {
