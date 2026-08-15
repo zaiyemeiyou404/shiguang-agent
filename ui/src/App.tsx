@@ -54,6 +54,21 @@ type RunPhaseSummary = {
   latestEventLabel: string | null;
 };
 
+type RunActivityTranscript = {
+  id: string;
+  runId: string;
+  title: string;
+  detail: string;
+  tone: SignalTone;
+  phase: string;
+  phaseLabel: string;
+  toolName: string | null;
+  toolLabel: string;
+  createdAt: string;
+  meta: string[];
+  active: boolean;
+};
+
 type RunFailureInsight = {
   title: string;
   summary: string;
@@ -74,6 +89,7 @@ const SESSION_PIN_STORAGE_KEY = "shiguang:pinned-sessions";
 const SESSION_DRAFT_STORAGE_KEY = "shiguang:session-drafts";
 const MAX_TIMELINE_SOURCE_EVENTS = 320;
 const MAX_TIMELINE_RENDER_ITEMS = 120;
+const MAX_CHAT_ACTIVITY_ITEMS = 36;
 const RUN_REFRESH_MIN_INTERVAL_MS = 1500;
 
 const PROVIDER_PRESETS: ProviderDraft[] = [
@@ -671,7 +687,7 @@ function SimpleChatTranscript({
   type ChatTranscriptItem = {
     id: string;
     source: "turn" | "event";
-    kind?: DesktopConversationEntry["kind"] | DesktopEvent["kind"];
+    kind?: DesktopConversationEntry["kind"] | DesktopEvent["kind"] | "tool_activity";
     role?: "user" | "system";
     from: string;
     time: string;
@@ -679,6 +695,7 @@ function SimpleChatTranscript({
     content: string;
     payload?: unknown;
     runId?: string | null;
+    activity?: RunActivityTranscript;
     duplicateCount?: number;
   };
 
@@ -721,6 +738,7 @@ function SimpleChatTranscript({
         source: "event",
         from: "拾光 Agent",
         time: new Date(event.createdAt).toLocaleTimeString(),
+        createdAt: event.createdAt,
         content,
       }];
     }
@@ -768,12 +786,30 @@ function SimpleChatTranscript({
     return [];
   });
 
-  const items = [...historyItems, ...liveItems].reduce<ChatTranscriptItem[]>((acc, item) => {
+  const activityItems: ChatTranscriptItem[] = !showLiveEvents ? [] : buildRunActivityTranscript(liveEvents).map((activity) => ({
+    id: `activity:${activity.id}`,
+    source: "event" as const,
+    kind: "tool_activity" as const,
+    role: "system" as const,
+    from: "运行",
+    time: new Date(activity.createdAt).toLocaleTimeString(),
+    createdAt: activity.createdAt,
+    content: `${activity.title}\n${activity.detail}`,
+    payload: activity,
+    runId: activity.runId,
+    activity,
+  }));
+
+  const orderedItems = [...historyItems, ...liveItems, ...activityItems].sort(compareChatTranscriptItems);
+
+  const items = orderedItems.reduce<ChatTranscriptItem[]>((acc, item) => {
     const prev = acc[acc.length - 1];
     const canCollapse = prev
       && item.role !== "user"
       && item.kind !== "approval_request"
       && prev.kind !== "approval_request"
+      && item.kind !== "tool_activity"
+      && prev.kind !== "tool_activity"
       && prev.role === item.role
       && prev.from === item.from
       && prev.content === item.content
@@ -807,6 +843,19 @@ function SimpleChatTranscript({
   return (
     <div className="chat-transcript" ref={scrollRef}>
       {items.map((item) => {
+        if (item.activity) {
+          return (
+            <Message
+              key={item.id}
+              role="system"
+              from={item.from}
+              time={item.duplicateCount && item.duplicateCount > 1 ? `${item.time} x${item.duplicateCount}` : item.time}
+            >
+              <RunActivityTranscriptCard activity={item.activity} />
+            </Message>
+          );
+        }
+
         if (item.kind === "approval_request") {
           const payload = item.payload && typeof item.payload === "object" ? item.payload as { approvalId?: unknown } : {};
           const approvalId = typeof payload.approvalId === "string" ? payload.approvalId : undefined;
@@ -851,6 +900,99 @@ function SimpleChatTranscript({
           </Message>
         );
       })}
+    </div>
+  );
+}
+
+function compareChatTranscriptItems(a: { createdAt?: string; id: string }, b: { createdAt?: string; id: string }): number {
+  const aTime = a.createdAt ? Date.parse(a.createdAt) : Number.NaN;
+  const bTime = b.createdAt ? Date.parse(b.createdAt) : Number.NaN;
+  if (Number.isFinite(aTime) && Number.isFinite(bTime) && aTime !== bTime) return aTime - bTime;
+  if (Number.isFinite(aTime) && !Number.isFinite(bTime)) return -1;
+  if (!Number.isFinite(aTime) && Number.isFinite(bTime)) return 1;
+  return a.id.localeCompare(b.id);
+}
+
+function buildRunActivityTranscript(events: DesktopEvent[]): RunActivityTranscript[] {
+  const latestByCall = new Map<string, DesktopEvent>();
+
+  for (const event of events) {
+    if (event.kind !== "tool_pipeline") continue;
+    const payload = eventPayloadRecord(event);
+    const phase = typeof payload.phase === "string" ? payload.phase : null;
+    if (!phase) continue;
+    const toolName = toolEventName(event) ?? "tool";
+    const callKey = typeof payload.toolCallId === "string"
+      ? payload.toolCallId
+      : typeof payload.approvalId === "string"
+        ? payload.approvalId
+        : event.id;
+    const key = `${event.runId}:${toolName}:${callKey}`;
+    const existing = latestByCall.get(key);
+    if (!existing || Date.parse(event.createdAt) >= Date.parse(existing.createdAt)) {
+      latestByCall.set(key, event);
+    }
+  }
+
+  return Array.from(latestByCall.values())
+    .map(activityFromToolPipelineEvent)
+    .filter((activity): activity is RunActivityTranscript => Boolean(activity))
+    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
+    .slice(-MAX_CHAT_ACTIVITY_ITEMS);
+}
+
+function activityFromToolPipelineEvent(event: DesktopEvent): RunActivityTranscript | null {
+  const summary = summarizeToolPipelineEvent(event);
+  if (!summary) return null;
+  const payload = eventPayloadRecord(event);
+  const phase = typeof payload.phase === "string" ? payload.phase : "unknown";
+  const toolName = toolEventName(event);
+  const toolLabel = formatToolActivityName(toolName);
+  const title = formatToolActivityTranscriptTitle(toolName, phase, payload, summary.label);
+  const detail = formatToolActivityTranscriptDetail(toolName, phase, payload, summary.detail);
+  const meta = [
+    toolName ? `工具 ${toolName}` : null,
+    `阶段 ${formatToolPhaseLabel(phase)}`,
+    activityScopeLabel(toolName, payload),
+  ].filter((item): item is string => Boolean(item));
+  const idPart = typeof payload.toolCallId === "string"
+    ? payload.toolCallId
+    : typeof payload.approvalId === "string"
+      ? payload.approvalId
+      : event.id;
+
+  return {
+    id: `${event.runId}:${toolName ?? "tool"}:${idPart}`,
+    runId: event.runId,
+    title,
+    detail,
+    tone: summary.tone,
+    phase,
+    phaseLabel: formatToolPhaseLabel(phase),
+    toolName,
+    toolLabel,
+    createdAt: event.createdAt,
+    meta,
+    active: phase === "pre_execute" || phase === "executing" || phase === "approval_required" || phase === "approved",
+  };
+}
+
+function RunActivityTranscriptCard({ activity }: { activity: RunActivityTranscript }) {
+  return (
+    <div className={`run-activity-card ${activity.tone}${activity.active ? " active" : ""}`}>
+      <div className="run-activity-head">
+        <div className="run-activity-title">
+          <span className="run-activity-icon" aria-hidden="true" />
+          <strong>{activity.title}</strong>
+        </div>
+        <SignalPill tone={activity.tone}>{activity.phaseLabel}</SignalPill>
+      </div>
+      <p>{activity.detail}</p>
+      {activity.meta.length > 0 ? (
+        <div className="run-activity-meta">
+          {activity.meta.map((item) => <span key={item}>{item}</span>)}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1109,6 +1251,218 @@ function formatToolActivityName(toolName: string | null): string {
   return labels[toolName] ?? toolName.replace(/^mcp_/, "调用 MCP：").replace(/_/g, " ");
 }
 
+function formatToolActivityTranscriptTitle(
+  toolName: string | null,
+  phase: string,
+  payload: Record<string, unknown>,
+  fallback: string,
+): string {
+  const toolLabel = formatToolActivityName(toolName);
+  if (phase === "approval_required") return `等待审批：${toolLabel}`;
+  if (phase === "approved") return `审批通过：${toolLabel}`;
+  if (phase === "denied") return `审批拒绝：${toolLabel}`;
+  if (phase === "approval_executed") return formatToolPastTenseTitle(toolName, payload) || `已执行：${toolLabel}`;
+  if (phase === "approval_failed") return `${toolLabel}执行失败`;
+  if (phase === "failed") return `${toolLabel}失败`;
+  if (phase === "completed") return formatToolPastTenseTitle(toolName, payload) || `${toolLabel}完成`;
+  if (phase === "executing") return `正在${toolLabel}`;
+  if (phase === "pre_execute") return `准备${toolLabel}`;
+  return fallback;
+}
+
+function formatToolPastTenseTitle(toolName: string | null, payload: Record<string, unknown>): string | null {
+  const output = payloadRecord(payload.output);
+  const input = payloadRecord(payload.input);
+  const command = typeof output.command === "string"
+    ? output.command
+    : typeof input.command === "string"
+      ? input.command
+      : "";
+  const labels: Record<string, string> = {
+    inspect_project: "检查了项目结构",
+    list_directory: "浏览了目录",
+    stat_path: "读取了路径信息",
+    search_workspace: "搜索了工作区",
+    read_text_file: "读取了文件",
+    write_text_file: "写入了文件",
+    patch_text_file: "修改了文件",
+    copy_path: "复制了路径",
+    move_path: "移动了路径",
+    delete_path: "删除了路径",
+    run_validation: "运行了验证",
+    collect_diagnostics: "收集了诊断",
+    code_map: "生成了代码地图",
+    symbol_search: "搜索了符号",
+    dependency_graph: "分析了依赖",
+    github_repo: "读取了 GitHub 仓库",
+    web_search: "搜索了网页",
+    web_fetch: "抓取了网页",
+    search_memory: "搜索了记忆",
+    remember_fact: "写入了记忆",
+    forget_memory: "删除了记忆",
+    completion_check: "确认了完成度",
+  };
+  if (toolName === "run_terminal_command") {
+    return commandLooksComposite(command) ? "运行了多个命令" : "运行了命令";
+  }
+  return toolName ? labels[toolName] ?? null : null;
+}
+
+function formatToolActivityTranscriptDetail(
+  toolName: string | null,
+  phase: string,
+  payload: Record<string, unknown>,
+  fallback: string,
+): string {
+  if (phase === "completed" || phase === "approval_executed") {
+    return summarizeToolOutputDetail(toolName, payload.output, fallback);
+  }
+  if (phase === "failed" || phase === "approval_failed") {
+    const error = typeof payload.error === "string" && payload.error.trim() ? payload.error.trim() : fallback;
+    return truncateInline(error, 240);
+  }
+  if (phase === "approval_required") {
+    const reason = typeof payload.reason === "string" && payload.reason.trim() ? payload.reason.trim() : null;
+    return reason ?? `需要你确认后才会执行：${summarizeToolActivityDetail(toolName, payload.input)}`;
+  }
+  if (phase === "approved") return "已收到你的审批，Agent 会从这个工具调用继续。";
+  if (phase === "denied") return "你拒绝了这条工具调用，本轮不会执行它。";
+  return summarizeToolActivityDetail(toolName, payload.input ?? payload.output) || fallback;
+}
+
+function formatToolPhaseLabel(phase: string): string {
+  const labels: Record<string, string> = {
+    pre_execute: "准备",
+    executing: "执行中",
+    completed: "已完成",
+    failed: "失败",
+    approval_required: "待审批",
+    approved: "已批准",
+    denied: "已拒绝",
+    approval_executed: "已执行",
+    approval_failed: "执行失败",
+  };
+  return labels[phase] ?? phase;
+}
+
+function activityScopeLabel(toolName: string | null, payload: Record<string, unknown>): string | null {
+  const input = payloadRecord(payload.input);
+  const output = payloadRecord(payload.output);
+  const path = stringFromRecord(output, "path") ?? stringFromRecord(input, "path") ?? stringFromRecord(input, "cwd");
+  const query = stringFromRecord(output, "query") ?? stringFromRecord(input, "query");
+  const mode = stringFromRecord(output, "mode") ?? stringFromRecord(input, "mode");
+  const command = stringFromRecord(output, "command") ?? stringFromRecord(input, "command");
+  if (toolName === "run_validation" && mode) return `模式 ${mode}`;
+  if (toolName === "run_terminal_command" && command) return truncateInline(command, 80);
+  if (query) return truncateInline(query, 80);
+  if (path) return truncateInline(path, 80);
+  return null;
+}
+
+function summarizeToolOutputDetail(toolName: string | null, output: unknown, fallback = "工具执行完成。"): string {
+  const record = payloadRecord(output);
+  if (!record || Object.keys(record).length === 0) return fallback;
+
+  if (toolName === "list_directory") {
+    const path = stringFromRecord(record, "path") ?? "目录";
+    const entries = Array.isArray(record.entries) ? record.entries : [];
+    const shown = entries
+      .slice(0, 6)
+      .map((entry) => payloadRecord(entry).name)
+      .filter((name): name is string => typeof name === "string" && name.length > 0);
+    return `已查看 ${path}，看到 ${entries.length} 个条目${shown.length ? `：${shown.join("、")}${entries.length > shown.length ? "…" : ""}` : "。"} `;
+  }
+
+  if (toolName === "read_text_file") {
+    const path = stringFromRecord(record, "path") ?? "文件";
+    const bytes = numberFromRecord(record, "bytes");
+    const truncated = record.truncated === true;
+    return `已读取 ${path}${bytes !== null ? `，${formatCompactBytes(bytes)}` : ""}${truncated ? "，内容较长已截断显示" : ""}。`;
+  }
+
+  if (toolName === "search_workspace") {
+    const query = stringFromRecord(record, "query") ?? "关键词";
+    const results = Array.isArray(record.results) ? record.results : [];
+    const filesScanned = numberFromRecord(record, "filesScanned");
+    const first = results.length > 0 ? payloadRecord(results[0]).file : null;
+    return `搜索 "${query}"，找到 ${results.length} 处结果${first ? `，首个在 ${first}` : ""}${filesScanned !== null ? `；扫描 ${filesScanned} 个文件` : ""}。`;
+  }
+
+  if (toolName === "write_text_file" || toolName === "patch_text_file") {
+    const path = stringFromRecord(record, "path") ?? "目标文件";
+    const bytes = numberFromRecord(record, "bytes");
+    return `已更新 ${path}${bytes !== null ? `，写入 ${formatCompactBytes(bytes)}` : ""}。`;
+  }
+
+  if (toolName === "copy_path" || toolName === "move_path" || toolName === "delete_path" || toolName === "stat_path") {
+    const path = stringFromRecord(record, "path") ?? stringFromRecord(record, "from") ?? stringFromRecord(record, "to") ?? "目标路径";
+    return `${formatToolActivityName(toolName)}完成：${path}。`;
+  }
+
+  if (toolName === "run_validation") {
+    const ok = record.ok === true;
+    const mode = stringFromRecord(record, "mode") ?? "auto";
+    const summary = stringFromRecord(record, "summary");
+    const commands = Array.isArray(record.commands) ? record.commands : [];
+    const failed = commands.find((command) => payloadRecord(command).ok === false);
+    const failedName = failed ? stringFromRecord(payloadRecord(failed), "name") : null;
+    if (summary) return `${ok ? "验证通过" : "验证失败"}（${mode}）：${summary}${failedName ? `；失败命令 ${failedName}` : ""}`;
+    return `${ok ? "验证通过" : "验证失败"}，模式 ${mode}${failedName ? `；失败命令 ${failedName}` : ""}。`;
+  }
+
+  if (toolName === "run_terminal_command") {
+    const ok = record.ok === true;
+    const command = stringFromRecord(record, "command") ?? "命令";
+    const exitCode = numberFromRecord(record, "exitCode");
+    const stdout = stringFromRecord(record, "stdout");
+    const stderr = stringFromRecord(record, "stderr");
+    const signal = stderr || stdout;
+    return `${ok ? "命令完成" : "命令失败"}：${truncateInline(command, 120)}${exitCode !== null ? `，退出码 ${exitCode}` : ""}${signal ? `。输出：${truncateInline(signal, 160)}` : "。"} `;
+  }
+
+  if (toolName === "inspect_project") {
+    const pkg = payloadRecord(record.package);
+    const detected = payloadRecord(record.detected);
+    const name = stringFromRecord(pkg, "name");
+    const kind = stringFromRecord(detected, "kind") ?? stringFromRecord(detected, "type");
+    return `已检查项目结构${name ? `：${name}` : ""}${kind ? `，识别为 ${kind}` : ""}。`;
+  }
+
+  if (toolName === "code_map") {
+    const files = Array.isArray(record.files) ? record.files.length : numberFromRecord(record, "files");
+    const symbols = Array.isArray(record.symbols) ? record.symbols.length : numberFromRecord(record, "symbols");
+    return `代码地图已生成${files !== null ? `，覆盖 ${files} 个文件` : ""}${symbols !== null ? `、${symbols} 个符号` : ""}。`;
+  }
+
+  if (toolName === "completion_check") {
+    const status = stringFromRecord(record, "status") ?? stringFromRecord(record, "result");
+    const summary = stringFromRecord(record, "summary");
+    return summary ? `完成度检查：${summary}` : `完成度检查${status ? `：${status}` : "已完成"}。`;
+  }
+
+  return truncateInline(fallback && fallback !== "工具执行完成。" ? fallback : summarizeToolBlockValue(output), 220);
+}
+
+function stringFromRecord(record: Record<string, unknown>, key: string): string | null {
+  const value = record[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function numberFromRecord(record: Record<string, unknown>, key: string): number | null {
+  const value = record[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function formatCompactBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function commandLooksComposite(command: string): boolean {
+  return /&&|\|\||;|\r?\n|\|\s*\w/.test(command);
+}
+
 function summarizeToolActivityDetail(toolName: string | null, input: unknown): string {
   if (!input || typeof input !== "object") return input === undefined ? "等待工具返回结果。" : summarizeToolBlockValue(input);
   const record = input as Record<string, unknown>;
@@ -1156,7 +1510,7 @@ function summarizeToolPipelineEvent(event: DesktopEvent | null): {
     ? summarizeToolActivityDetail(toolName, payload.input)
     : "等待工具输入。";
   const outputDetail = payload.output !== undefined
-    ? summarizeToolBlockValue(payload.output)
+    ? summarizeToolOutputDetail(toolName, payload.output)
     : "工具执行完成。";
   const errorDetail = typeof payload.error === "string" && payload.error.trim()
     ? payload.error.trim()
