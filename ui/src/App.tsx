@@ -845,14 +845,11 @@ function SimpleChatTranscript({
       {items.map((item) => {
         if (item.activity) {
           return (
-            <Message
+            <RunActivityTranscriptNode
               key={item.id}
-              role="system"
-              from={item.from}
+              activity={item.activity}
               time={item.duplicateCount && item.duplicateCount > 1 ? `${item.time} x${item.duplicateCount}` : item.time}
-            >
-              <RunActivityTranscriptCard activity={item.activity} />
-            </Message>
+            />
           );
         }
 
@@ -951,8 +948,6 @@ function activityFromToolPipelineEvent(event: DesktopEvent): RunActivityTranscri
   const title = formatToolActivityTranscriptTitle(toolName, phase, payload, summary.label);
   const detail = formatToolActivityTranscriptDetail(toolName, phase, payload, summary.detail);
   const meta = [
-    toolName ? `工具 ${toolName}` : null,
-    `阶段 ${formatToolPhaseLabel(phase)}`,
     activityScopeLabel(toolName, payload),
   ].filter((item): item is string => Boolean(item));
   const idPart = typeof payload.toolCallId === "string"
@@ -977,23 +972,29 @@ function activityFromToolPipelineEvent(event: DesktopEvent): RunActivityTranscri
   };
 }
 
-function RunActivityTranscriptCard({ activity }: { activity: RunActivityTranscript }) {
+function RunActivityTranscriptNode({ activity, time }: { activity: RunActivityTranscript; time: string }) {
+  const dotTone = activity.tone === "neutral" ? "accent" : activity.tone;
   return (
-    <div className={`run-activity-card ${activity.tone}${activity.active ? " active" : ""}`}>
-      <div className="run-activity-head">
-        <div className="run-activity-title">
-          <span className="run-activity-icon" aria-hidden="true" />
-          <strong>{activity.title}</strong>
-        </div>
-        <SignalPill tone={activity.tone}>{activity.phaseLabel}</SignalPill>
+    <article className={`timeline-node run-activity-node ${activity.tone}${activity.active ? " active" : ""}`}>
+      <div className="timeline-rail">
+        <div className={`timeline-dot ${dotTone}${activity.active ? " pulse" : ""}`} />
       </div>
-      <p>{activity.detail}</p>
-      {activity.meta.length > 0 ? (
-        <div className="run-activity-meta">
-          {activity.meta.map((item) => <span key={item}>{item}</span>)}
+      <div className="timeline-body">
+        <div className="run-activity-inline-head">
+          <div className="run-activity-title">
+            <span className="run-activity-icon" aria-hidden="true" />
+            <strong>{activity.title}</strong>
+          </div>
+          <div className="message-meta"><span>{activity.phaseLabel}</span><span>{time}</span></div>
         </div>
-      ) : null}
-    </div>
+        <p className="run-activity-text">{activity.detail}</p>
+        {activity.meta.length > 0 ? (
+          <div className="run-activity-meta">
+            {activity.meta.map((item) => <span key={item}>{item}</span>)}
+          </div>
+        ) : null}
+      </div>
+    </article>
   );
 }
 

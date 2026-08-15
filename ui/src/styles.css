@@ -1001,39 +1001,17 @@ body {
   border-left: 3px solid rgba(143,115,255,0.30);
 }
 
-.run-activity-card {
-  display: grid;
-  gap: 10px;
-  padding: 14px 16px;
-  border: 1px solid rgba(120, 98, 180, 0.15);
-  border-left: 3px solid rgba(143, 115, 255, 0.42);
-  border-radius: 18px;
-  background:
-    linear-gradient(180deg, rgba(143, 115, 255, 0.10), rgba(255, 255, 255, 0.76)),
-    rgba(255, 255, 255, 0.82);
-  box-shadow: 0 14px 34px rgba(42, 34, 78, 0.08);
+.run-activity-node .timeline-body {
+  gap: 7px;
+  max-width: min(880px, 100%);
+  padding: 2px 0 16px;
 }
 
-.run-activity-card.active {
-  border-color: rgba(96, 167, 255, 0.28);
-  box-shadow:
-    0 14px 34px rgba(42, 34, 78, 0.08),
-    0 0 0 3px rgba(96, 167, 255, 0.08);
+.run-activity-node.active .timeline-body {
+  color: var(--text);
 }
 
-.run-activity-card.success {
-  border-left-color: var(--success);
-}
-
-.run-activity-card.warn {
-  border-left-color: var(--warning);
-}
-
-.run-activity-card.danger {
-  border-left-color: var(--danger);
-}
-
-.run-activity-head,
+.run-activity-inline-head,
 .run-activity-title,
 .run-activity-meta {
   display: flex;
@@ -1042,9 +1020,14 @@ body {
   min-width: 0;
 }
 
-.run-activity-head {
+.run-activity-inline-head {
   justify-content: space-between;
   gap: 12px;
+}
+
+.run-activity-inline-head .message-meta {
+  flex: 0 0 auto;
+  margin-bottom: 0;
 }
 
 .run-activity-title strong {
@@ -1058,10 +1041,10 @@ body {
 
 .run-activity-icon {
   position: relative;
-  width: 16px;
-  height: 13px;
+  width: 17px;
+  height: 14px;
   flex: 0 0 auto;
-  border: 1.6px solid currentColor;
+  border: 1.5px solid currentColor;
   border-radius: 4px;
   color: var(--text-dim);
 }
@@ -1076,24 +1059,27 @@ body {
   font-weight: 900;
 }
 
-.run-activity-card p {
+.run-activity-text {
   margin: 0;
   color: var(--text-soft);
-  font-size: 14px;
-  line-height: 1.65;
+  font-size: 15px;
+  font-weight: 620;
+  letter-spacing: -0.01em;
+  line-height: 1.7;
 }
 
 .run-activity-meta {
   flex-wrap: wrap;
+  gap: 6px;
 }
 
 .run-activity-meta span {
   max-width: 100%;
   overflow: hidden;
-  padding: 5px 8px;
-  border: 1px solid rgba(120, 98, 180, 0.12);
+  padding: 3px 7px;
+  border: 1px solid rgba(120, 98, 180, 0.10);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.62);
+  background: rgba(255, 255, 255, 0.44);
   color: var(--text-dim);
   font-size: 11px;
   text-overflow: ellipsis;
@@ -3457,35 +3443,45 @@ body::before,
   background: rgba(255, 255, 255, 0.025);
 }
 
-.run-activity-card {
-  border-color: rgba(96, 165, 250, 0.18);
-  border-left-color: rgba(96, 165, 250, 0.58);
-  background:
-    linear-gradient(180deg, rgba(37, 99, 235, 0.12), rgba(10, 15, 24, 0.92)),
-    #0f1520;
-  box-shadow: none;
-}
-
-.run-activity-card.active {
-  border-color: rgba(96, 165, 250, 0.32);
-  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.08);
-}
-
-.run-activity-card.success {
-  border-left-color: rgba(34, 197, 94, 0.78);
-}
-
-.run-activity-card.warn {
-  border-left-color: rgba(245, 158, 11, 0.84);
-}
-
-.run-activity-card.danger {
-  border-left-color: rgba(239, 68, 68, 0.84);
-}
-
 .run-activity-meta span {
   border-color: rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.run-activity-node .timeline-body {
+  max-width: min(900px, 100%);
+  padding: 0 0 18px;
+}
+
+.run-activity-title strong {
+  color: rgba(244, 244, 245, 0.72);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.run-activity-text {
+  color: rgba(244, 244, 245, 0.92);
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.run-activity-icon {
+  color: rgba(244, 244, 245, 0.46);
+}
+
+.run-activity-node.success .run-activity-title strong,
+.run-activity-node.success .run-activity-icon {
+  color: rgba(34, 197, 94, 0.72);
+}
+
+.run-activity-node.warn .run-activity-title strong,
+.run-activity-node.warn .run-activity-icon {
+  color: rgba(245, 158, 11, 0.78);
+}
+
+.run-activity-node.danger .run-activity-title strong,
+.run-activity-node.danger .run-activity-icon {
+  color: rgba(248, 113, 113, 0.82);
 }
 
 .message-meta {
