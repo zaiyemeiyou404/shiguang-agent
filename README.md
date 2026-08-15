@@ -2,16 +2,16 @@
 
 拾光 Agent 是一个轻量级桌面 AI Agent。它把对话、工作区文件操作、工具调用、审批、运行记录和上下文压缩放在一个 Electron 桌面界面里，目标是做成一个下载后即可配置使用的小型个人工作台。
 
-当前版本：`0.2.17`
+当前版本：`0.2.18`
 
 ## 下载使用
 
 在 GitHub Releases 页面下载 Windows 版本：
 
-- 安装包：`拾光 Agent Setup 0.2.17.exe`
+- 安装包：`拾光 Agent Setup 0.2.18.exe`
 - 免安装版：`win-unpacked.zip`
 
-`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.17`，才会生成新的正式 Release。
+`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.18`，才会生成新的正式 Release。
 
 如果使用免安装版，解压后运行：
 

@@ -236,11 +236,11 @@ function decideByPhase(
         };
       }
 
-      const followupRead = inferFollowupRead(lastResult, input.availableTools);
+      const followupRead = inferFollowupRead(lastResult, input.availableTools, input.history);
       if (followupRead) {
         return {
           action: { kind: "tool_call", toolName: "read_text_file", toolInput: { path: followupRead.path } },
-          reasoning: `Phase investigate: reading the most relevant search hit: ${followupRead.path}`,
+          reasoning: `Phase investigate: reading the next high-signal file: ${followupRead.path}`,
         };
       }
 
@@ -299,6 +299,27 @@ function decideByPhase(
     }
 
     case "summarize": {
+      const projectFollowupRead = inferProjectAnalysisFollowupRead(input, message);
+      if (projectFollowupRead) {
+        return {
+          action: { kind: "tool_call", toolName: "read_text_file", toolInput: { path: projectFollowupRead.path } },
+          reasoning: `Phase summarize: project analysis still lacks key file evidence; reading ${projectFollowupRead.path}.`,
+        };
+      }
+
+      const projectCodeMap = inferProjectAnalysisCodeMap(input, message);
+      if (projectCodeMap) {
+        return projectCodeMap;
+      }
+
+      const projectSummary = summarizeProjectAnalysis(input.history, message);
+      if (projectSummary) {
+        return {
+          action: { kind: "respond", content: projectSummary },
+          reasoning: "Phase summarize: reporting project analysis from collected evidence.",
+        };
+      }
+
       // summarize 阶段把最近的只读观察转成用户可消费的短回复。
       const observationResponse = summarizeObservation(lastResult, message);
       if (observationResponse) {
@@ -484,15 +505,226 @@ function inferEmptySearchFallback(
 function inferFollowupRead(
   lastResult: ActionResult | null,
   availableTools: ToolDescriptor[],
+  history: ActionResult[] = lastResult ? [lastResult] : [],
 ): { path: string } | null {
   if (!lastResult || !lastResult.ok) return null;
   if (lastResult.action.kind !== "tool_call") return null;
-  if (lastResult.action.toolName !== "search_workspace") return null;
   if (!availableTools.some((tool) => tool.name === "read_text_file")) return null;
 
-  const output = lastResult.output as { results?: Array<{ file?: unknown }> } | null;
-  const topFile = output?.results?.[0]?.file;
-  return typeof topFile === "string" && topFile.length > 0 ? { path: topFile } : null;
+  const keyPath = inferNextKeyReadPath(history);
+  return keyPath ? { path: keyPath } : null;
+}
+
+const MAX_PROJECT_ANALYSIS_KEY_READS = 3;
+
+function inferProjectAnalysisFollowupRead(
+  input: BrainInput,
+  message: string,
+): { path: string } | null {
+  if (!hasTool(input.availableTools, "read_text_file")) return null;
+  if (isSpecificLookupIntent(message)) return null;
+  if (!isProjectAnalysisIntent(message) && !hasProjectShapeEvidence(input.history)) return null;
+  if (countReadTextFileCalls(input.history) >= MAX_PROJECT_ANALYSIS_KEY_READS) return null;
+
+  const keyPath = inferNextKeyReadPath(input.history);
+  return keyPath ? { path: keyPath } : null;
+}
+
+function inferProjectAnalysisCodeMap(input: BrainInput, message: string): BrainDecision | null {
+  if (!hasTool(input.availableTools, "code_map")) return null;
+  if (isSpecificLookupIntent(message)) return null;
+  if (!isProjectAnalysisIntent(message) && !hasProjectShapeEvidence(input.history)) return null;
+  if (hasRecentTool(input.history, "code_map")) return null;
+  if (!hasProjectShapeEvidence(input.history) && countReadTextFileCalls(input.history) === 0) return null;
+
+  return {
+    action: { kind: "tool_call", toolName: "code_map", toolInput: { maxFiles: 1200, includeTests: false } },
+    reasoning: "Project analysis needs entrypoint and structure evidence; running code_map before final summary.",
+  };
+}
+
+function inferNextKeyReadPath(history: ActionResult[]): string | null {
+  const readPaths = new Set(
+    history
+      .map((result) => result.action.kind === "tool_call" && result.action.toolName === "read_text_file"
+        ? inferReadPath(result)
+        : null)
+      .filter((path): path is string => typeof path === "string" && path.length > 0),
+  );
+  return collectKeyReadCandidates(history).find((path) => !readPaths.has(path)) ?? null;
+}
+
+function collectKeyReadCandidates(history: ActionResult[]): string[] {
+  const paths: string[] = [];
+
+  for (const result of history) {
+    if (!result.ok || result.action.kind !== "tool_call") continue;
+    if (result.action.toolName === "search_workspace") {
+      const output = result.output as { results?: Array<{ file?: unknown }> } | null;
+      if (Array.isArray(output?.results)) {
+        for (const item of output.results) {
+          if (typeof item.file === "string") paths.push(toPlannerPortablePath(item.file));
+        }
+      }
+    }
+    if (result.action.toolName === "list_directory") {
+      const output = result.output as { entries?: Array<{ path?: unknown; kind?: unknown }> } | null;
+      if (Array.isArray(output?.entries)) {
+        for (const item of output.entries) {
+          if (typeof item.path === "string" && item.kind === "file") paths.push(toPlannerPortablePath(item.path));
+        }
+      }
+    }
+    if (result.action.toolName === "inspect_project") {
+      const output = result.output as { topLevelEntries?: Array<{ path?: unknown; kind?: unknown }> } | null;
+      if (Array.isArray(output?.topLevelEntries)) {
+        for (const item of output.topLevelEntries) {
+          if (typeof item.path === "string" && item.kind === "file") paths.push(toPlannerPortablePath(item.path));
+        }
+      }
+    }
+    if (result.action.toolName === "code_map") {
+      const output = result.output as { entrypoints?: Array<string | { path?: unknown; file?: unknown }> } | null;
+      if (Array.isArray(output?.entrypoints)) {
+        for (const item of output.entrypoints) {
+          if (typeof item === "string") paths.push(toPlannerPortablePath(item));
+          else if (typeof item.path === "string") paths.push(toPlannerPortablePath(item.path));
+          else if (typeof item.file === "string") paths.push(toPlannerPortablePath(item.file));
+        }
+      }
+    }
+  }
+
+  return uniqueCompact(paths)
+    .map((path) => ({ path, score: scoreKeyReadPath(path) }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
+    .map((item) => item.path);
+}
+
+function scoreKeyReadPath(path: string): number {
+  const normalized = toPlannerPortablePath(path).toLowerCase();
+  const name = normalized.slice(normalized.lastIndexOf("/") + 1);
+  if (normalized.includes("/node_modules/") || normalized.includes("/.git/")) return 0;
+  if (name === "pubspec.yaml") return 120;
+  if (name === "package.json") return 115;
+  if (name === "pyproject.toml" || name === "requirements.txt") return 110;
+  if (name === "cargo.toml" || name === "go.mod") return 108;
+  if (name === "pom.xml" || name === "build.gradle" || name === "settings.gradle") return 104;
+  if (/^readme(?:\.[a-z0-9]+)?$/.test(name)) return 96;
+  if (normalized === "lib/main.dart") return 94;
+  if (normalized === "src/main.ts" || normalized === "src/main.tsx") return 92;
+  if (normalized === "src/index.ts" || normalized === "src/index.tsx") return 90;
+  if (name === "main.py" || name === "app.py") return 88;
+  if (normalized.startsWith("lib/") && normalized.endsWith(".dart")) return 70;
+  if (normalized.startsWith("src/") && /\.(ts|tsx|js|jsx|py)$/.test(normalized)) return 65;
+  if (/\.(md|yaml|yml|toml|json)$/.test(normalized)) return 45;
+  return 0;
+}
+
+function isProjectAnalysisIntent(message: string): boolean {
+  return /\b(project|repo|repository|workspace|codebase|architecture|structure|analy[sz]e)\b/i.test(message)
+    || /项目|仓库|工程|代码库|架构|结构|分析|看一下/.test(message);
+}
+
+function isSpecificLookupIntent(message: string): boolean {
+  return /\b(answer|secret|value|token|key|file and value|find the)\b/i.test(message)
+    || /答案|密钥|令牌|具体值|文件和值|找出|查找/.test(message);
+}
+
+function hasProjectShapeEvidence(history: ActionResult[]): boolean {
+  return history.some((result) => {
+    if (!result.ok || result.action.kind !== "tool_call") return false;
+    if (result.action.toolName === "inspect_project" || result.action.toolName === "code_map") return true;
+    const paths = collectKeyReadCandidates([result]);
+    return paths.some((path) => scoreKeyReadPath(path) >= 100);
+  });
+}
+
+function hasRecentTool(history: ActionResult[], toolName: string): boolean {
+  return history.slice(-8).some((result) => result.action.kind === "tool_call" && result.action.toolName === toolName);
+}
+
+function countReadTextFileCalls(history: ActionResult[]): number {
+  return history.filter((result) => result.ok && result.action.kind === "tool_call" && result.action.toolName === "read_text_file").length;
+}
+
+function summarizeProjectAnalysis(history: ActionResult[], message: string): string | null {
+  if (isSpecificLookupIntent(message)) return null;
+  if (!isProjectAnalysisIntent(message) && !hasProjectShapeEvidence(history)) return null;
+  const readPaths = uniqueCompact(
+    history
+      .map((result) => result.action.kind === "tool_call" && result.action.toolName === "read_text_file" ? inferReadPath(result) : null)
+      .filter((path): path is string => typeof path === "string" && path.length > 0),
+  );
+  const hasStrongProjectEvidence = hasProjectShapeEvidence(history)
+    || readPaths.some((path) => scoreKeyReadPath(path) >= 100)
+    || Boolean(findLatestToolOutput(history, "code_map"))
+    || Boolean(findLatestToolOutput(history, "inspect_project"));
+  if (!hasStrongProjectEvidence) return null;
+  const codeMap = findLatestToolOutput(history, "code_map") as {
+    frameworks?: unknown;
+    entrypoints?: unknown;
+    directories?: unknown;
+    fileStats?: { filesScanned?: unknown; byExtension?: unknown; truncated?: unknown };
+  } | null;
+  const inspect = findLatestToolOutput(history, "inspect_project") as {
+    detected?: unknown;
+    fileStats?: { filesScanned?: unknown; byExtension?: unknown; truncated?: unknown };
+    package?: { name?: unknown; version?: unknown } | null;
+  } | null;
+
+  if (readPaths.length === 0 && !codeMap && !inspect) return null;
+
+  const detected = Array.isArray(codeMap?.frameworks) && codeMap.frameworks.length > 0
+    ? codeMap.frameworks.join(", ")
+    : Array.isArray(inspect?.detected) && inspect.detected.length > 0
+      ? inspect.detected.join(", ")
+      : "暂未识别到明确框架";
+  const packageName = typeof inspect?.package?.name === "string" ? inspect.package.name : null;
+  const fileStats = codeMap?.fileStats ?? inspect?.fileStats;
+  const filesScanned = typeof fileStats?.filesScanned === "number" ? `${fileStats.filesScanned} 个文件` : "若干文件";
+  const entrypoints = formatEntryPoints(codeMap?.entrypoints);
+
+  return [
+    "已完成初步项目分析：",
+    packageName ? `项目名：${packageName}` : null,
+    `识别结果：${detected}。`,
+    `已读取关键文件：${readPaths.length > 0 ? readPaths.join("、") : "暂无单文件读取，仅完成结构扫描"}。`,
+    entrypoints ? `疑似入口：${entrypoints}。` : null,
+    `结构扫描：覆盖 ${filesScanned}${fileStats?.truncated === true ? "，结果已截断" : ""}。`,
+    "如果要继续深入，我建议下一步读取入口文件和核心业务目录，再做依赖/运行风险分析。",
+  ].filter(Boolean).join("\n");
+}
+
+function findLatestToolOutput(history: ActionResult[], toolName: string): unknown | null {
+  for (let index = history.length - 1; index >= 0; index--) {
+    const result = history[index];
+    if (result?.ok && result.action.kind === "tool_call" && result.action.toolName === toolName) {
+      return result.output;
+    }
+  }
+  return null;
+}
+
+function formatEntryPoints(value: unknown): string | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const paths = value
+    .map((item) => {
+      if (typeof item === "string") return item;
+      if (item && typeof item === "object") {
+        const record = item as { path?: unknown; file?: unknown };
+        if (typeof record.path === "string") return record.path;
+        if (typeof record.file === "string") return record.file;
+      }
+      return null;
+    })
+    .filter((path): path is string => typeof path === "string" && path.length > 0);
+  return uniqueCompact(paths).slice(0, 5).join("、") || null;
+}
+
+function toPlannerPortablePath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/^\.\//, "");
 }
 
 function inferEditMutation(input: BrainInput, lastResult: ActionResult | null): BrainDecision | null {

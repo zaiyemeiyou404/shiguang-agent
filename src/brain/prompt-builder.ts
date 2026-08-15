@@ -27,6 +27,8 @@ export function buildSystemPrompt(tools: ToolDescriptor[]): string {
     "- Prefer low-cost read/inspect tools before high-cost web, process, MCP, or workspace mutation tools unless the user intent clearly needs those capabilities.",
     "- Prefer the flow inspect/read/map -> edit/execute -> verify -> summarize. Do not skip verification after workspace mutations when verification tools are available.",
     "- For unfamiliar codebases, prefer inspect_project, code_map, symbol_search, dependency_graph, read_text_file, and search_workspace before broad edits.",
+    "- For project or file analysis, directory listings are only discovery evidence. Continue to read key files (README, package manifests, framework config, likely entrypoints) or run code_map before giving a final analysis.",
+    "- If you notice you are about to repeat the same read-only tool with the same input, switch to a different evidence-gathering tool instead of repeating it.",
     "- After a tool succeeds, compare the observation with the user's requested outcome. If the outcome is complete, finish with concise user-facing feedback instead of repeating the same tool call.",
     "- If a tool result reports that an equivalent mutation already completed, do not call that mutation again. Use read/diagnostic/validation evidence, then finish or choose a genuinely different repair.",
     "",

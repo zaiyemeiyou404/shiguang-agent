@@ -148,6 +148,95 @@ test("runLoop pauses on model usage budget before dispatching another tool", asy
   assert.deepEqual(usageEvents, [1]);
 });
 
+test("runLoop redirects repeated read-only discovery tools to key file reads", async () => {
+  const repeatedList: BrainDecision = {
+    action: { kind: "tool_call", toolName: "list_directory", toolInput: { path: "." } },
+    reasoning: "Model keeps listing the same project root.",
+  };
+  const dispatchedTools: string[] = [];
+  const availableTools: ToolDescriptor[] = [
+    {
+      name: "list_directory",
+      description: "List a directory",
+      inputSchema: { type: "object" },
+      risk: "read",
+    },
+    {
+      name: "read_text_file",
+      description: "Read a file",
+      inputSchema: { type: "object" },
+      risk: "read",
+    },
+  ];
+
+  const state = await runLoop(
+    {
+      context: makeContext("看一下这个 Flutter 项目"),
+      runId: "run_readonly_recovery",
+      priorTurns: [],
+      history: [],
+      availableTools,
+    },
+    {
+      planner: {
+        async decide(): Promise<BrainDecision> {
+          return repeatedList;
+        },
+      },
+      policy: {
+        async check(next): Promise<BrainDecision> {
+          return next;
+        },
+      },
+      dispatcher: {
+        async dispatch(next): Promise<ActionResult> {
+          const toolName = next.action.toolName ?? "";
+          dispatchedTools.push(toolName);
+          if (toolName === "list_directory") {
+            return {
+              action: next.action,
+              ok: true,
+              output: {
+                entries: [
+                  { name: "pubspec.yaml", path: "pubspec.yaml", kind: "file", size: 100 },
+                  { name: "lib", path: "lib", kind: "directory", size: 0 },
+                ],
+              },
+              metadata: {
+                category: "tool_observation",
+                summary: "listed Flutter project root",
+                retryable: false,
+                toolName,
+              },
+            };
+          }
+          return {
+            action: next.action,
+            ok: true,
+            output: { path: "pubspec.yaml", content: "name: watermeter\n" },
+            metadata: {
+              category: "tool_observation",
+              summary: "read pubspec.yaml",
+              retryable: false,
+              toolName,
+            },
+          };
+        },
+      },
+      evaluator: {
+        async evaluate() {
+          return { kind: "continue" } as const;
+        },
+      },
+    },
+    2,
+  );
+
+  assert.deepEqual(dispatchedTools, ["list_directory", "read_text_file"]);
+  assert.equal(state.history[1]?.action.toolName, "read_text_file");
+  assert.deepEqual(state.history[1]?.action.toolInput, { path: "pubspec.yaml" });
+});
+
 test("runLoop tracks the latest validation failure in working memory", async () => {
   const decision: BrainDecision = {
     action: { kind: "tool_call", toolName: "run_validation", toolInput: { mode: "typecheck" } },

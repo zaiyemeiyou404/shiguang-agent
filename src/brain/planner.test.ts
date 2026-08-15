@@ -1335,6 +1335,92 @@ test("RulePlanner does not finish after a successful non-validation tool call", 
   assert.match(decision.action.content ?? "", /工具输出：/);
 });
 
+test("RulePlanner reads key project files after a directory listing instead of summarizing raw JSON", async () => {
+  const planner = new RulePlanner();
+  const availableTools: ToolDescriptor[] = [
+    {
+      name: "list_directory",
+      description: "Lists files",
+      inputSchema: { type: "object" },
+    },
+    {
+      name: "read_text_file",
+      description: "Reads a file",
+      inputSchema: { type: "object" },
+      risk: "read",
+    },
+  ];
+
+  const decision = await planner.decide(makeInput([
+    {
+      action: { kind: "tool_call", toolName: "list_directory", toolInput: { path: "." } },
+      ok: true,
+      output: {
+        entries: [
+          { name: "lib", path: "lib", kind: "directory", size: 0 },
+          { name: "pubspec.yaml", path: "pubspec.yaml", kind: "file", size: 1200 },
+          { name: "README.md", path: "README.md", kind: "file", size: 800 },
+        ],
+      },
+      metadata: {
+        category: "tool_observation",
+        summary: "listed Flutter project root",
+        retryable: false,
+        toolName: "list_directory",
+      },
+    },
+  ], availableTools, "看一下这个项目", {
+    step: 1,
+    phase: "investigate",
+    lastActionKind: "tool_call",
+    lastToolName: "list_directory",
+  }));
+
+  assert.equal(decision.action.kind, "tool_call");
+  assert.equal(decision.action.toolName, "read_text_file");
+  assert.deepEqual(decision.action.toolInput, { path: "pubspec.yaml" });
+});
+
+test("RulePlanner runs code_map before final project summary when key config was read", async () => {
+  const planner = new RulePlanner();
+  const availableTools: ToolDescriptor[] = [
+    {
+      name: "read_text_file",
+      description: "Reads a file",
+      inputSchema: { type: "object" },
+      risk: "read",
+    },
+    {
+      name: "code_map",
+      description: "Maps code",
+      inputSchema: { type: "object" },
+      risk: "read",
+    },
+  ];
+
+  const decision = await planner.decide(makeInput([
+    {
+      action: { kind: "tool_call", toolName: "read_text_file", toolInput: { path: "pubspec.yaml" } },
+      ok: true,
+      output: { path: "pubspec.yaml", content: "name: watermeter\nversion: 1.0.0\n" },
+      metadata: {
+        category: "tool_observation",
+        summary: "read pubspec.yaml",
+        retryable: false,
+        toolName: "read_text_file",
+      },
+    },
+  ], availableTools, "分析这个 Flutter 项目", {
+    step: 2,
+    phase: "summarize",
+    lastActionKind: "tool_call",
+    lastToolName: "read_text_file",
+  }));
+
+  assert.equal(decision.action.kind, "tool_call");
+  assert.equal(decision.action.toolName, "code_map");
+});
+
 
 test("RulePlanner uses Chinese fallback text for generic responses", async () => {
   const planner = new RulePlanner();

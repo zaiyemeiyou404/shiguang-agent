@@ -165,7 +165,14 @@ function inferNextPhase(
     return "validate";
   }
 
-  if (toolName === "search_workspace") {
+  if (
+    toolName === "search_workspace"
+    || toolName === "list_directory"
+    || toolName === "inspect_project"
+    || toolName === "code_map"
+    || toolName === "dependency_graph"
+    || toolName === "symbol_search"
+  ) {
     return "investigate";
   }
 
@@ -1063,7 +1070,11 @@ export async function runLoop(
       continue;
     }
 
-    const decision = duplicateResolution.decision;
+    const decision = resolveRepeatedReadOnlyNoProgress(
+      duplicateResolution.decision,
+      state.history,
+      input.availableTools,
+    );
     const approved = await deps.policy.check(decision);
     state.lastDecision = approved;
 
@@ -1145,6 +1156,34 @@ function resolveSuccessfulValidationCompletionCheck(
 type DuplicateWorkspaceMutationResolution =
   | { kind: "decision"; decision: BrainDecision }
   | { kind: "observation"; decision: BrainDecision; result: ActionResult };
+
+function resolveRepeatedReadOnlyNoProgress(
+  decision: BrainDecision,
+  history: ActionResult[],
+  availableTools: BrainInput["availableTools"],
+): BrainDecision {
+  if (decision.action.kind !== "tool_call" || !decision.action.toolName) return decision;
+  if (!isRepeatProtectedReadOnlyAction(decision.action, availableTools)) return decision;
+
+  const signature = toolActionSignature(decision.action);
+  if (!signature) return decision;
+  const priorSame = history
+    .slice(-4)
+    .some((result) => result.ok === true && toolActionSignature(result.action) === signature);
+  if (!priorSame) return decision;
+
+  const recovery = inferReadOnlyRecoveryDecision(history, availableTools);
+  if (!recovery) return decision;
+
+  return {
+    ...recovery,
+    reasoning: [
+      decision.reasoning,
+      `Repeated read-only tool call ${decision.action.toolName} would not add new evidence; switching to a higher-signal recovery action.`,
+      recovery.reasoning,
+    ].filter(Boolean).join(" "),
+  };
+}
 
 function resolveDuplicateWorkspaceMutation(
   decision: BrainDecision,
@@ -1561,9 +1600,62 @@ function findDuplicateSuccessfulWorkspaceMutation(
   return null;
 }
 
+function inferReadOnlyRecoveryDecision(
+  history: ActionResult[],
+  availableTools: BrainInput["availableTools"],
+): BrainDecision | null {
+  if (hasTool(availableTools, "read_text_file")) {
+    const keyPath = inferNextKeyReadPath(history);
+    if (keyPath) {
+      return {
+        action: { kind: "tool_call", toolName: "read_text_file", toolInput: { path: keyPath } },
+        reasoning: `Recovery: reading key file ${keyPath} instead of repeating a read-only discovery tool.`,
+      };
+    }
+  }
+
+  if (hasTool(availableTools, "inspect_project") && !hasRecentTool(history, "inspect_project")) {
+    return {
+      action: { kind: "tool_call", toolName: "inspect_project", toolInput: {} },
+      reasoning: "Recovery: using inspect_project to summarize the workspace instead of repeating directory listing.",
+    };
+  }
+
+  if (hasTool(availableTools, "code_map") && !hasRecentTool(history, "code_map")) {
+    return {
+      action: { kind: "tool_call", toolName: "code_map", toolInput: { maxFiles: 1200, includeTests: false } },
+      reasoning: "Recovery: using code_map to locate entrypoints and framework structure.",
+    };
+  }
+
+  return null;
+}
+
 function toolActionSignature(action: BrainDecision["action"]): string | null {
   if ((action.kind !== "tool_call" && action.kind !== "needs_approval") || !action.toolName) return null;
   return `${action.toolName}:${stableJson(action.toolInput ?? null)}`;
+}
+
+const REPEAT_PROTECTED_READ_ONLY_TOOLS = new Set([
+  "list_directory",
+  "inspect_project",
+  "search_workspace",
+  "code_map",
+  "dependency_graph",
+  "symbol_search",
+]);
+
+function isRepeatProtectedReadOnlyAction(
+  action: BrainDecision["action"],
+  availableTools: BrainInput["availableTools"],
+): boolean {
+  if (action.kind !== "tool_call" || !action.toolName) return false;
+  if (action.toolName === "run_validation" || action.toolName === "completion_check") return false;
+  if (isRepeatProtectedWorkspaceAction(action, availableTools)) return false;
+  if (REPEAT_PROTECTED_READ_ONLY_TOOLS.has(action.toolName)) return true;
+
+  const descriptor = availableTools.find((tool) => tool.name === action.toolName);
+  return descriptor?.risk === "read" && descriptor.effects?.workspaceMutation !== true;
 }
 
 const REPEAT_PROTECTED_WORKSPACE_TOOLS = new Set([
@@ -1583,6 +1675,97 @@ function isRepeatProtectedWorkspaceAction(
 
   const descriptor = availableTools.find((tool) => tool.name === action.toolName);
   return descriptor?.effects?.workspaceMutation === true;
+}
+
+function hasTool(availableTools: BrainInput["availableTools"], name: string): boolean {
+  return availableTools.some((tool) => tool.name === name);
+}
+
+function hasRecentTool(history: ActionResult[], toolName: string): boolean {
+  return history.slice(-8).some((result) => result.action.kind === "tool_call" && result.action.toolName === toolName);
+}
+
+function inferNextKeyReadPath(history: ActionResult[]): string | null {
+  const readPaths = new Set(
+    history
+      .map((result) => result.action.kind === "tool_call" && result.action.toolName === "read_text_file"
+        ? inferOutputPath(result.output)
+        : null)
+      .filter((path): path is string => typeof path === "string" && path.length > 0),
+  );
+  const candidates = collectKeyReadCandidates(history);
+  return candidates.find((path) => !readPaths.has(path)) ?? null;
+}
+
+function collectKeyReadCandidates(history: ActionResult[]): string[] {
+  const paths: string[] = [];
+  for (const result of history) {
+    if (!result.ok || result.action.kind !== "tool_call") continue;
+    const toolName = result.action.toolName;
+    if (toolName === "list_directory") {
+      const output = result.output as { entries?: Array<{ path?: unknown; kind?: unknown }> } | null;
+      if (Array.isArray(output?.entries)) {
+        for (const entry of output.entries) {
+          if (typeof entry.path === "string" && entry.kind === "file") paths.push(toPortablePath(entry.path));
+        }
+      }
+    }
+    if (toolName === "inspect_project") {
+      const output = result.output as { topLevelEntries?: Array<{ path?: unknown; kind?: unknown }> } | null;
+      if (Array.isArray(output?.topLevelEntries)) {
+        for (const entry of output.topLevelEntries) {
+          if (typeof entry.path === "string" && entry.kind === "file") paths.push(toPortablePath(entry.path));
+        }
+      }
+    }
+    if (toolName === "search_workspace") {
+      const output = result.output as { results?: Array<{ file?: unknown }> } | null;
+      if (Array.isArray(output?.results)) {
+        for (const entry of output.results) {
+          if (typeof entry.file === "string") paths.push(toPortablePath(entry.file));
+        }
+      }
+    }
+    if (toolName === "code_map") {
+      const output = result.output as { entrypoints?: Array<{ path?: unknown } | string> } | null;
+      if (Array.isArray(output?.entrypoints)) {
+        for (const entry of output.entrypoints) {
+          if (typeof entry === "string") paths.push(toPortablePath(entry));
+          else if (typeof entry?.path === "string") paths.push(toPortablePath(entry.path));
+        }
+      }
+    }
+  }
+
+  return uniqueCompact(paths)
+    .map((path) => ({ path, score: scoreKeyReadPath(path) }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
+    .map((item) => item.path);
+}
+
+function scoreKeyReadPath(path: string): number {
+  const normalized = toPortablePath(path).toLowerCase();
+  const name = normalized.slice(normalized.lastIndexOf("/") + 1);
+  if (normalized.includes("/node_modules/") || normalized.includes("/.git/")) return 0;
+  if (name === "pubspec.yaml") return 120;
+  if (name === "package.json") return 115;
+  if (name === "pyproject.toml" || name === "requirements.txt") return 110;
+  if (name === "cargo.toml" || name === "go.mod") return 108;
+  if (name === "pom.xml" || name === "build.gradle" || name === "settings.gradle") return 104;
+  if (/^readme(?:\.[a-z0-9]+)?$/.test(name)) return 96;
+  if (normalized === "lib/main.dart") return 94;
+  if (normalized === "src/main.ts" || normalized === "src/main.tsx") return 92;
+  if (normalized === "src/index.ts" || normalized === "src/index.tsx") return 90;
+  if (name === "main.py" || name === "app.py") return 88;
+  if (normalized.startsWith("lib/") && normalized.endsWith(".dart")) return 70;
+  if (normalized.startsWith("src/") && /\.(ts|tsx|js|jsx|py)$/.test(normalized)) return 65;
+  if (/\.(md|yaml|yml|toml|json)$/.test(normalized)) return 45;
+  return 0;
+}
+
+function toPortablePath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/^\.\//, "");
 }
 
 function stableJson(value: unknown): string {
