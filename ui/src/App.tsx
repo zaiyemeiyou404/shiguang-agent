@@ -664,6 +664,10 @@ function SimpleChatTranscript({
   onApprovalDecision: (approvalId: string, decision: "granted" | "denied") => void;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const approvalViewStates = useMemo(
+    () => buildApprovalViewStates(entries, liveEvents, pendingApprovals, decisionState),
+    [entries, liveEvents, pendingApprovals, decisionState],
+  );
   type ChatTranscriptItem = {
     id: string;
     source: "turn" | "event";
@@ -679,6 +683,7 @@ function SimpleChatTranscript({
   };
 
   const historyItems: ChatTranscriptItem[] = entries.flatMap((entry): ChatTranscriptItem[] => {
+    if (entry.kind === "approval_granted" || entry.kind === "approval_denied") return [];
     const content = typeof entry.content === "string" ? entry.content.trim() : "";
     if (!content) return [];
     const turn = { role: entry.role };
@@ -721,6 +726,7 @@ function SimpleChatTranscript({
     }
 
     if (event.kind === "error") {
+      if (persistedEventIds.has(`event:${event.id}`)) return [];
       const content = typeof payload.message === "string" ? payload.message.trim() : formatPayload(payload).trim();
       if (!content) return [];
       return [{
@@ -736,14 +742,11 @@ function SimpleChatTranscript({
       }];
     }
 
-    if (event.kind === "system" || event.kind === "approval_request" || event.kind === "approval_granted" || event.kind === "approval_denied") {
-      const title = event.kind === "approval_granted"
-        ? "审批已通过"
-        : event.kind === "approval_denied"
-          ? "审批已拒绝"
-          : event.kind === "approval_request"
-            ? "请求审批"
-            : "系统消息";
+    if (event.kind === "approval_granted" || event.kind === "approval_denied") return [];
+
+    if (event.kind === "system" || event.kind === "approval_request") {
+      if (persistedEventIds.has(`event:${event.id}`)) return [];
+      const title = event.kind === "approval_request" ? "请求审批" : "系统消息";
       const body = typeof payload.message === "string"
         ? payload.message.trim()
         : typeof payload.content === "string"
@@ -807,10 +810,14 @@ function SimpleChatTranscript({
         if (item.kind === "approval_request") {
           const payload = item.payload && typeof item.payload === "object" ? item.payload as { approvalId?: unknown } : {};
           const approvalId = typeof payload.approvalId === "string" ? payload.approvalId : undefined;
+          const viewState = approvalId ? approvalViewStates.get(approvalId) : undefined;
           const approval = approvalId
-            ? pendingApprovals.find((candidate) => candidate.id === approvalId) ?? approvalFromEventPayload(item.payload, item.runId)
+            ? pendingApprovals.find((candidate) => candidate.id === approvalId) ?? approvalFromEventPayload(item.payload, item.runId, normalizeApprovalStatusForRecord(viewState?.status))
             : undefined;
           if (approval) {
+            const displayApproval = viewState?.status && viewState.status !== "approving"
+              ? { ...approval, status: viewState.status }
+              : approval;
             return (
               <Message
                 key={item.id}
@@ -818,11 +825,16 @@ function SimpleChatTranscript({
                 from="审批"
                 time={item.duplicateCount && item.duplicateCount > 1 ? `${item.time} x${item.duplicateCount}` : item.time}
               >
-                <ApprovalReviewCard
-                  approval={approval}
-                  decisionState={decisionState[approval.id]}
-                  onDecision={onApprovalDecision}
-                />
+                {viewState && viewState.status !== "pending" && viewState.status !== "approving" ? (
+                  <ApprovalReceiptCard approval={displayApproval} viewState={viewState} />
+                ) : (
+                  <ApprovalReviewCard
+                    approval={displayApproval}
+                    decisionState={decisionState[approval.id]}
+                    executionState={viewState}
+                    onDecision={onApprovalDecision}
+                  />
+                )}
               </Message>
             );
           }
@@ -843,6 +855,172 @@ function SimpleChatTranscript({
   );
 }
 
+type ApprovalViewStatus = DesktopApproval["status"] | "approving";
+type ApprovalExecutionState = "waiting" | "approved" | "executing" | "executed" | "failed" | "denied" | "expired";
+
+interface ApprovalViewState {
+  status: ApprovalViewStatus;
+  execution: ApprovalExecutionState;
+  label: string;
+  detail: string;
+  updatedAt: string | null;
+}
+
+function normalizeApprovalStatusForRecord(status: ApprovalViewStatus | undefined): DesktopApproval["status"] {
+  return status === "granted" || status === "denied" || status === "expired" ? status : "pending";
+}
+
+function buildApprovalViewStates(
+  entries: DesktopConversationEntry[],
+  liveEvents: DesktopEvent[],
+  pendingApprovals: DesktopApproval[],
+  decisionState: Record<string, "approving" | "approved" | "denied" | undefined>,
+): Map<string, ApprovalViewState> {
+  const states = new Map<string, ApprovalViewState>();
+  const ensure = (approvalId: string): ApprovalViewState => {
+    const existing = states.get(approvalId);
+    if (existing) return existing;
+    const next: ApprovalViewState = {
+      status: "pending",
+      execution: "waiting",
+      label: "等待审批",
+      detail: "高风险动作正在等待你确认。",
+      updatedAt: null,
+    };
+    states.set(approvalId, next);
+    return next;
+  };
+  const update = (approvalId: string, patch: Partial<ApprovalViewState>) => {
+    states.set(approvalId, { ...ensure(approvalId), ...patch });
+  };
+
+  for (const approval of pendingApprovals) {
+    const execution = approval.status === "pending"
+      ? "waiting"
+      : approval.status === "granted"
+        ? "approved"
+        : approval.status;
+    update(approval.id, {
+      status: approval.status,
+      execution,
+      label: approval.status === "pending" ? "等待审批" : formatApprovalStatusLabel(approval.status),
+      detail: approval.status === "pending" ? "这条工具调用尚未执行，等待你通过或拒绝。" : formatApprovalResolvedDetail(approval.status),
+      updatedAt: approval.decidedAt,
+    });
+  }
+
+  const sources = [
+    ...entries.map((entry) => ({ kind: entry.kind, payload: entry.payload, createdAt: entry.createdAt })),
+    ...liveEvents.map((event) => ({ kind: event.kind, payload: event.payload, createdAt: event.createdAt })),
+  ].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+
+  for (const source of sources) {
+    const payload = payloadRecord(source.payload);
+    const approvalId = approvalIdFromPayload(payload);
+    if (!approvalId) continue;
+    const phase = typeof payload.phase === "string" ? payload.phase : null;
+    const summary = typeof payload.summary === "string" && payload.summary.trim() ? payload.summary.trim() : null;
+    const error = typeof payload.error === "string" && payload.error.trim() ? payload.error.trim() : null;
+
+    if (source.kind === "approval_request" || phase === "approval_required") {
+      update(approvalId, {
+        status: "pending",
+        execution: "waiting",
+        label: "等待审批",
+        detail: "这条工具调用尚未执行，等待你通过或拒绝。",
+        updatedAt: source.createdAt,
+      });
+    } else if (source.kind === "approval_granted" || phase === "approved") {
+      update(approvalId, {
+        status: "granted",
+        execution: "approved",
+        label: "审批已通过",
+        detail: "已授权，Agent 正在从这条工具调用继续。",
+        updatedAt: source.createdAt,
+      });
+    } else if (source.kind === "approval_denied" || phase === "denied") {
+      update(approvalId, {
+        status: "denied",
+        execution: "denied",
+        label: "审批已拒绝",
+        detail: "这条工具调用没有执行，当前运行停在审批处。",
+        updatedAt: source.createdAt,
+      });
+    } else if (phase === "approval_executed") {
+      update(approvalId, {
+        status: "granted",
+        execution: "executed",
+        label: "已执行",
+        detail: summary ? `工具已执行：${truncateInline(summary, 160)}` : "审批通过后的工具调用已经执行完成。",
+        updatedAt: source.createdAt,
+      });
+    } else if (phase === "approval_failed") {
+      update(approvalId, {
+        status: "granted",
+        execution: "failed",
+        label: "执行失败",
+        detail: error ? `审批通过后执行失败：${truncateInline(error, 160)}` : "审批已通过，但工具执行失败。",
+        updatedAt: source.createdAt,
+      });
+    }
+  }
+
+  for (const [approvalId, state] of Object.entries(decisionState)) {
+    if (state === "approving") {
+      update(approvalId, {
+        status: "approving",
+        execution: "approved",
+        label: "正在处理审批",
+        detail: "正在提交你的审批决定，请稍等。",
+      });
+    } else if (state === "approved") {
+      update(approvalId, {
+        status: "granted",
+        execution: "approved",
+        label: "审批已通过",
+        detail: "已通过，Agent 正在恢复运行。",
+      });
+    } else if (state === "denied") {
+      update(approvalId, {
+        status: "denied",
+        execution: "denied",
+        label: "审批已拒绝",
+        detail: "已拒绝，当前运行会停在这里。",
+      });
+    }
+  }
+
+  return states;
+}
+
+function payloadRecord(payload: unknown): Record<string, unknown> {
+  return payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+}
+
+function approvalIdFromPayload(payload: Record<string, unknown>): string | null {
+  if (typeof payload.approvalId === "string") return payload.approvalId;
+  const request = payload.request;
+  if (request && typeof request === "object") {
+    const nested = request as Record<string, unknown>;
+    if (typeof nested.approvalId === "string") return nested.approvalId;
+  }
+  return null;
+}
+
+function formatApprovalStatusLabel(status: DesktopApproval["status"]): string {
+  if (status === "granted") return "审批已通过";
+  if (status === "denied") return "审批已拒绝";
+  if (status === "expired") return "审批已过期";
+  return "等待审批";
+}
+
+function formatApprovalResolvedDetail(status: DesktopApproval["status"]): string {
+  if (status === "granted") return "审批已通过，运行已继续。";
+  if (status === "denied") return "审批已拒绝，工具没有执行。";
+  if (status === "expired") return "审批已过期，不再可处理。";
+  return "这条工具调用尚未执行。";
+}
+
 function formatPayload(payload: unknown): string {
   if (typeof payload === "string") return payload;
   if (typeof payload === "number" || typeof payload === "boolean") return String(payload);
@@ -854,7 +1032,11 @@ function formatPayload(payload: unknown): string {
   }
 }
 
-function approvalFromEventPayload(payload: unknown, runId: string | null | undefined): DesktopApproval | undefined {
+function approvalFromEventPayload(
+  payload: unknown,
+  runId: string | null | undefined,
+  status: DesktopApproval["status"] = "pending",
+): DesktopApproval | undefined {
   if (!payload || typeof payload !== "object") return undefined;
   const record = payload as Record<string, unknown>;
   const id = typeof record.approvalId === "string" ? record.approvalId : undefined;
@@ -865,7 +1047,7 @@ function approvalFromEventPayload(payload: unknown, runId: string | null | undef
     runId,
     pluginId: typeof record.pluginId === "string" ? record.pluginId : "runtime",
     capability: typeof record.capability === "string" ? record.capability : "tool.approval",
-    status: "pending",
+    status,
     request: record.request,
     decidedAt: null,
   };
@@ -989,6 +1171,18 @@ function summarizeToolPipelineEvent(event: DesktopEvent | null): {
   }
   if (phase === "approved") {
     return { label: `已批准：${toolLabel}`, detail: "审批通过，准备恢复这条工具调用。", tone: "success" };
+  }
+  if (phase === "approval_executed") {
+    const summary = typeof payload.summary === "string" && payload.summary.trim()
+      ? payload.summary.trim()
+      : "审批通过后的工具调用已执行完成。";
+    return { label: `已执行：${toolLabel}`, detail: summary, tone: "success" };
+  }
+  if (phase === "approval_failed") {
+    const error = typeof payload.error === "string" && payload.error.trim()
+      ? payload.error.trim()
+      : "审批通过后的工具调用执行失败。";
+    return { label: `执行失败：${toolLabel}`, detail: error, tone: "danger" };
   }
   if (phase === "denied") {
     return { label: `已拒绝：${toolLabel}`, detail: "审批被拒绝，本轮不会执行这条工具调用。", tone: "danger" };
@@ -2543,13 +2737,52 @@ function ApprovalCard({
   );
 }
 
+function ApprovalReceiptCard({
+  approval,
+  viewState,
+}: {
+  approval: DesktopApproval;
+  viewState: ApprovalViewState;
+}) {
+  const requestSummary = summarizeApprovalRequest(approval.request);
+  const tone: SignalTone = viewState.execution === "failed"
+    ? "danger"
+    : viewState.status === "denied" || viewState.status === "expired"
+      ? "warn"
+      : viewState.execution === "executed"
+        ? "success"
+        : "accent";
+  const target = approvalTargetLabel(approval, requestSummary);
+  const timeLabel = viewState.updatedAt ? new Date(viewState.updatedAt).toLocaleTimeString() : null;
+
+  return (
+    <div className={`approval-receipt-card approval-receipt-${viewState.execution}`}>
+      <div className="approval-receipt-head">
+        <div>
+          <span className="tiny">审批回执</span>
+          <h3>{approvalActionLabel(approval, requestSummary)}</h3>
+        </div>
+        <SignalPill tone={tone}>{viewState.label}</SignalPill>
+      </div>
+      <p className="muted">{viewState.detail}</p>
+      <div className="approval-receipt-meta">
+        <span>目标：{target}</span>
+        <span>审批：{approval.id.slice(0, 12)}</span>
+        {timeLabel ? <span>更新时间：{timeLabel}</span> : null}
+      </div>
+    </div>
+  );
+}
+
 function ApprovalReviewCard({
   approval,
   decisionState,
+  executionState,
   onDecision,
 }: {
   approval: DesktopApproval;
   decisionState?: "approving" | "approved" | "denied";
+  executionState?: ApprovalViewState;
   onDecision: (approvalId: string, decision: "granted" | "denied") => void;
 }) {
   const requestSummary = summarizeApprovalRequest(approval.request);
@@ -2615,6 +2848,7 @@ function ApprovalReviewCard({
 
       {decisionState === "approved" ? <p className="approval-state-note">已通过，正在恢复运行...</p> : null}
       {decisionState === "denied" ? <p className="approval-state-note">已拒绝，当前运行会停在这里。</p> : null}
+      {!decisionState && executionState?.detail ? <p className="approval-state-note">{executionState.detail}</p> : null}
 
       <div className="approval-actions approval-review-actions">
         <button

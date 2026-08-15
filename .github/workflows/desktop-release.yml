@@ -25,7 +25,7 @@ jobs:
           - os: windows-latest
             artifact_name: shiguang-agent-windows
             artifact_globs: |
-              release/拾光 Agent Setup *.exe
+              release/*.exe
               release/win-unpacked/**
 
     steps:

@@ -54,6 +54,7 @@ export interface AgentApprovalResumeInput {
   runId: string;
   userMessage: string;
   signal?: AbortSignal;
+  approvalId?: string;
   approvedAction: {
     toolName: string;
     toolInput?: unknown;
@@ -151,6 +152,15 @@ export class Agent {
       };
 
       const approvedResult = await this.dispatcher.dispatch(approvedDecision, input.runId, { signal: input.signal });
+      await this.options.eventSink.record(input.runId, "tool_pipeline", {
+        phase: approvedResult.ok ? "approval_executed" : "approval_failed",
+        approvalId: input.approvalId ?? null,
+        tool: input.approvedAction.toolName,
+        input: input.approvedAction.toolInput,
+        ok: approvedResult.ok,
+        summary: summarizeActionResultForEvent(approvedResult),
+        ...(approvedResult.error ? { error: approvedResult.error } : {}),
+      });
       const initialHistory = [approvedResult];
       const initialWorkingMemory = applyActionResultToWorkingMemory(
         { step: 0, lastActionKind: null },
@@ -465,6 +475,19 @@ function summarizeAssistantTurn(state: LoopState): string {
 function summarizeFailureTurn(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return `Run failed before completion: ${message}`;
+}
+
+function summarizeActionResultForEvent(result: ActionResult): string {
+  if (result.metadata?.summary) {
+    return String(result.metadata.summary).replace(/\s+/g, " ").trim().slice(0, 160);
+  }
+  if (result.error) return result.error.slice(0, 160);
+  if (typeof result.output === "string") return result.output.replace(/\s+/g, " ").trim().slice(0, 160);
+  try {
+    return JSON.stringify(result.output).slice(0, 160);
+  } catch {
+    return String(result.output).slice(0, 160);
+  }
 }
 
 function summarizeRecentWork(history: ActionResult[], limit = 4): string {

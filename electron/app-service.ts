@@ -614,6 +614,9 @@ export class DesktopAppService {
     if (!approval) {
       throw new Error(`Approval not found: ${approvalId}`);
     }
+    if (approval.status !== "pending") {
+      return coreApprovalToDesktop(approval);
+    }
 
     const decidedAt = new Date();
     await this.approvalRepository.update(approvalId, {
@@ -1084,6 +1087,7 @@ export class DesktopAppService {
         runId: run.id,
         userMessage,
         signal: controller.signal,
+        approvalId: approval.id,
         approvedAction,
         contextInput: {
           task,
