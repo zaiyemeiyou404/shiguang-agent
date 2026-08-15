@@ -7,3 +7,4 @@ export * from "./kernel/index.js";
 export * from "./brain/index.js";
 export * from "./tools/index.js";
 export * from "./app/index.js";
+export * from "./workspace/index.js";

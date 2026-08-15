@@ -8,8 +8,9 @@
   deleteShiguangData:
     DetailPrint "Removing Shiguang Agent data..."
 
-    ; New data location used by packaged builds.
+    ; New data locations used by packaged builds.
     RMDir /r "$INSTDIR\shiguang-agent-data"
+    RMDir /r "G:\CodexData\shiguang-agent-data"
 
     ; Legacy locations used by earlier builds before userData was redirected.
     RMDir /r "$APPDATA\shiguang-agent"
@@ -19,6 +20,10 @@
     Delete "$APPDATA\Electron\shiguang-state.sqlite-journal"
     Delete "$APPDATA\Electron\shiguang-store.json"
     Delete "$APPDATA\Electron\shiguang.config.json"
+    Delete "$APPDATA\Electron\memory\shiguang-memory.sqlite"
+    Delete "$APPDATA\Electron\memory\shiguang-memory.sqlite-shm"
+    Delete "$APPDATA\Electron\memory\shiguang-memory.sqlite-wal"
+    Delete "$APPDATA\Electron\memory\shiguang-memory.sqlite-journal"
 
   shiguangDataDone:
 !macroend

@@ -1,5 +1,5 @@
 import { DesktopStore } from "./store.js";
-import { app, dialog, shell } from "electron";
+import { dialog, shell } from "electron";
 import type {
   DesktopSession,
   DesktopRun,
@@ -80,6 +80,8 @@ import {
   type ResolvedMcpServerConfig,
   type ToolApprovalMode,
 } from "./config.js";
+import { getShiguangWorkspacePolicy } from "./user-data.js";
+import type { WorkspacePolicy } from "../dist/workspace/policy.js";
 import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -99,10 +101,9 @@ function approvalAllowlistForMode(mode: ToolApprovalMode): string[] {
 
 type StateDatabase = ReturnType<typeof openStateDatabase>;
 
-function resolveDedicatedMemoryDatabasePath(userDataPath: string): string {
-  const memoryDir = join(userDataPath, "memory");
-  mkdirSync(memoryDir, { recursive: true });
-  return join(memoryDir, "shiguang-memory.sqlite");
+function resolveDedicatedMemoryDatabasePath(policy: Pick<WorkspacePolicy, "memoryDir" | "memoryDbPath">): string {
+  mkdirSync(policy.memoryDir, { recursive: true });
+  return policy.memoryDbPath;
 }
 
 function migrateLegacyMemoriesToDedicatedDatabase(stateDbPath: string, memoryDb: StateDatabase): void {
@@ -195,10 +196,10 @@ export class DesktopAppService {
 
   constructor(store: DesktopStore) {
     this.store = store;
-    const userDataPath = app.getPath("userData");
-    const stateDbPath = join(userDataPath, "shiguang-state.sqlite");
+    const workspacePolicy = getShiguangWorkspacePolicy();
+    const stateDbPath = workspacePolicy.stateDbPath;
     const db = openStateDatabase(stateDbPath);
-    const memoryDb = openStateDatabase(resolveDedicatedMemoryDatabasePath(userDataPath));
+    const memoryDb = openStateDatabase(resolveDedicatedMemoryDatabasePath(workspacePolicy));
     migrateLegacyMemoriesToDedicatedDatabase(stateDbPath, memoryDb);
     this.sessionRepository = new SqliteSessionRepository(db);
     this.taskRepository = new SqliteTaskRepository(db);

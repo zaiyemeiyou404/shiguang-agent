@@ -1,7 +1,7 @@
-import { app } from "electron";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { dirname } from "node:path";
 import type { DesktopSession, DesktopRun, DesktopEvent } from "./types.js";
+import { getShiguangWorkspacePolicy } from "./user-data.js";
 
 interface StoreData {
   sessions: DesktopSession[];
@@ -14,11 +14,11 @@ export class DesktopStore {
   private filePath: string;
 
   constructor() {
-    const userDataPath = app.getPath("userData");
-    if (!existsSync(userDataPath)) {
-      mkdirSync(userDataPath, { recursive: true });
+    const policy = getShiguangWorkspacePolicy();
+    if (!existsSync(dirname(policy.storePath))) {
+      mkdirSync(dirname(policy.storePath), { recursive: true });
     }
-    this.filePath = join(userDataPath, "shiguang-store.json");
+    this.filePath = policy.storePath;
     this.data = this.load();
   }
 

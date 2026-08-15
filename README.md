@@ -2,16 +2,16 @@
 
 拾光 Agent 是一个轻量级桌面 AI Agent。它把对话、工作区文件操作、工具调用、审批、运行记录和上下文压缩放在一个 Electron 桌面界面里，目标是做成一个下载后即可配置使用的小型个人工作台。
 
-当前版本：`0.2.16`
+当前版本：`0.2.17`
 
 ## 下载使用
 
 在 GitHub Releases 页面下载 Windows 版本：
 
-- 安装包：`拾光 Agent Setup 0.2.16.exe`
+- 安装包：`拾光 Agent Setup 0.2.17.exe`
 - 免安装版：`win-unpacked.zip`
 
-`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.16`，才会生成新的正式 Release。
+`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.17`，才会生成新的正式 Release。
 
 如果使用免安装版，解压后运行：
 
@@ -42,7 +42,9 @@ Windows 安装版默认优先使用：
 G:\CodexData\shiguang-agent-data\
 ```
 
-如果没有 `G:` 盘，则回退到安装目录旁边的 `shiguang-agent-data`。也可以通过设置页修改工作区，或用环境变量 `SHIGUANG_USER_DATA_DIR` / `SHIGUANG_WORKSPACE_ROOT` 覆盖。
+如果没有 `G:` 盘，则回退到安装目录旁边的 `shiguang-agent-data`。本地 `release/win-unpacked` 测试包会优先复用项目根目录的 `shiguang-agent-data`，避免测试包把状态散落到 release 子目录。也可以通过设置页修改工作区，或用环境变量 `SHIGUANG_USER_DATA_DIR` / `SHIGUANG_WORKSPACE_ROOT` 覆盖。
+
+Workspace Policy Registry 会统一决定数据目录、配置文件、状态库、长期记忆库、默认工作区和旧数据迁移来源。Electron 的 `userData`、`shiguang.config.json`、`shiguang-store.json`、`shiguang-state.sqlite`、`memory/shiguang-memory.sqlite` 都从同一个 policy 读取路径，避免“记忆在一个地方、工作区在另一个地方”的散乱问题。
 
 ## 支持的模型服务
 
@@ -93,6 +95,8 @@ $env:GEMINI_API_KEY="你的 key"
 - 工具省 token：LLM 规划时只发送当前任务最相关的一组工具 schema，工具执行输出进入历史前会自动摘要/截断，避免每一步反复塞入全量工具定义和大段文件内容。
 - Tool Contract Registry：每个工具统一声明来源、类别、阶段、风险、审批、成本、前后置建议和完成信号；planner、审批、MCP 适配和事件日志共用这一套规则。
 - Provider Contract Registry：每个模型服务统一声明 native tools、JSON mode、system prompt 形态、usage、fallback 请求模式和本地/远程成本等级；例如 Ollama 会直接走 plain JSON，避免多打一次不支持的 native tool/json_object 请求。
+- Workspace Policy Registry：统一声明用户数据根目录、配置、状态库、记忆库、默认工作区和旧数据迁移来源；开发版、本地 release 测试包、正式安装包都会走同一套规则。
+- 提示词 grounding：系统提示会要求 Agent 区分“用户明确指定的文件”和“从旧上下文推断出的文件”，回答“这个文件/你看到了啥/读了哪个文件”时优先说明证据来源，减少复读旧摘要和乱指代。
 - 项目 Agent Profile：工作区可以提供 `.shiguang/agents/default.md`，声明项目级角色、模型偏好、工具白名单和额外规则；运行时会自动注入 profile，并只把允许的工具暴露给 planner。
 - 循环防护：连续相同的只读工具动作会自动暂停并说明原因；模型请求数、总 token 和上下文估算 token 都有默认预算，也可通过环境变量调整。
 - 自动续跑与费用保护：Agent 每 72 个动作步作为一个内部工作分片；默认只做 1 次保护性自动续跑，仍未形成最终反馈时会暂停并说明最近动作，避免模型/工具循环持续消耗 API 余额。
@@ -319,4 +323,14 @@ docs/tool-protocol.md
 
 ```text
 docs/provider-contract.md
+```
+
+## 工作区 Workspace Policy
+
+拾光 Agent 使用 `shiguang.workspace.policy.v1` 统一决定用户数据目录、配置文件、状态库、长期记忆库、默认工作区和旧数据迁移来源。Electron `userData`、设置页、会话缓存、SQLite 状态和记忆库都从这层 policy 读取路径。
+
+详细设计见：
+
+```text
+docs/workspace-policy.md
 ```

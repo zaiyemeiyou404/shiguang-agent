@@ -69,7 +69,10 @@ export function buildContext(input: ContextBuilderInput): ContextBundle {
         : 0.7;
     volatile.push(
       makeItem("run_summary", "volatile", `run:${run.id}`,
-        `[${run.status}] ${run.summary}`, runScore, "direct", {
+        `[previous_run status=${run.status}] ${run.summary}\nUse as background only. It is not the current user request, and any file/path in it may be inferred unless the latest user turn repeats it.`,
+        runScore,
+        "direct",
+        {
           runId: run.id,
           status: run.status,
           startedAt: run.startedAt?.toISOString() ?? null,

@@ -1,12 +1,16 @@
-import { app, safeStorage } from "electron";
+import { safeStorage } from "electron";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, normalize, resolve } from "node:path";
+import { dirname, normalize, resolve } from "node:path";
+import {
+  resolveConfigPathFromPolicy,
+  resolveWorkspaceRootFromPolicy,
+} from "../dist/workspace/policy.js";
+import { getShiguangWorkspacePolicy } from "./user-data.js";
 
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_MODEL = "gpt-4o-mini";
 const DEFAULT_MAX_TOKENS = 2048;
 const DEFAULT_TOOL_APPROVAL_MODE = "ask";
-const DEFAULT_WORKSPACE_DIR_NAME = "workspace";
 
 export type ProviderProtocol = "openai-compatible" | "anthropic" | "gemini";
 export type ProviderAuthMode = "api_key" | "none";
@@ -187,9 +191,7 @@ function mergeProviderCatalog(fileProviders?: Record<string, ProviderConfigFile>
 }
 
 export function getDesktopConfigPath(): string {
-  return process.env.SHIGUANG_CONFIG_PATH
-    ? resolve(process.env.SHIGUANG_CONFIG_PATH)
-    : join(app.getPath("userData"), "shiguang.config.json");
+  return resolveConfigPathFromPolicy(getShiguangWorkspacePolicy(), process.env);
 }
 
 export function loadDesktopConfig(): ResolvedDesktopConfig {
@@ -260,17 +262,13 @@ export function getDesktopSettings(): DesktopSettings {
 }
 
 function resolveWorkspaceRoot(configuredWorkspaceRoot?: string): string {
-  const workspaceRoot = resolve(normalize(
-    process.env.SHIGUANG_WORKSPACE_ROOT
-    ?? configuredWorkspaceRoot
-    ?? defaultWorkspaceRoot(),
-  ));
+  const workspaceRoot = resolveWorkspaceRootFromPolicy({
+    env: process.env,
+    userDataRoot: getShiguangWorkspacePolicy().userDataRoot,
+    configuredWorkspaceRoot,
+  });
   mkdirSync(workspaceRoot, { recursive: true });
   return workspaceRoot;
-}
-
-function defaultWorkspaceRoot(): string {
-  return join(app.getPath("userData"), DEFAULT_WORKSPACE_DIR_NAME);
 }
 
 export function saveDesktopSettings(settings: DesktopSettings): DesktopSettings {
