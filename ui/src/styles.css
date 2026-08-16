@@ -3028,6 +3028,145 @@ body::before {
   word-break: break-word;
 }
 
+.message-markdown {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.message-markdown p,
+.message-markdown blockquote,
+.message-markdown ul,
+.message-markdown ol,
+.message-markdown pre,
+.message-markdown table {
+  margin: 0;
+}
+
+.message-markdown p,
+.message-markdown li,
+.message-markdown blockquote {
+  white-space: pre-wrap;
+}
+
+.message-markdown h1,
+.message-markdown h2,
+.message-markdown h3,
+.message-markdown h4 {
+  margin: 2px 0 0;
+  color: var(--text);
+  font-weight: 820;
+  letter-spacing: -0.025em;
+  line-height: 1.25;
+}
+
+.message-markdown h1 { font-size: 22px; }
+.message-markdown h2 { font-size: 19px; }
+.message-markdown h3 { font-size: 17px; }
+.message-markdown h4 { font-size: 15px; }
+
+.message-markdown ul,
+.message-markdown ol {
+  display: grid;
+  gap: 6px;
+  padding-left: 22px;
+}
+
+.message-markdown li {
+  padding-left: 2px;
+}
+
+.message-markdown blockquote {
+  padding: 8px 12px;
+  border-left: 3px solid rgba(143, 115, 255, 0.38);
+  border-radius: 10px;
+  background: rgba(143, 115, 255, 0.08);
+  color: var(--text-soft);
+}
+
+.message-markdown code {
+  padding: 2px 5px;
+  border: 1px solid rgba(120, 98, 180, 0.14);
+  border-radius: 6px;
+  background: rgba(143, 115, 255, 0.10);
+  color: var(--text);
+  font-family: "JetBrains Mono", "Cascadia Code", ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.92em;
+}
+
+.markdown-codeblock {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(120, 98, 180, 0.14);
+  border-radius: 14px;
+  background: rgba(8, 10, 16, 0.92);
+}
+
+.markdown-codeblock pre {
+  overflow-x: auto;
+  padding: 14px;
+}
+
+.markdown-codeblock code {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(244, 244, 245, 0.86);
+  white-space: pre;
+}
+
+.markdown-code-lang {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(244, 244, 245, 0.56);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.markdown-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.message-markdown table {
+  width: 100%;
+  min-width: 360px;
+  border-collapse: collapse;
+  border: 1px solid rgba(120, 98, 180, 0.14);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.message-markdown th,
+.message-markdown td {
+  padding: 8px 10px;
+  border: 1px solid rgba(120, 98, 180, 0.12);
+  text-align: left;
+  vertical-align: top;
+}
+
+.message-markdown th {
+  background: rgba(143, 115, 255, 0.10);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.message-markdown a {
+  color: #7ab8ff;
+  text-decoration: none;
+}
+
+.message-markdown a:hover {
+  text-decoration: underline;
+}
+
 .chat-pane .toolbar {
   justify-content: flex-end;
 }
