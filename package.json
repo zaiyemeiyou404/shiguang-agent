@@ -1,6 +1,6 @@
 {
   "name": "shiguang-agent",
-  "version": "0.2.25",
+  "version": "0.2.26",
   "description": "拾光 — a lightweight hybrid agent runtime with structured context, durable state, and pluggable tools.",
   "private": true,
   "type": "module",
@@ -67,6 +67,9 @@
       "artifactName": "shiguang-agent-setup-${version}.${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "拾光 Agent",
       "deleteAppDataOnUninstall": false,
       "include": "build/installer.nsh"
     }

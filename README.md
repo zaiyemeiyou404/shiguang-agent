@@ -2,7 +2,7 @@
 
 拾光 Agent 是一个轻量级桌面 AI Agent。它把对话、工作区文件操作、工具调用、审批、运行记录和上下文压缩放在一个 Electron 桌面界面里，目标是做成一个下载后即可配置使用的小型个人工作台。
 
-当前版本：`0.2.25`
+当前版本：`0.2.26`
 
 本版重点：会话自动命名、每个会话独立工作区、会话/运行 token 计量，以及非 DeepSeek provider 的模型显示优化。
 
@@ -10,10 +10,12 @@
 
 在 GitHub Releases 页面下载 Windows 版本：
 
-- 安装包：`shiguang-agent-setup-0.2.25.exe`
+- 安装包：`shiguang-agent-setup-0.2.26.exe`
 - 免安装版：`win-unpacked.zip`
 
-`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.25`，才会生成新的正式 Release。
+安装包安装完成后会创建桌面快捷方式和开始菜单快捷方式。桌面上出现的是快捷方式，不是复制出来的独立 `.exe` 文件。
+
+`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.26`，才会生成新的正式 Release。
 
 如果使用免安装版，解压后运行：
 
@@ -283,8 +285,8 @@ examples/          示例配置
 推送 tag 后会自动构建 Release：
 
 ```bash
-git tag v0.2.25
-git push origin v0.2.25
+git tag v0.2.26
+git push origin v0.2.26
 ```
 
 Release 会上传：
