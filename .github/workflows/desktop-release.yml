@@ -25,7 +25,7 @@ jobs:
           - os: windows-latest
             artifact_name: shiguang-agent-windows
             artifact_globs: |
-              release/*.exe
+              release/shiguang-agent-setup-*.exe
               release/win-unpacked/**
 
     steps:
@@ -82,7 +82,7 @@ jobs:
         run: |
           mkdir -p release-files
           find release-artifacts -type f \( \
-            -name '*.exe' -o \
+            -name 'shiguang-agent-setup-*.exe' -o \
             -name 'win-unpacked.zip' \
           \) -exec cp {} release-files/ \;
           ls -R release-files
@@ -117,7 +117,7 @@ jobs:
         run: |
           mkdir -p release-files
           find release-artifacts -type f \( \
-            -name '*.exe' -o \
+            -name 'shiguang-agent-setup-*.exe' -o \
             -name 'win-unpacked.zip' \
           \) -exec cp {} release-files/ \;
           ls -R release-files
