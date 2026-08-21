@@ -3732,16 +3732,24 @@ function summarizeApiKeySource(draft: ProviderDraft): string {
   return "缺失";
 }
 
+type SettingsDrawerMode = "full" | "model";
+
 function SettingsDrawer({
   open,
   onClose,
   settings,
   onSaved,
+  mode = "full",
+  activeSessionId,
+  onSessionWorkspaceChanged,
 }: {
   open: boolean;
   onClose: () => void;
   settings: DesktopSettings | null;
   onSaved: (settings: DesktopSettings) => void;
+  mode?: SettingsDrawerMode;
+  activeSessionId?: string | null;
+  onSessionWorkspaceChanged?: () => void | Promise<void>;
 }) {
   const [workspaceRoot, setWorkspaceRoot] = useState("");
   const [activeProvider, setActiveProvider] = useState("openai");
@@ -3760,6 +3768,7 @@ function SettingsDrawer({
 
   const providerOptions = useMemo(() => Object.keys(providerCatalog), [providerCatalog]);
   const providerDraft = providerCatalog[activeProvider] ?? createProviderDraft(activeProvider);
+  const fullMode = mode === "full";
 
   useEffect(() => {
     if (!settings || !open) return;
@@ -4034,13 +4043,27 @@ function SettingsDrawer({
     setTestingConnection(true);
     setConnectionResult(null);
     try {
-      const mcpServers = parseMcpServersJson(mcpServersJson);
+      const workspaceChanged = fullMode && workspaceRoot.trim() !== (settings.workspaceRoot ?? "");
+      const mcpServers = fullMode ? parseMcpServersJson(mcpServersJson) : settings.mcpServers;
       const next = {
-        ...buildSettings(settings, providerCatalog, workspaceRoot, activeProvider, activeModel, maxTokens, toolApprovalMode),
+        ...buildSettings(
+          settings,
+          providerCatalog,
+          fullMode ? workspaceRoot : settings.workspaceRoot,
+          activeProvider,
+          activeModel,
+          maxTokens,
+          fullMode ? toolApprovalMode : (settings.toolApprovalMode ?? "ask"),
+        ),
         mcpServers,
       };
-      const saved = await requireDesktopBridge().saveSettings(next);
+      const bridge = requireDesktopBridge();
+      const saved = await bridge.saveSettings(next);
       onSaved(saved);
+      if (workspaceChanged && activeSessionId && saved.workspaceRoot.trim()) {
+        await bridge.updateSessionWorkspace({ sessionId: activeSessionId, workspaceRoot: saved.workspaceRoot });
+        await onSessionWorkspaceChanged?.();
+      }
       const testResult = await runConnectionTest();
       setSaveState(`已保存到 ${saved.configPath} · ${testResult.ok ? "连接成功" : "连接失败"}`);
     } catch (error) {
@@ -4077,12 +4100,12 @@ function SettingsDrawer({
     ? providerDraftFromSettings(settings, activeProvider)
     : createProviderDraft(activeProvider);
   const providerDirty = JSON.stringify(normalizeProviderDraftForCompare(providerDraft)) !== JSON.stringify(normalizeProviderDraftForCompare(selectedSavedDraft));
-  const runtimeDirty = workspaceRoot.trim() !== (settings.workspaceRoot ?? "")
-    || activeProvider !== (settings.llm.provider ?? "openai")
+  const runtimeDirty = activeProvider !== (settings.llm.provider ?? "openai")
     || activeModel.trim() !== (settings.llm.model ?? "")
     || maxTokens.trim() !== (settings.llm.maxTokens ? String(settings.llm.maxTokens) : "")
-    || toolApprovalMode !== (settings.toolApprovalMode ?? "ask")
-    || mcpServersJson.trim() !== formatMcpServersJson(settings.mcpServers).trim();
+    || (fullMode && workspaceRoot.trim() !== (settings.workspaceRoot ?? ""))
+    || (fullMode && toolApprovalMode !== (settings.toolApprovalMode ?? "ask"))
+    || (fullMode && mcpServersJson.trim() !== formatMcpServersJson(settings.mcpServers).trim());
   const effectiveModelSource = activeModel.trim()
     ? "当前配置 llm.model"
     : providerDraft.model.trim()
@@ -4116,6 +4139,136 @@ function SettingsDrawer({
     { label: "运行 maxTokens", current: formatSettingsValue(maxTokens), saved: formatSettingsValue(settings.llm.maxTokens ? String(settings.llm.maxTokens) : "") },
     { label: "工具审批", current: toolApprovalModeLabel(toolApprovalMode), saved: toolApprovalModeLabel(settings.toolApprovalMode ?? "ask") },
   ].filter((item) => item.current !== item.saved);
+  const visibleRuntimeDiffItems = fullMode ? runtimeDiffItems : runtimeDiffItems.slice(1, 4);
+
+  if (!fullMode) {
+    return (
+      <div style={{ position: "fixed", inset: 0, background: "rgba(5,8,14,0.58)", backdropFilter: "blur(8px)", zIndex: 20, display: "flex", justifyContent: "flex-end" }}>
+        <aside className="panel settings-drawer settings-drawer-model-only">
+          <div className="titlebar" style={{ padding: 0, borderBottom: "none" }}>
+            <div className="title-group">
+              <h2>模型切换</h2>
+              <p>这里只改当前运行 Provider、模型和 maxTokens；工作区请从左下角设置里改。</p>
+            </div>
+            <div className="toolbar">
+              <ToolBtn onClick={onClose}>关闭</ToolBtn>
+              <ToolBtn onClick={() => { void testConnection(); }}>{testingConnection ? "测试中..." : "测试连接"}</ToolBtn>
+              <ToolBtn primary onClick={save}>{saving ? "保存中..." : "保存模型"}</ToolBtn>
+            </div>
+          </div>
+
+          <div className="settings-summary-grid">
+            <div className="settings-summary-card">
+              <span className="tiny">当前运行</span>
+              <strong>{settings.llm.provider || activeProvider}</strong>
+              <p className="muted">{settings.llm.model || providerDraft.model || "未固定模型"}</p>
+            </div>
+            <div className="settings-summary-card">
+              <span className="tiny">正在编辑</span>
+              <strong>{activeProvider}</strong>
+              <p className="muted">{activeModel || providerDraft.model || "未设置模型"}</p>
+            </div>
+            <div className="settings-summary-card">
+              <span className="tiny">连接状态</span>
+              <strong>{connectionLabel}</strong>
+              <p className="muted">{connectionResult?.detail ?? "保存前可先测试 provider 连接。"}</p>
+            </div>
+          </div>
+
+          <div className="detail-block settings-section-stack">
+            <div className="section-title"><h3>选择 Provider</h3><span className="tiny">{providerOptions.length} 个来源</span></div>
+            <div className="provider-registry-grid">
+              {providerOptions.map((key) => {
+                const draft = providerCatalog[key];
+                const selected = key === activeProvider;
+                const runtimeActive = key === settings.llm.provider;
+                return (
+                  <button
+                    key={key}
+                    className={`provider-registry-item${selected ? " active" : ""}`}
+                    type="button"
+                    onClick={() => switchProvider(key)}
+                  >
+                    <div className="provider-registry-head">
+                      <strong>{key}</strong>
+                      <SignalPill tone={providerTone(draft)}>{providerLabel(draft)}</SignalPill>
+                    </div>
+                    <p>{draft.model || "未设默认模型"}</p>
+                    <div className="provider-meta-row">
+                      <span>{draft.type}</span>
+                      {runtimeActive ? <span>当前运行</span> : null}
+                      {selected ? <span>正在编辑</span> : null}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="detail-block settings-section-stack">
+            <div className="section-title"><h3>模型</h3><span className="tiny">{activeProvider}</span></div>
+            <div className="settings-inline-grid">
+              <div>
+                <label className="tiny">运行模型</label>
+                <input className="settings-input" value={activeModel} onChange={(e) => setActiveModel(e.target.value)} placeholder="deepseek-v4-flash / gpt-5 / openai/gpt-5" />
+                {activeProviderModelOptions.length > 0 ? (
+                  <div className="provider-action-row provider-action-row-tight model-preset-row">
+                    {activeProviderModelOptions.map((option) => (
+                      <button
+                        key={`model-only-${option.value}`}
+                        className={`tool-btn${activeModel.trim() === option.value ? " primary" : ""}`}
+                        type="button"
+                        title={option.hint}
+                        onClick={() => applyProviderModelOption(option)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+              <div>
+                <label className="tiny">最大 Tokens</label>
+                <input className="settings-input" value={maxTokens} onChange={(e) => setMaxTokens(e.target.value)} placeholder="4096" />
+              </div>
+            </div>
+            <p className="muted" style={{ margin: 0 }}>{connectionResult?.detail ?? authSummary}</p>
+          </div>
+
+          <div className="detail-block settings-section-stack">
+            <div className="section-title"><h4>待保存差异</h4><span className="tiny">{providerDiffItems.length + visibleRuntimeDiffItems.length} 项变更</span></div>
+            {providerDiffItems.length + visibleRuntimeDiffItems.length > 0 ? (
+              <div className="settings-diff-list">
+                {visibleRuntimeDiffItems.map((item) => (
+                  <div key={`model-runtime-${item.label}`} className="settings-diff-item">
+                    <span className="tiny">运行配置 · {item.label}</span>
+                    <div className="settings-diff-values">
+                      <span>{item.saved}</span>
+                      <strong>→</strong>
+                      <span>{item.current}</span>
+                    </div>
+                  </div>
+                ))}
+                {providerDiffItems.map((item) => (
+                  <div key={`model-provider-${item.label}`} className="settings-diff-item">
+                    <span className="tiny">Provider · {item.label}</span>
+                    <div className="settings-diff-values">
+                      <span>{item.saved}</span>
+                      <strong>→</strong>
+                      <span>{item.current}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="muted">模型配置没有待保存变更。</p>
+            )}
+            {saveState ? <p className="muted">{saveState}</p> : null}
+          </div>
+        </aside>
+      </div>
+    );
+  }
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(5,8,14,0.58)", backdropFilter: "blur(8px)", zIndex: 20, display: "flex", justifyContent: "flex-end" }}>
@@ -4403,10 +4556,10 @@ function SettingsDrawer({
         </div>
 
         <div className="detail-block settings-section-stack">
-          <div className="section-title"><h4>待保存差异</h4><span className="tiny">{providerDiffItems.length + runtimeDiffItems.length} 项变更</span></div>
-          {providerDiffItems.length + runtimeDiffItems.length > 0 ? (
+          <div className="section-title"><h4>待保存差异</h4><span className="tiny">{providerDiffItems.length + visibleRuntimeDiffItems.length} 项变更</span></div>
+          {providerDiffItems.length + visibleRuntimeDiffItems.length > 0 ? (
             <div className="settings-diff-list">
-              {runtimeDiffItems.map((item) => (
+              {visibleRuntimeDiffItems.map((item) => (
                 <div key={`runtime-${item.label}`} className="settings-diff-item">
                   <span className="tiny">运行配置 · {item.label}</span>
                   <div className="settings-diff-values">
@@ -4469,6 +4622,7 @@ export default function App() {
   const [sessionDrafts, setSessionDrafts] = useState<Record<string, string>>(() => readSessionDrafts());
   const [sending, setSending] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsMode, setSettingsMode] = useState<SettingsDrawerMode>("full");
   const [surface, setSurface] = useState<MainSurface>("home");
   const [settings, setSettings] = useState<DesktopSettings | null>(null);
   const [decisionState, setDecisionState] = useState<Record<string, "approving" | "approved" | "denied">>({});
@@ -5263,7 +5417,8 @@ export default function App() {
     }
   };
 
-  const openSettings = async () => {
+  const openSettings = async (mode: SettingsDrawerMode = "full") => {
+    setSettingsMode(mode);
     setSettingsOpen(true);
     try {
       setSettings(await requireDesktopBridge().getSettings());
@@ -5313,7 +5468,18 @@ export default function App() {
       <div className="ambient" />
       <div className="grid" />
       <div className="noise" />
-      <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} settings={settings} onSaved={setSettings} />
+      <SettingsDrawer
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        settings={settings}
+        onSaved={setSettings}
+        mode={settingsMode}
+        activeSessionId={activeSessionId}
+        onSessionWorkspaceChanged={async () => {
+          await refreshSessions();
+          await refreshDetail();
+        }}
+      />
       <NewSessionDialog
         open={newSessionOpen}
         value={newSessionTitle}
@@ -5630,7 +5796,7 @@ export default function App() {
                   <div className="composer-footer">
                     <div className="composer-actions">
                     <button className="composer-action" type="button" onClick={() => { void handlePickAttachments(); }} disabled={!activeSessionId || sending || isProcessingRun || runActionState !== "idle"}>📎 附件{selectedAttachments.length > 0 ? ` (${selectedAttachments.length})` : ""}</button>
-                    <button className="composer-action" type="button" onClick={() => { void openSettings(); }}>⚙ 模型</button>
+                    <button className="composer-action" type="button" onClick={() => { void openSettings("model"); }}>⚙ 模型</button>
                   </div>
                   <div className="composer-right-actions">
                     <div className="composer-token-meter" title={liveRunUsageSummary.requests > 0 ? "当前 run 的实时模型用量" : "当前会话累计模型用量"}>
@@ -6141,7 +6307,7 @@ export default function App() {
                 <div className="composer-footer">
                   <div className="composer-actions">
                     <button className="composer-action" type="button" onClick={() => { void handlePickAttachments(); }} disabled={!activeSessionId || sending || isProcessingRun || runActionState !== "idle"}>📎 附件{selectedAttachments.length > 0 ? ` (${selectedAttachments.length})` : ""}</button>
-                    <button className="composer-action" type="button" onClick={() => { void openSettings(); }}>⚙ 模型</button>
+                    <button className="composer-action" type="button" onClick={() => { void openSettings("model"); }}>⚙ 模型</button>
                   </div>
                   <button className={`send-btn ${isProcessingRun ? (composerHasPayload ? "supplement" : "pause") : ""}`} type="button" onClick={() => { void handleSend(); }} disabled={!canSubmitComposer}>
                     {composerSendLabel}

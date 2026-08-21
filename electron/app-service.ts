@@ -416,6 +416,24 @@ export class DesktopAppService {
     return this.decorateSession(updated);
   }
 
+  async updateSessionWorkspace(sessionId: string, workspaceRoot: string): Promise<DesktopSession> {
+    const session = this.store.getSession(sessionId);
+    if (!session) throw new Error(`Session not found: ${sessionId}`);
+    const trimmed = workspaceRoot.trim();
+    if (!trimmed) throw new Error("Workspace root cannot be empty.");
+    const resolvedWorkspaceRoot = resolve(normalize(trimmed));
+    mkdirSync(resolvedWorkspaceRoot, { recursive: true });
+    const updatedAt = new Date().toISOString();
+    const updated = this.store.updateSession(sessionId, {
+      workspaceRoot: resolvedWorkspaceRoot,
+      updatedAt,
+    });
+    if (!updated) throw new Error(`Session not found: ${sessionId}`);
+    await this.ensureSqliteSession(updated);
+    await this.sessionRepository.update(sessionId, { updatedAt: new Date(updatedAt) });
+    return this.decorateSession(updated);
+  }
+
   async deleteSession(sessionId: string): Promise<{ sessionId: string }> {
     const session = this.store.getSession(sessionId);
     if (!session) throw new Error(`Session not found: ${sessionId}`);

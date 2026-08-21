@@ -109,6 +109,11 @@ export interface SessionStatusRequest {
   status: DesktopSession["status"];
 }
 
+export interface SessionWorkspaceRequest {
+  sessionId: string;
+  workspaceRoot: string;
+}
+
 export interface SessionDeleteRequest {
   sessionId: string;
 }
@@ -220,6 +225,7 @@ export interface ShiguangBridge {
   branchSession(req: SessionBranchRequest): Promise<DesktopSessionBranchResult>;
   renameSession(req: SessionRenameRequest): Promise<DesktopSession>;
   updateSessionStatus(req: SessionStatusRequest): Promise<DesktopSession>;
+  updateSessionWorkspace(req: SessionWorkspaceRequest): Promise<DesktopSession>;
   deleteSession(req: SessionDeleteRequest): Promise<{ sessionId: string }>;
   getSessionDetail(sessionId: string): Promise<DesktopSessionDetail>;
   getWorkspaceSnapshot(sessionId: string): Promise<DesktopWorkspaceSnapshot>;

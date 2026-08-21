@@ -16,6 +16,7 @@ const bridge: ShiguangBridge = {
   branchSession: (req) => ipcRenderer.invoke("branchSession", req),
   renameSession: (req) => ipcRenderer.invoke("renameSession", req),
   updateSessionStatus: (req) => ipcRenderer.invoke("updateSessionStatus", req),
+  updateSessionWorkspace: (req) => ipcRenderer.invoke("updateSessionWorkspace", req),
   deleteSession: (req) => ipcRenderer.invoke("deleteSession", req),
   getSessionDetail: (sessionId: string) => ipcRenderer.invoke("getSessionDetail", sessionId),
   getWorkspaceSnapshot: (sessionId: string) => ipcRenderer.invoke("getWorkspaceSnapshot", sessionId),
