@@ -16,6 +16,7 @@ import type {
   DesktopProviderSettings,
   DesktopAttachment,
   DesktopSessionBranchResult,
+  DesktopTokenUsage,
 } from "./types.js";
 import { Agent } from "../dist/app/agent.js";
 import { RepositoryEventSink } from "../dist/runtime/event-sink.js";
@@ -82,7 +83,7 @@ import {
 } from "./config.js";
 import { getShiguangWorkspacePolicy } from "./user-data.js";
 import type { WorkspacePolicy } from "../dist/workspace/policy.js";
-import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, normalize, resolve } from "node:path";
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -174,6 +175,104 @@ function migrateLegacyMemoriesToDedicatedDatabase(stateDbPath: string, memoryDb:
   }
 }
 
+function createEmptyTokenUsage(): DesktopTokenUsage {
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    requests: 0,
+    latestTotalTokens: null,
+  };
+}
+
+function readUsageNumber(payload: Record<string, unknown>, key: string): number | null {
+  const value = payload[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function accumulateModelUsageEvent(total: DesktopTokenUsage, event: RunEvent): void {
+  if (event.kind !== "model_usage") return;
+  const payload = event.payload && typeof event.payload === "object"
+    ? event.payload as Record<string, unknown>
+    : {};
+  const input = readUsageNumber(payload, "inputTokens") ?? 0;
+  const output = readUsageNumber(payload, "outputTokens") ?? 0;
+  const requestTotal = readUsageNumber(payload, "totalTokens")
+    ?? readUsageNumber(payload, "promptEstimateTokens")
+    ?? input + output;
+
+  total.inputTokens += input;
+  total.outputTokens += output;
+  total.totalTokens += requestTotal;
+  total.requests += 1;
+  total.latestTotalTokens = readUsageNumber(payload, "cumulativeTotalTokens") ?? requestTotal;
+}
+
+function defaultSessionWorkspaceRoot(baseWorkspaceRoot: string, sessionId: string): string {
+  return resolve(normalize(join(resolve(normalize(baseWorkspaceRoot)), ".shiguang", "sessions", sessionId)));
+}
+
+const AUTO_TITLE_DEFAULTS = new Set([
+  "new session",
+  "default session",
+  "auto-created session",
+  "新会话",
+  "默认会话",
+]);
+
+function isAutoTitleCandidate(session: DesktopSession): boolean {
+  const title = session.title.trim();
+  if (!title) return true;
+  const normalized = title.toLowerCase();
+  return AUTO_TITLE_DEFAULTS.has(normalized)
+    || /^new session\s*\d*$/i.test(title)
+    || /^default session\s*\d*$/i.test(title)
+    || /^新会话\s*\d*$/.test(title);
+}
+
+function inferAutoTitlePrefix(text: string): string {
+  if (/修|报错|错误|失败|error|bug|问题/.test(text)) return "修复 ";
+  if (/发布|上传|github|release|提交|推送/.test(text)) return "发布 ";
+  if (/写|创建|生成|新建|做个|做一个/.test(text)) return "创建 ";
+  if (/优化|完善|改|调整|重做|设计|UI|ui/.test(text)) return "优化 ";
+  if (/看|分析|检查|能不能跑|读取|查看/.test(text)) return "查看 ";
+  return "";
+}
+
+function extractPathTitleCandidate(text: string): string | null {
+  const matches = text.match(/(?:[a-zA-Z]:[\\/]|\\\\|\/|\.{1,2}[\\/])(?:[^\s"'`<>，。；;、]+[\\/]?)+/g) ?? [];
+  for (const raw of matches.reverse()) {
+    const cleaned = raw.replace(/[\\/\s"'`<>，。；;、]+$/g, "");
+    const name = basename(cleaned);
+    if (name && name !== "." && name !== "..") return name;
+  }
+  return null;
+}
+
+function stripTitleFiller(text: string): string {
+  return text
+    .replace(/^[？?\s]+/, "")
+    .replace(/^(请|麻烦|帮我|帮忙|给我|你能不能|能不能|可以|把)\s*/g, "")
+    .replace(/^(看一下|看看|查看一下|查看|分析一下|分析|检查一下|检查|修一下|修复一下|修复|改一下|改|优化一下|优化|做一下|做|写一个|写个|创建一个|创建)\s*/g, "")
+    .replace(/[。！？?!；;，,\s]+$/g, "")
+    .trim();
+}
+
+function clampAutoSessionTitle(title: string, maxLength = 28): string {
+  const chars = Array.from(title.replace(/\s+/g, " ").trim());
+  if (chars.length <= maxLength) return chars.join("");
+  return `${chars.slice(0, maxLength - 1).join("")}…`;
+}
+
+function buildAutoSessionTitle(message: string, attachments: DesktopAttachment[] = []): string {
+  const normalized = message.replace(/\s+/g, " ").trim();
+  const pathName = extractPathTitleCandidate(normalized);
+  const attachmentName = attachments[0]?.name?.replace(/\.[^.]+$/, "").trim() || null;
+  const subject = pathName || attachmentName || stripTitleFiller(normalized) || "新会话";
+  const prefix = pathName || attachmentName ? inferAutoTitlePrefix(normalized) : "";
+  return clampAutoSessionTitle(`${prefix}${subject}`);
+}
+
 function escapeSqliteString(value: string): string {
   return value.replace(/'/g, "''");
 }
@@ -231,13 +330,18 @@ export class DesktopAppService {
 
   async createSession(title?: string): Promise<DesktopSession> {
     const now = new Date().toISOString();
+    const id = nextId("sess");
+    const desktopConfig = loadDesktopConfig();
+    const workspaceRoot = defaultSessionWorkspaceRoot(desktopConfig.workspaceRoot, id);
+    mkdirSync(workspaceRoot, { recursive: true });
     const session: DesktopSession = {
-      id: nextId("sess"),
+      id,
       title: title || "New Session",
       status: "active",
       createdAt: now,
       updatedAt: now,
       summary: null,
+      workspaceRoot,
     };
     const stored = this.store.createSession(session);
     await this.sessionRepository.create(desktopSessionToCore(stored));
@@ -324,23 +428,29 @@ export class DesktopAppService {
   }
 
   async getSessionDetail(sessionId: string): Promise<DesktopSessionDetail> {
-    const session = this.store.getSession(sessionId);
+    let session = this.store.getSession(sessionId);
     if (!session) {
       throw new Error(`Session not found: ${sessionId}`);
     }
+    session = this.ensureSessionWorkspace(session);
     await this.ensureSqliteSession(session);
     await this.refreshSessionSummary(sessionId);
     const refreshedSession = this.store.getSession(sessionId) ?? session;
-    const [runs, turns] = await Promise.all([
+    const [runs, turns, tokenUsage] = await Promise.all([
       this.runRepository.listBySession(sessionId),
       this.turnRepository.listBySession(sessionId, 200),
+      this.summarizeSessionTokenUsage(sessionId),
     ]);
-    const conversation = await this.buildSessionConversation(sessionId, turns, runs);
+    const [conversation, desktopRuns] = await Promise.all([
+      this.buildSessionConversation(sessionId, turns, runs),
+      Promise.all(runs.map((run) => this.decorateRun(run))),
+    ]);
     return {
       session: await this.decorateSession(refreshedSession),
-      runs: runs.map(coreRunToDesktop),
+      runs: desktopRuns,
       turns: turns.map(coreTurnToDesktop),
       conversation,
+      tokenUsage,
     };
   }
 
@@ -399,7 +509,9 @@ export class DesktopAppService {
       session = await this.createSession("Auto-created session");
       sessionId = session.id;
     }
+    session = this.ensureSessionWorkspace(session);
     await this.ensureSqliteSession(session);
+    session = await this.maybeAutoTitleSession(session, message, attachments);
 
     const runId = nextId("run");
     const now = new Date();
@@ -445,7 +557,7 @@ export class DesktopAppService {
     }
 
     (async () => {
-      const { agent, label, workspaceRoot } = await this.createAgentRuntime(sink);
+      const { agent, label, workspaceRoot } = await this.createAgentRuntime(sink, session.workspaceRoot ?? undefined);
       const currentRunBeforeStart = await this.runRepository.get(runId);
       if (controller.signal.aborted || isRunStoppedByUser(currentRunBeforeStart?.status)) {
         return;
@@ -798,7 +910,69 @@ export class DesktopAppService {
     });
   }
 
+  private ensureSessionWorkspace(session: DesktopSession): DesktopSession {
+    const desktopConfig = loadDesktopConfig();
+    const workspaceRoot = session.workspaceRoot?.trim()
+      ? resolve(normalize(session.workspaceRoot))
+      : defaultSessionWorkspaceRoot(desktopConfig.workspaceRoot, session.id);
+    mkdirSync(workspaceRoot, { recursive: true });
+    if (session.workspaceRoot === workspaceRoot) return session;
+    return this.store.updateSession(session.id, { workspaceRoot }) ?? { ...session, workspaceRoot };
+  }
+
+  private async maybeAutoTitleSession(session: DesktopSession, message: string, attachments: DesktopAttachment[]): Promise<DesktopSession> {
+    if (!isAutoTitleCandidate(session)) return session;
+
+    const [runs, turns] = await Promise.all([
+      this.runRepository.listBySession(session.id),
+      this.turnRepository.listBySession(session.id, 5),
+    ]);
+    if (runs.length > 0 || turns.some((turn) => turn.role === "user")) return session;
+
+    const title = buildAutoSessionTitle(message, attachments);
+    if (!title || title === session.title) return session;
+
+    const updatedAt = new Date().toISOString();
+    const updated = this.store.updateSession(session.id, { title, updatedAt });
+    await this.sessionRepository.update(session.id, {
+      title,
+      updatedAt: new Date(updatedAt),
+    });
+    return updated ?? { ...session, title, updatedAt };
+  }
+
+  private async summarizeSessionTokenUsage(sessionId: string): Promise<DesktopTokenUsage> {
+    const usage = createEmptyTokenUsage();
+    const runs = await this.runRepository.listBySession(sessionId);
+    for (const run of runs) {
+      const runUsage = await this.summarizeRunTokenUsage(run.id);
+      usage.inputTokens += runUsage.inputTokens;
+      usage.outputTokens += runUsage.outputTokens;
+      usage.totalTokens += runUsage.totalTokens;
+      usage.requests += runUsage.requests;
+      usage.latestTotalTokens = runUsage.latestTotalTokens ?? usage.latestTotalTokens;
+    }
+    return usage;
+  }
+
+  private async summarizeRunTokenUsage(runId: string): Promise<DesktopTokenUsage> {
+    const usage = createEmptyTokenUsage();
+    const events = await this.runEventRepository.listByRun(runId);
+    for (const event of events) {
+      accumulateModelUsageEvent(usage, event);
+    }
+    return usage;
+  }
+
+  private async decorateRun(run: Run): Promise<DesktopRun> {
+    return {
+      ...coreRunToDesktop(run),
+      tokenUsage: await this.summarizeRunTokenUsage(run.id),
+    };
+  }
+
   private async decorateSession(session: DesktopSession): Promise<DesktopSession> {
+    session = this.ensureSessionWorkspace(session);
     await this.syncApprovalsForSession(session.id);
     const runs = (await this.runRepository.listBySession(session.id)).map(coreRunToDesktop);
     const latestRun = runs[0] ?? null;
@@ -818,13 +992,14 @@ export class DesktopAppService {
     };
   }
 
-  private async createAgentRuntime(sink: RepositoryEventSink): Promise<{
+  private async createAgentRuntime(sink: RepositoryEventSink, workspaceRootOverride?: string): Promise<{
     agent: Agent;
     label: string;
     workspaceRoot: string;
   }> {
     const desktopConfig = loadDesktopConfig();
-    const workspaceRoot = resolve(normalize(desktopConfig.workspaceRoot));
+    const workspaceRoot = resolve(normalize(workspaceRootOverride ?? desktopConfig.workspaceRoot));
+    mkdirSync(workspaceRoot, { recursive: true });
     const agentProfile = loadProjectAgentProfile(workspaceRoot);
     const llmConfig = agentProfile?.model
       ? { ...desktopConfig.llm, model: agentProfile.model }
@@ -952,16 +1127,18 @@ export class DesktopAppService {
     try {
       const workspaceRoot = resolve(normalize(input.targetPath));
       assertUsableWorkspaceRoot(workspaceRoot);
-      const currentSettings = getDesktopSettings();
-      saveDesktopSettings({
-        ...currentSettings,
-        workspaceRoot,
-      });
 
       const completedAt = new Date();
+      const updatedSession = this.store.updateSession(input.sessionId, {
+        workspaceRoot,
+        updatedAt: completedAt.toISOString(),
+      });
+      if (!updatedSession) {
+        throw new Error(`Session not found: ${input.sessionId}`);
+      }
       const assistantMessage = [
-        `工作区已切换到：${workspaceRoot}`,
-        "后续新运行会在这个目录里调用 read/search/write/validation 工具。",
+        `当前会话工作区已切换到：${workspaceRoot}`,
+        "后续本会话的新运行会在这个目录里调用 read/search/write/validation 工具；其他会话不会被影响。",
       ].join("\n");
       await input.sink.record(input.runId, "message", { role: "assistant", content: assistantMessage });
       await this.turnRepository.create({
@@ -1068,7 +1245,9 @@ export class DesktopAppService {
     }
 
     const sink = this.createRunEventSink();
-    const { agent, label, workspaceRoot } = await this.createAgentRuntime(sink);
+    const session = this.store.getSession(run.sessionId);
+    const sessionWorkspace = session ? this.ensureSessionWorkspace(session).workspaceRoot ?? undefined : undefined;
+    const { agent, label, workspaceRoot } = await this.createAgentRuntime(sink, sessionWorkspace);
     const userMessage = await this.loadLatestUserMessage(run.sessionId, task);
     const controller = new AbortController();
     this.activeRunControllers.set(run.id, controller);

@@ -7,6 +7,14 @@ export interface DesktopSessionAttention {
   hasContextCompaction: boolean;
 }
 
+export interface DesktopTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  requests: number;
+  latestTotalTokens: number | null;
+}
+
 export interface DesktopSession {
   id: string;
   title: string;
@@ -14,6 +22,8 @@ export interface DesktopSession {
   createdAt: string;
   updatedAt: string;
   summary: string | null;
+  workspaceRoot?: string | null;
+  tokenUsage?: DesktopTokenUsage;
   attention?: DesktopSessionAttention;
 }
 
@@ -25,6 +35,7 @@ export interface DesktopRun {
   startedAt: string | null;
   endedAt: string | null;
   summary: string | null;
+  tokenUsage?: DesktopTokenUsage;
 }
 
 export interface DesktopTurn {
@@ -119,6 +130,7 @@ export interface DesktopSessionDetail {
   runs: DesktopRun[];
   turns: DesktopTurn[];
   conversation: DesktopConversationEntry[];
+  tokenUsage: DesktopTokenUsage;
 }
 
 export interface DesktopWorkspaceSnapshot {

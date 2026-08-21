@@ -1,7 +1,7 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useDesktopSessions, useRunEvents } from "./hooks/useDesktopSessions";
 import { getDesktopBridge, getDesktopBridgeErrorMessage, requireDesktopBridge } from "./bridge";
-import type { DesktopSession, DesktopRun, DesktopConversationEntry, DesktopEvent, DesktopSettings, DesktopApproval, DesktopArtifact, DesktopProviderConnectionResult, DesktopAttachment, ToolApprovalMode } from "./bridge";
+import type { DesktopSession, DesktopRun, DesktopConversationEntry, DesktopEvent, DesktopSettings, DesktopApproval, DesktopArtifact, DesktopProviderConnectionResult, DesktopAttachment, DesktopTokenUsage, ToolApprovalMode } from "./bridge";
 
 type PillVariant = "progress" | "safe" | "auto" | "todo";
 type BannerVariant = "info" | "warn" | "danger" | "success";
@@ -113,9 +113,12 @@ function findProviderPreset(key: string): ProviderDraft | null {
   return PROVIDER_PRESETS.find((preset) => preset.key === key) ?? null;
 }
 
+function isDeepSeekProvider(key: string, draft: ProviderDraft): boolean {
+  return `${key} ${draft.baseURL}`.toLowerCase().includes("deepseek");
+}
+
 function modelOptionsForProvider(key: string, draft: ProviderDraft): ProviderModelOption[] {
-  const marker = `${key} ${draft.baseURL}`.toLowerCase();
-  if (marker.includes("deepseek")) return DEEPSEEK_MODEL_OPTIONS;
+  if (isDeepSeekProvider(key, draft)) return DEEPSEEK_MODEL_OPTIONS;
   return [];
 }
 
@@ -458,6 +461,97 @@ function formatAttachmentSize(size: number | null): string {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function fileUriFromPath(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, "/");
+  const withLeadingSlash = /^[a-zA-Z]:\//.test(normalized) ? `/${normalized}` : normalized;
+  return `file://${encodeURI(withLeadingSlash)}`;
+}
+
+function desktopAttachmentFromFile(file: File): DesktopAttachment | null {
+  const path = typeof (file as File & { path?: unknown }).path === "string"
+    ? (file as File & { path: string }).path
+    : "";
+  if (!path) return null;
+  return {
+    name: file.name || path.split(/[\\/]/).pop() || path,
+    path,
+    uri: fileUriFromPath(path),
+    size: Number.isFinite(file.size) ? file.size : null,
+  };
+}
+
+const EMPTY_TOKEN_USAGE: DesktopTokenUsage = {
+  inputTokens: 0,
+  outputTokens: 0,
+  totalTokens: 0,
+  requests: 0,
+  latestTotalTokens: null,
+};
+
+function normalizeTokenUsage(usage: DesktopTokenUsage | null | undefined): DesktopTokenUsage {
+  if (!usage) return EMPTY_TOKEN_USAGE;
+  return {
+    inputTokens: Number.isFinite(usage.inputTokens) ? usage.inputTokens : 0,
+    outputTokens: Number.isFinite(usage.outputTokens) ? usage.outputTokens : 0,
+    totalTokens: Number.isFinite(usage.totalTokens) ? usage.totalTokens : 0,
+    requests: Number.isFinite(usage.requests) ? usage.requests : 0,
+    latestTotalTokens: typeof usage.latestTotalTokens === "number" && Number.isFinite(usage.latestTotalTokens)
+      ? usage.latestTotalTokens
+      : null,
+  };
+}
+
+function subtractTokenUsage(left: DesktopTokenUsage, right: DesktopTokenUsage): DesktopTokenUsage {
+  return {
+    inputTokens: Math.max(0, left.inputTokens - right.inputTokens),
+    outputTokens: Math.max(0, left.outputTokens - right.outputTokens),
+    totalTokens: Math.max(0, left.totalTokens - right.totalTokens),
+    requests: Math.max(0, left.requests - right.requests),
+    latestTotalTokens: left.latestTotalTokens,
+  };
+}
+
+function addTokenUsage(left: DesktopTokenUsage, right: DesktopTokenUsage): DesktopTokenUsage {
+  return {
+    inputTokens: left.inputTokens + right.inputTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
+    totalTokens: left.totalTokens + right.totalTokens,
+    requests: left.requests + right.requests,
+    latestTotalTokens: right.latestTotalTokens ?? left.latestTotalTokens,
+  };
+}
+
+function summarizeModelUsage(events: DesktopEvent[]): DesktopTokenUsage {
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let totalTokens = 0;
+  let requests = 0;
+  let latestTotalTokens: number | null = null;
+
+  for (const event of events) {
+    if (event.kind !== "model_usage") continue;
+    const payload = event.payload as Record<string, unknown> | undefined;
+    const input = typeof payload?.inputTokens === "number" ? payload.inputTokens : 0;
+    const output = typeof payload?.outputTokens === "number" ? payload.outputTokens : 0;
+    const total = typeof payload?.totalTokens === "number"
+      ? payload.totalTokens
+      : typeof payload?.promptEstimateTokens === "number"
+        ? payload.promptEstimateTokens
+        : input + output;
+    inputTokens += input;
+    outputTokens += output;
+    totalTokens += total;
+    latestTotalTokens = typeof payload?.cumulativeTotalTokens === "number" ? payload.cumulativeTotalTokens : total;
+    requests += 1;
+  }
+
+  return { inputTokens, outputTokens, totalTokens, requests, latestTotalTokens };
+}
+
+function formatTokenCount(value: number): string {
+  return value.toLocaleString();
+}
+
 function eventTone(kind: DesktopEvent["kind"]): SignalTone {
   if (kind === "error") return "danger";
   if (kind === "approval_request" || kind === "approval_granted" || kind === "approval_denied") return "warn";
@@ -505,7 +599,6 @@ function SessionCard({ active, session, pinned, onClick, onTogglePin }: {
         : session.attention?.hasRunningRun
           ? "运行中"
           : formatSessionStatus(session.status);
-  const preview = session.summary ?? "打开后继续这个会话。";
   return (
     <article className={`session-card${active ? " active" : ""}${pinned ? " pinned" : ""}`} onClick={onClick} style={{ cursor: "pointer" }}>
       <div className="session-top" style={{ alignItems: "center", gap: 8 }}>
@@ -527,7 +620,6 @@ function SessionCard({ active, session, pinned, onClick, onTogglePin }: {
         </div>
         <span className="session-card-status">{statusLabel}</span>
       </div>
-      <p className="session-preview">{preview}</p>
       <div className="session-card-meta">
         <span>{formatAgeFromTimestamp(session.updatedAt) ?? "刚刚更新"}</span>
         {pinned ? <span>已固定</span> : null}
@@ -1988,14 +2080,18 @@ function formatAgeFromTimestamp(timestamp: string | null | undefined, now = Date
   if (Number.isNaN(parsed)) return null;
   const diffMs = Math.max(0, now - parsed);
   const seconds = Math.floor(diffMs / 1000);
-  if (seconds < 5) return "刚刚";
-  if (seconds < 60) return `${seconds}s 前`;
+  if (seconds < 10) return "刚刚";
+  if (seconds < 60) return `${seconds} 秒前`;
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m 前`;
+  if (minutes < 60) return `${minutes} 分钟前`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h 前`;
+  if (hours < 24) return `${hours} 小时前`;
   const days = Math.floor(hours / 24);
-  return `${days}d 前`;
+  if (days < 30) return `${days} 天前`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months} 个月前`;
+  const years = Math.floor(days / 365);
+  return `${years} 年前`;
 }
 
 function formatDurationFromMs(durationMs: number): string {
@@ -4358,6 +4454,11 @@ export default function App() {
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [selectedAttachments, setSelectedAttachments] = useState<DesktopAttachment[]>([]);
+  const [composerHeight, setComposerHeight] = useState(188);
+  const [composerDragging, setComposerDragging] = useState(false);
+  const [composerDragActive, setComposerDragActive] = useState(false);
+  const [sessionPaneWidth, setSessionPaneWidth] = useState(300);
+  const [sessionPaneDragging, setSessionPaneDragging] = useState(false);
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   const [newSessionTitle, setNewSessionTitle] = useState("新会话");
   const [newSessionError, setNewSessionError] = useState<string | null>(null);
@@ -4394,6 +4495,24 @@ export default function App() {
   const pendingApprovals = workspaceSnapshot?.pendingApprovals ?? [];
   const artifacts = workspaceSnapshot?.artifacts ?? [];
   const sortedEvents = useMemo(() => [...deferredEvents].sort((a, b) => a.seq - b.seq), [deferredEvents]);
+  const liveRunUsageSummary = useMemo(() => summarizeModelUsage(sortedEvents), [sortedEvents]);
+  const sessionUsageSummary = useMemo(
+    () => normalizeTokenUsage(detail?.tokenUsage ?? detail?.session.tokenUsage),
+    [detail?.tokenUsage, detail?.session.tokenUsage],
+  );
+  const persistedActiveRunUsage = useMemo(
+    () => normalizeTokenUsage(activeRun?.tokenUsage),
+    [activeRun?.tokenUsage],
+  );
+  const usageSummary = useMemo(() => {
+    const isLiveRun = activeRun?.status === "pending"
+      || activeRun?.status === "running"
+      || activeRun?.status === "paused"
+      || activeRun?.status === "needs_approval";
+    if (!isLiveRun || liveRunUsageSummary.requests === 0) return sessionUsageSummary;
+    return addTokenUsage(sessionUsageSummary, subtractTokenUsage(liveRunUsageSummary, persistedActiveRunUsage));
+  }, [activeRun?.status, liveRunUsageSummary, persistedActiveRunUsage, sessionUsageSummary]);
+  const composerUsageSummary = liveRunUsageSummary.requests > 0 ? liveRunUsageSummary : usageSummary;
   const latestErrorEvent = [...sortedEvents].reverse().find((event) => event.kind === "error");
   const canShowCompactionBanner = activeRun?.status === "running" || activeRun?.status === "paused" || activeRun?.status === "needs_approval";
   const latestCompactionEvent = canShowCompactionBanner
@@ -4403,14 +4522,15 @@ export default function App() {
   const currentProvider = settings?.providers[settings?.llm.provider ?? ""];
   const providerLabel = settings?.llm.provider ?? "未设置";
   const modelLabel = settings?.llm.model ?? currentProvider?.model ?? "未设置";
+  const providerKey = settings?.llm.provider || "deepseek";
+  const providerDraft = settings ? providerDraftFromSettings(settings, providerKey) : null;
+  const isDeepSeekRuntime = providerDraft ? isDeepSeekProvider(providerKey, providerDraft) : false;
   const quickModelOptions = useMemo(() => {
-    if (!settings) return [];
-    const providerKey = settings.llm.provider || "deepseek";
-    const draft = providerDraftFromSettings(settings, providerKey);
-    return modelOptionsForProvider(providerKey, draft)
+    if (!settings || !providerDraft || !isDeepSeekRuntime) return [];
+    return modelOptionsForProvider(providerKey, providerDraft)
       .filter((option) => option.value === "deepseek-v4-flash" || option.value === "deepseek-v4-pro");
-  }, [settings]);
-  const workspaceLabel = settings?.workspaceRoot?.trim() ? settings.workspaceRoot : "未设置";
+  }, [isDeepSeekRuntime, providerDraft, providerKey, settings]);
+  const workspaceLabel = detail?.session.workspaceRoot?.trim() || settings?.workspaceRoot?.trim() || "未设置";
   const runtimeLabel = activeRun ? formatRunStatus(activeRun.status) : (activeSessionId ? "就绪" : "无会话");
   const streamLabel = formatStreamStateLabel(activeRunId ? streamState : "idle");
   const streamDetail = !activeRunId
@@ -4529,6 +4649,7 @@ export default function App() {
       && !sending
       && runActionState === "idle",
   );
+  const canAttachFiles = Boolean(activeSessionId && !sending && !isProcessingRun && runActionState === "idle");
   const composerTone: SignalTone = isRunAwaitingApproval
     ? "warn"
     : streamState === "error"
@@ -4723,6 +4844,7 @@ export default function App() {
       setSelectedAttachments([]);
       setSessionDrafts((prev) => ({ ...prev, [sid]: "" }));
       void refreshDetail();
+      void refreshSessions();
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       setActionError(`发送消息失败：${detail}`);
@@ -4962,6 +5084,103 @@ export default function App() {
     }
   };
 
+  const appendComposerFiles = (files: FileList | File[]): boolean => {
+    const fileItems = Array.from(files);
+    if (!fileItems.length) return false;
+    if (!canAttachFiles) {
+      setActionError("当前状态不能添加附件：请等发送/运行结束，或先暂停当前 run。");
+      return false;
+    }
+
+    const attachments = fileItems
+      .map(desktopAttachmentFromFile)
+      .filter((item): item is DesktopAttachment => Boolean(item));
+
+    if (!attachments.length) {
+      setActionError("粘贴或拖拽的文件没有本地路径，请用“附件”按钮选择同一个文件。");
+      return false;
+    }
+
+    setSelectedAttachments((prev) => {
+      const map = new Map(prev.map((item) => [item.path, item]));
+      for (const item of attachments) map.set(item.path, item);
+      return Array.from(map.values());
+    });
+    setActionError(null);
+    return true;
+  };
+
+  const handleComposerPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = event.clipboardData?.files;
+    if (!files || files.length === 0) return;
+    if (appendComposerFiles(files)) event.preventDefault();
+  };
+
+  const handleComposerDragOver = (event: React.DragEvent<HTMLElement>) => {
+    if (!canAttachFiles) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    setComposerDragActive(true);
+  };
+
+  const handleComposerDragLeave = (event: React.DragEvent<HTMLElement>) => {
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+    setComposerDragActive(false);
+  };
+
+  const handleComposerDrop = (event: React.DragEvent<HTMLElement>) => {
+    setComposerDragActive(false);
+    if (!event.dataTransfer?.files?.length) return;
+    event.preventDefault();
+    appendComposerFiles(event.dataTransfer.files);
+  };
+
+  const handleComposerResizeStart = (event: React.MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = composerHeight;
+    setComposerDragging(true);
+
+    const handleMove = (moveEvent: MouseEvent) => {
+      const nextHeight = Math.min(420, Math.max(132, startHeight + startY - moveEvent.clientY));
+      setComposerHeight(nextHeight);
+    };
+
+    const handleUp = () => {
+      setComposerDragging(false);
+      document.removeEventListener("mousemove", handleMove);
+      document.removeEventListener("mouseup", handleUp);
+    };
+
+    document.addEventListener("mousemove", handleMove);
+    document.addEventListener("mouseup", handleUp);
+  };
+
+  const handleSessionPaneResizeStart = (event: React.MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = sessionPaneWidth;
+    setSessionPaneDragging(true);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
+    const handleMove = (moveEvent: MouseEvent) => {
+      const nextWidth = Math.min(420, Math.max(220, startWidth + moveEvent.clientX - startX));
+      setSessionPaneWidth(nextWidth);
+    };
+
+    const handleUp = () => {
+      setSessionPaneDragging(false);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      document.removeEventListener("mousemove", handleMove);
+      document.removeEventListener("mouseup", handleUp);
+    };
+
+    document.addEventListener("mousemove", handleMove);
+    document.addEventListener("mouseup", handleUp);
+  };
+
   const handleRemoveAttachment = (path: string) => {
     setSelectedAttachments((prev) => prev.filter((item) => item.path !== path));
   };
@@ -5087,7 +5306,7 @@ export default function App() {
       />
 
       {true ? (
-        <div className="app simple-layout">
+        <div className="app simple-layout" style={{ "--session-pane-w": `${sessionPaneWidth}px` } as CSSProperties}>
           <aside className="panel app-nav-panel">
             <div className="app-nav-top">
               <div className="brand-mark">S</div>
@@ -5173,6 +5392,14 @@ export default function App() {
               ))}
             </div>
           </aside>
+
+          <div
+            className={`layout-col-resize${sessionPaneDragging ? " dragging" : ""}`}
+            role="separator"
+            aria-orientation="vertical"
+            title="拖动调整会话栏宽度"
+            onMouseDown={handleSessionPaneResizeStart}
+          />
 
           <main className="panel main chat-pane">
             <header className="chat-pane-header">
@@ -5315,7 +5542,21 @@ export default function App() {
                   />
                 </section>
 
-                <section className="composer composer-dock">
+                <div
+                  className={`chat-composer-resize${composerDragging ? " dragging" : ""}`}
+                  role="separator"
+                  aria-orientation="horizontal"
+                  title="拖动调整输入区高度"
+                  onMouseDown={handleComposerResizeStart}
+                />
+
+                <section
+                  className={`composer composer-dock${composerDragActive ? " dragging-over" : ""}`}
+                  style={{ flexBasis: composerHeight }}
+                  onDragOver={handleComposerDragOver}
+                  onDragLeave={handleComposerDragLeave}
+                  onDrop={handleComposerDrop}
+                >
                   <div className="composer-hint-row">
                   <SignalPill tone={composerTone}>
                     {activeRun?.status === "needs_approval" ? "需要审批" : activeRun ? formatRunStatus(activeRun.status) : "就绪"}
@@ -5334,6 +5575,7 @@ export default function App() {
                     }}
                   placeholder={composerPlaceholder}
                   disabled={!activeSessionId || sending || runActionState !== "idle"}
+                    onPaste={handleComposerPaste}
                     onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void handleSend(); } }}
                   />
                   {selectedAttachments.length > 0 ? (
@@ -5355,6 +5597,10 @@ export default function App() {
                     <button className="composer-action" type="button" onClick={() => { void openSettings(); }}>⚙ 模型</button>
                   </div>
                   <div className="composer-right-actions">
+                    <div className="composer-token-meter" title={liveRunUsageSummary.requests > 0 ? "当前 run 的实时模型用量" : "当前会话累计模型用量"}>
+                      <span>{formatTokenCount(composerUsageSummary.totalTokens)}</span>
+                      <small>tokens</small>
+                    </div>
                     {quickModelOptions.length > 0 ? (
                       <div className="composer-model-switch" aria-label="DeepSeek 模型快捷切换">
                         {quickModelOptions.map((option) => {
@@ -5373,7 +5619,12 @@ export default function App() {
                           );
                         })}
                       </div>
-                    ) : null}
+                    ) : (
+                      <div className="composer-current-model" title={`当前 provider：${providerLabel}`}>
+                        <span>{providerLabel}</span>
+                        <strong>{modelLabel}</strong>
+                      </div>
+                    )}
                     <button className={`send-btn ${isProcessingRun ? (composerHasPayload ? "supplement" : "pause") : ""}`} type="button" onClick={() => { void handleSend(); }} disabled={!canSubmitComposer}>
                       {composerSendLabel}
                     </button>
@@ -5383,6 +5634,35 @@ export default function App() {
               </>
             )}
           </main>
+          <footer className="statusbar app-statusbar">
+            <div className="stat-item">
+              <span className="stat-icon">↑</span>
+              <span className="stat-val">{formatTokenCount(usageSummary.inputTokens)}</span>
+              <span className="stat-label">发送</span>
+            </div>
+            <div className="stat-item">
+              <span className="stat-icon">↓</span>
+              <span className="stat-val">{formatTokenCount(usageSummary.outputTokens)}</span>
+              <span className="stat-label">接收</span>
+            </div>
+            <div className="statusbar-right">
+              <div className="stat-item">
+                <span className="stat-icon">▣</span>
+                <span className="stat-val">{formatTokenCount(usageSummary.totalTokens)}</span>
+                <span className="stat-label">Tokens 已用</span>
+              </div>
+              <div className="stat-item">
+                <span className="stat-icon">◇</span>
+                <span className="stat-val">{usageSummary.requests}</span>
+                <span className="stat-label">模型请求</span>
+              </div>
+              <div className="stat-item">
+                <span className="stat-icon">↯</span>
+                <span className="stat-val">{streamLabel}</span>
+                <span className="stat-label">{providerLabel} · {modelLabel}</span>
+              </div>
+            </div>
+          </footer>
         </div>
       ) : null}
       {/* <div className="app">
