@@ -3741,6 +3741,7 @@ function SettingsDrawer({
   onSaved,
   mode = "full",
   activeSessionId,
+  currentSessionWorkspaceRoot,
   onSessionWorkspaceChanged,
 }: {
   open: boolean;
@@ -3749,6 +3750,7 @@ function SettingsDrawer({
   onSaved: (settings: DesktopSettings) => void;
   mode?: SettingsDrawerMode;
   activeSessionId?: string | null;
+  currentSessionWorkspaceRoot?: string | null;
   onSessionWorkspaceChanged?: () => void | Promise<void>;
 }) {
   const [workspaceRoot, setWorkspaceRoot] = useState("");
@@ -4060,7 +4062,11 @@ function SettingsDrawer({
       const bridge = requireDesktopBridge();
       const saved = await bridge.saveSettings(next);
       onSaved(saved);
-      if (workspaceChanged && activeSessionId && saved.workspaceRoot.trim()) {
+      const shouldSyncCurrentSessionWorkspace = fullMode
+        && Boolean(activeSessionId)
+        && Boolean(saved.workspaceRoot.trim())
+        && (workspaceChanged || !sameDisplayPath(currentSessionWorkspaceRoot, saved.workspaceRoot));
+      if (shouldSyncCurrentSessionWorkspace && activeSessionId && saved.workspaceRoot.trim()) {
         await bridge.updateSessionWorkspace({ sessionId: activeSessionId, workspaceRoot: saved.workspaceRoot });
         await onSessionWorkspaceChanged?.();
       }
@@ -4148,7 +4154,7 @@ function SettingsDrawer({
           <div className="titlebar" style={{ padding: 0, borderBottom: "none" }}>
             <div className="title-group">
               <h2>模型切换</h2>
-              <p>这里只改当前运行 Provider、模型和 maxTokens；工作区请从左下角设置里改。</p>
+              <p>这里只改 Provider、模型、maxTokens 和 API；工作区请从左下角设置里改。</p>
             </div>
             <div className="toolbar">
               <ToolBtn onClick={onClose}>关闭</ToolBtn>
@@ -4233,6 +4239,61 @@ function SettingsDrawer({
               </div>
             </div>
             <p className="muted" style={{ margin: 0 }}>{connectionResult?.detail ?? authSummary}</p>
+          </div>
+
+          <div className="detail-block settings-section-stack">
+            <div className="section-title"><h3>API 设置</h3><span className="tiny">只影响当前 Provider，不修改工作区</span></div>
+            <div className="settings-inline-grid">
+              <div>
+                <label className="tiny">协议</label>
+                <select className="settings-input" value={providerDraft.type} onChange={(e) => patchActiveProvider((prev) => ({ ...prev, type: e.target.value as ProviderProtocol }))}>
+                  <option value="openai-compatible">openai-compatible</option>
+                  <option value="anthropic">anthropic</option>
+                  <option value="gemini">gemini</option>
+                </select>
+              </div>
+              <div>
+                <label className="tiny">鉴权方式</label>
+                <select className="settings-input" value={providerDraft.authMode} onChange={(e) => patchActiveProvider((prev) => ({ ...prev, authMode: e.target.value as ProviderAuthMode }))}>
+                  <option value="api_key">api_key</option>
+                  <option value="none">none</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <label className="tiny">Base URL</label>
+              <input className="settings-input" value={providerDraft.baseURL} onChange={(e) => patchActiveProvider((prev) => ({ ...prev, baseURL: e.target.value }))} placeholder="https://api.deepseek.com/v1" />
+            </div>
+            <div>
+              <label className="tiny">API Key</label>
+              <div className="settings-inline-grid settings-inline-grid-tight">
+                <input
+                  className="settings-input"
+                  type={showApiKey ? "text" : "password"}
+                  value={providerDraft.apiKey}
+                  onChange={(e) => patchActiveProvider((prev) => ({
+                    ...prev,
+                    apiKey: e.target.value,
+                    apiKeyMasked: e.target.value.trim() ? "" : prev.apiKeyMasked,
+                    hasStoredApiKey: e.target.value.trim() ? false : prev.hasStoredApiKey,
+                  }))}
+                  placeholder={providerDraft.authMode === "none"
+                    ? "可留空"
+                    : providerDraft.hasStoredApiKey
+                      ? `已保存 ${providerDraft.apiKeyMasked || "API Key"}；留空则保持不变`
+                      : "sk-... / 直接填入本地配置"}
+                  disabled={providerDraft.authMode === "none"}
+                />
+                <div className="provider-action-row provider-action-row-tight">
+                  <ToolBtn onClick={() => setShowApiKey((value) => !value)}>{showApiKey ? "隐藏" : "显示"}</ToolBtn>
+                  <ToolBtn onClick={clearStoredApiKey}>清空来源</ToolBtn>
+                </div>
+              </div>
+            </div>
+            <div>
+              <label className="tiny">API Key 环境变量</label>
+              <input className="settings-input" value={providerDraft.apiKeyEnv} onChange={(e) => patchActiveProvider((prev) => ({ ...prev, apiKeyEnv: e.target.value }))} placeholder={providerDraft.authMode === "none" ? "不需要" : "DEEPSEEK_API_KEY"} disabled={providerDraft.authMode === "none"} />
+            </div>
           </div>
 
           <div className="detail-block settings-section-stack">
@@ -5475,6 +5536,7 @@ export default function App() {
         onSaved={setSettings}
         mode={settingsMode}
         activeSessionId={activeSessionId}
+        currentSessionWorkspaceRoot={detail?.session.workspaceRoot ?? null}
         onSessionWorkspaceChanged={async () => {
           await refreshSessions();
           await refreshDetail();
