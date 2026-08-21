@@ -2,20 +2,20 @@
 
 拾光 Agent 是一个轻量级桌面 AI Agent。它把对话、工作区文件操作、工具调用、审批、运行记录和上下文压缩放在一个 Electron 桌面界面里，目标是做成一个下载后即可配置使用的小型个人工作台。
 
-当前版本：`0.2.26`
+当前版本：`0.2.27`
 
-本版重点：会话自动命名、每个会话独立工作区、会话/运行 token 计量，以及非 DeepSeek provider 的模型显示优化。
+本版重点：修复外部项目工作区被错误套进 `.shiguang/sessions` 的问题，并在界面中区分默认工作目录和当前会话目录。
 
 ## 下载使用
 
 在 GitHub Releases 页面下载 Windows 版本：
 
-- 安装包：`shiguang-agent-setup-0.2.26.exe`
+- 安装包：`shiguang-agent-setup-0.2.27.exe`
 - 免安装版：`win-unpacked.zip`
 
 安装包安装完成后会创建桌面快捷方式和开始菜单快捷方式。桌面上出现的是快捷方式，不是复制出来的独立 `.exe` 文件。
 
-`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.26`，才会生成新的正式 Release。
+`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.27`，才会生成新的正式 Release。
 
 如果使用免安装版，解压后运行：
 
@@ -49,6 +49,15 @@ G:\CodexData\shiguang-agent-data\
 如果没有 `G:` 盘，则回退到安装目录旁边的 `shiguang-agent-data`。本地 `release/win-unpacked` 测试包会优先复用项目根目录的 `shiguang-agent-data`，避免测试包把状态散落到 release 子目录。也可以通过设置页修改工作区，或用环境变量 `SHIGUANG_USER_DATA_DIR` / `SHIGUANG_WORKSPACE_ROOT` 覆盖。
 
 Workspace Policy Registry 会统一决定数据目录、配置文件、状态库、长期记忆库、默认工作区和旧数据迁移来源。Electron 的 `userData`、`shiguang.config.json`、`shiguang-store.json`、`shiguang-state.sqlite`、`memory/shiguang-memory.sqlite` 都从同一个 policy 读取路径，避免“记忆在一个地方、工作区在另一个地方”的散乱问题。
+
+### 默认工作目录和当前会话目录
+
+工作区分两层：
+
+- 默认工作目录：设置页里配置的目录，新会话会从这里开始。
+- 当前会话目录：本会话实际执行 `read/search/write/run_terminal_command` 的目录，底部状态栏和工作台状态卡会显示这个路径。
+
+如果默认工作目录是拾光自己的内置 `workspace/`，新会话会自动放进独立的 `.shiguang/sessions/<sessionId>`，避免多个空白会话互相覆盖文件。如果默认工作目录是用户手动选择的真实项目目录，例如 `G:\projects\xxx`，工具会直接在这个项目根目录执行，不再额外套一层 `.shiguang\sessions`。旧版本已经生成的 `项目\.shiguang\sessions\sess_*` 会在打开会话时自动纠正回项目根目录，不会删除旧文件。
 
 ## 支持的模型服务
 
@@ -285,8 +294,8 @@ examples/          示例配置
 推送 tag 后会自动构建 Release：
 
 ```bash
-git tag v0.2.26
-git push origin v0.2.26
+git tag v0.2.27
+git push origin v0.2.27
 ```
 
 Release 会上传：

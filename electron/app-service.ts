@@ -83,6 +83,10 @@ import {
 } from "./config.js";
 import { getShiguangWorkspacePolicy } from "./user-data.js";
 import type { WorkspacePolicy } from "../dist/workspace/policy.js";
+import {
+  defaultSessionWorkspaceRoot,
+  resolveSessionWorkspaceRoot,
+} from "../dist/workspace/session-workspace.js";
 import { basename, dirname, isAbsolute, join, normalize, resolve } from "node:path";
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -208,10 +212,6 @@ function accumulateModelUsageEvent(total: DesktopTokenUsage, event: RunEvent): v
   total.latestTotalTokens = readUsageNumber(payload, "cumulativeTotalTokens") ?? requestTotal;
 }
 
-function defaultSessionWorkspaceRoot(baseWorkspaceRoot: string, sessionId: string): string {
-  return resolve(normalize(join(resolve(normalize(baseWorkspaceRoot)), ".shiguang", "sessions", sessionId)));
-}
-
 const AUTO_TITLE_DEFAULTS = new Set([
   "new session",
   "default session",
@@ -332,7 +332,11 @@ export class DesktopAppService {
     const now = new Date().toISOString();
     const id = nextId("sess");
     const desktopConfig = loadDesktopConfig();
-    const workspaceRoot = defaultSessionWorkspaceRoot(desktopConfig.workspaceRoot, id);
+    const workspaceRoot = defaultSessionWorkspaceRoot({
+      baseWorkspaceRoot: desktopConfig.workspaceRoot,
+      defaultWorkspaceRoot: getShiguangWorkspacePolicy().defaultWorkspaceRoot,
+      sessionId: id,
+    });
     mkdirSync(workspaceRoot, { recursive: true });
     const session: DesktopSession = {
       id,
@@ -912,9 +916,12 @@ export class DesktopAppService {
 
   private ensureSessionWorkspace(session: DesktopSession): DesktopSession {
     const desktopConfig = loadDesktopConfig();
-    const workspaceRoot = session.workspaceRoot?.trim()
-      ? resolve(normalize(session.workspaceRoot))
-      : defaultSessionWorkspaceRoot(desktopConfig.workspaceRoot, session.id);
+    const workspaceRoot = resolveSessionWorkspaceRoot({
+      baseWorkspaceRoot: desktopConfig.workspaceRoot,
+      defaultWorkspaceRoot: getShiguangWorkspacePolicy().defaultWorkspaceRoot,
+      sessionId: session.id,
+      existingSessionWorkspaceRoot: session.workspaceRoot,
+    });
     mkdirSync(workspaceRoot, { recursive: true });
     if (session.workspaceRoot === workspaceRoot) return session;
     return this.store.updateSession(session.id, { workspaceRoot }) ?? { ...session, workspaceRoot };

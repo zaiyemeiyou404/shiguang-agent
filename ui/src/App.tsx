@@ -2052,7 +2052,7 @@ function approvalScopeRows(approval: DesktopApproval, summary: ReturnType<typeof
   ];
   const cwd = approvalInputText(input, ["cwd"]);
   const command = approvalInputText(input, ["command"]);
-  if (cwd && cwd !== rows[2]?.value) rows.push({ label: "工作目录", value: cwd });
+  if (cwd && cwd !== rows[2]?.value) rows.push({ label: "工具 cwd", value: cwd });
   if (command && command !== rows[2]?.value) rows.push({ label: "命令", value: command });
   return rows;
 }
@@ -3698,6 +3698,28 @@ function formatSettingsValue(value: string | null | undefined): string {
   return normalized ? normalized : "—";
 }
 
+function normalizePathDisplayValue(value: string | null | undefined): string {
+  return (value ?? "").trim().replace(/\\/g, "/").replace(/\/+$/g, "").toLowerCase();
+}
+
+function sameDisplayPath(a: string | null | undefined, b: string | null | undefined): boolean {
+  const left = normalizePathDisplayValue(a);
+  const right = normalizePathDisplayValue(b);
+  return left.length > 0 && left === right;
+}
+
+function compactPathTail(value: string | null | undefined): string {
+  const normalized = (value ?? "").trim();
+  if (!normalized) return "未设置";
+  const parts = normalized.replace(/\\/g, "/").split("/").filter(Boolean);
+  if (parts.length >= 2) return `${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
+  return parts[0] ?? normalized;
+}
+
+function isHiddenSessionWorkspace(value: string | null | undefined): boolean {
+  return /[\\\/]\.shiguang[\\\/]sessions[\\\/]sess_/i.test(value ?? "");
+}
+
 function toolApprovalModeLabel(mode: ToolApprovalMode | undefined): string {
   return mode === "workspace_edits" ? "自动批准工作区文件编辑" : "写文件前需要审批";
 }
@@ -4088,7 +4110,7 @@ function SettingsDrawer({
     { label: "默认模型", current: formatSettingsValue(providerDraft.model), saved: formatSettingsValue(selectedSavedDraft.model) },
   ].filter((item) => item.current !== item.saved);
   const runtimeDiffItems = [
-    { label: "工作目录", current: formatSettingsValue(workspaceRoot), saved: formatSettingsValue(settings.workspaceRoot) },
+    { label: "默认工作目录", current: formatSettingsValue(workspaceRoot), saved: formatSettingsValue(settings.workspaceRoot) },
     { label: "当前 Provider", current: activeProvider, saved: settings.llm.provider ?? "openai" },
     { label: "运行模型", current: formatSettingsValue(activeModel), saved: formatSettingsValue(settings.llm.model) },
     { label: "运行 maxTokens", current: formatSettingsValue(maxTokens), saved: formatSettingsValue(settings.llm.maxTokens ? String(settings.llm.maxTokens) : "") },
@@ -4188,8 +4210,11 @@ function SettingsDrawer({
           <div className="section-title"><h3>当前配置</h3><span className="tiny">{settings.configPath}</span></div>
           <div className="settings-inline-grid">
             <div>
-              <label className="tiny">工作目录</label>
+              <label className="tiny">默认工作目录</label>
               <input className="settings-input" value={workspaceRoot} onChange={(e) => setWorkspaceRoot(e.target.value)} />
+              <p className="muted" style={{ margin: "8px 0 0" }}>
+                新会话会从这里开始；当前会话如已切换项目目录，会优先使用自己的会话目录。
+              </p>
             </div>
             <div>
               <label className="tiny">当前 Provider</label>
@@ -4530,7 +4555,18 @@ export default function App() {
     return modelOptionsForProvider(providerKey, providerDraft)
       .filter((option) => option.value === "deepseek-v4-flash" || option.value === "deepseek-v4-pro");
   }, [isDeepSeekRuntime, providerDraft, providerKey, settings]);
-  const workspaceLabel = detail?.session.workspaceRoot?.trim() || settings?.workspaceRoot?.trim() || "未设置";
+  const defaultWorkspaceLabel = settings?.workspaceRoot?.trim() || "未设置";
+  const sessionWorkspaceLabel = detail?.session.workspaceRoot?.trim() || defaultWorkspaceLabel;
+  const workspaceLabel = sessionWorkspaceLabel;
+  const hasWorkspace = workspaceLabel !== "未设置";
+  const sessionHasOwnWorkspace = Boolean(detail?.session.workspaceRoot?.trim())
+    && !sameDisplayPath(detail?.session.workspaceRoot, defaultWorkspaceLabel);
+  const workspaceModeLabel = sessionHasOwnWorkspace ? "当前会话目录" : "默认目录";
+  const workspaceStatusDetail = isHiddenSessionWorkspace(workspaceLabel)
+    ? `${workspaceLabel} · 旧版隐藏会话目录，重新打开后会自动纠正`
+    : sessionHasOwnWorkspace
+      ? `${workspaceLabel} · 本会话已单独切换`
+      : workspaceLabel;
   const runtimeLabel = activeRun ? formatRunStatus(activeRun.status) : (activeSessionId ? "就绪" : "无会话");
   const streamLabel = formatStreamStateLabel(activeRunId ? streamState : "idle");
   const streamDetail = !activeRunId
@@ -5656,6 +5692,11 @@ export default function App() {
                 <span className="stat-val">{usageSummary.requests}</span>
                 <span className="stat-label">模型请求</span>
               </div>
+              <div className="stat-item" title={`当前会话目录：${workspaceLabel}`}>
+                <span className="stat-icon">WS</span>
+                <span className="stat-val">{compactPathTail(workspaceLabel)}</span>
+                <span className="stat-label">{workspaceModeLabel}</span>
+              </div>
               <div className="stat-item">
                 <span className="stat-icon">↯</span>
                 <span className="stat-val">{streamLabel}</span>
@@ -5881,10 +5922,10 @@ export default function App() {
                   detail={`${modelLabel} · ${currentProvider?.baseURL ?? "请先在设置里配置 provider 注册表"}`}
                 />
                 <StatusCard
-                  label="工作目录"
-                  value={workspaceLabel === "not set" ? "缺失" : "就绪"}
-                  tone={workspaceLabel === "not set" ? "warn" : "success"}
-                  detail={workspaceLabel}
+                  label={workspaceModeLabel}
+                  value={hasWorkspace ? "就绪" : "缺失"}
+                  tone={hasWorkspace ? "success" : "warn"}
+                  detail={workspaceStatusDetail}
                 />
                 <StatusCard
                   label="审批"
@@ -6017,9 +6058,9 @@ export default function App() {
                     <p className="muted">{pendingApprovals.length > 0 ? "先处理阻塞动作再继续。" : "当前没有阻塞动作。"}</p>
                   </div>
                   <div className="workspace-inline-stat">
-                    <span className="tiny">工作目录</span>
-                    <strong>{workspaceLabel === "not set" ? "缺失" : "就绪"}</strong>
-                    <p className="muted">{workspaceLabel}</p>
+                    <span className="tiny">{workspaceModeLabel}</span>
+                    <strong>{hasWorkspace ? "就绪" : "缺失"}</strong>
+                    <p className="muted">{workspaceStatusDetail}</p>
                   </div>
                   <div className="workspace-inline-stat">
                     <span className="tiny">当前动作</span>
