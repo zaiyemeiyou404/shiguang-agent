@@ -1,6 +1,6 @@
 import { ipcMain } from "electron";
 import type { DesktopAppService } from "./app-service.js";
-import type { SendMessageRequest, DesktopSettings, ApprovalDecisionRequest, RunActionRequest, DesktopProviderConnectionRequest, SessionRenameRequest, SessionStatusRequest, SessionWorkspaceRequest, SessionDeleteRequest, SessionBranchRequest, ArtifactActionRequest } from "./types.js";
+import type { SendMessageRequest, DesktopSettings, ApprovalDecisionRequest, RunActionRequest, DesktopProviderConnectionRequest, SessionRenameRequest, SessionStatusRequest, SessionWorkspaceRequest, SessionLlmRequest, SessionDeleteRequest, SessionBranchRequest, ArtifactActionRequest } from "./types.js";
 
 export function registerIpcHandlers(service: DesktopAppService): void {
   ipcMain.handle("listSessions", () => {
@@ -37,6 +37,10 @@ export function registerIpcHandlers(service: DesktopAppService): void {
 
   ipcMain.handle("updateSessionWorkspace", (_event, req: SessionWorkspaceRequest) => {
     return service.updateSessionWorkspace(req.sessionId, req.workspaceRoot);
+  });
+
+  ipcMain.handle("updateSessionLlm", (_event, req: SessionLlmRequest) => {
+    return service.updateSessionLlm(req.sessionId, req.llm);
   });
 
   ipcMain.handle("deleteSession", (_event, req: SessionDeleteRequest) => {

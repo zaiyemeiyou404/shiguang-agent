@@ -2,20 +2,20 @@
 
 拾光 Agent 是一个轻量级桌面 AI Agent。它把对话、工作区文件操作、工具调用、审批、运行记录和上下文压缩放在一个 Electron 桌面界面里，目标是做成一个下载后即可配置使用的小型个人工作台。
 
-当前版本：`0.2.29`
+当前版本：`0.2.30`
 
-本版重点：修复默认工作区已保存但当前会话仍停留在旧目录的问题，并把底部“模型”入口扩展为只管理 Provider、模型、maxTokens 和 API，不再修改工作区。
+本版重点：底部模型切换改为下拉框，并改成“当前会话模型”配置；不同会话可以使用不同 provider / 模型 / maxTokens，切换模型不会再影响其他会话。设置页也精简为常用项优先，高级 Provider、MCP、预设和导入导出折叠收纳。
 
 ## 下载使用
 
 在 GitHub Releases 页面下载 Windows 版本：
 
-- 安装包：`shiguang-agent-setup-0.2.29.exe`
+- 安装包：`shiguang-agent-setup-0.2.30.exe`
 - 免安装版：`win-unpacked.zip`
 
 安装包安装完成后会创建桌面快捷方式和开始菜单快捷方式。桌面上出现的是快捷方式，不是复制出来的独立 `.exe` 文件。
 
-`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.29`，才会生成新的正式 Release。
+`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.30`，才会生成新的正式 Release。
 
 如果使用免安装版，解压后运行：
 
@@ -59,7 +59,7 @@ Workspace Policy Registry 会统一决定数据目录、配置文件、状态库
 
 如果默认工作目录是拾光自己的内置 `workspace/`，新会话会自动放进独立的 `.shiguang/sessions/<sessionId>`，避免多个空白会话互相覆盖文件。如果默认工作目录是用户手动选择的真实项目目录，例如 `G:\projects\xxx`，工具会直接在这个项目根目录执行，不再额外套一层 `.shiguang\sessions`。旧版本已经生成的 `项目\.shiguang\sessions\sess_*` 会在打开会话时自动纠正回项目根目录，不会删除旧文件。
 
-从完整“设置”里保存默认工作目录时，如果当前会话还停在旧目录，会同步切到这个目录并刷新详情；聊天框底部的“模型”入口只负责 Provider、模型、maxTokens 和 API，不会再修改工作区。
+从完整“设置”里保存默认工作目录时，如果当前会话还停在旧目录，会同步切到这个目录并刷新详情；聊天框底部的“模型”入口只负责当前会话的 Provider、模型、maxTokens 和 API，不会再修改工作区，也不会把模型切换同步到其他会话。
 
 ## 支持的模型服务
 
@@ -73,6 +73,8 @@ Workspace Policy Registry 会统一决定数据目录、配置文件、状态库
 | Anthropic | Anthropic Messages API | `claude-3-5-sonnet-latest` |
 | Gemini | Gemini API | `gemini-2.5-pro` |
 | Ollama | 本地 OpenAI-compatible | `qwen2.5-coder:14b` |
+
+聊天框右下角提供当前会话模型下拉框，会列出已配置 provider 的默认模型和 DeepSeek `Flash` / `Pro` 预设。完整设置用于全局默认工作区和 provider API；底部模型入口只改当前会话，适合不同任务分别使用 DeepSeek、OpenAI、OpenRouter、Ollama 等模型。
 
 DeepSeek 设置页提供 `Flash` / `Pro` 快捷切换，对应官方 API 模型 `deepseek-v4-flash` 和 `deepseek-v4-pro`。旧 `deepseek-chat` / `deepseek-reasoner` 仍可手动填写或通过兼容按钮选择，但建议新配置优先使用 V4 模型名。
 
@@ -296,8 +298,8 @@ examples/          示例配置
 推送 tag 后会自动构建 Release：
 
 ```bash
-git tag v0.2.29
-git push origin v0.2.29
+git tag v0.2.30
+git push origin v0.2.30
 ```
 
 Release 会上传：

@@ -68,6 +68,12 @@ export interface ResolvedDesktopConfig {
   mcpServers: ResolvedMcpServerConfig[];
 }
 
+export interface LlmRuntimeOverrides {
+  provider?: string | null;
+  model?: string | null;
+  maxTokens?: number | null;
+}
+
 export interface DesktopProviderSettings {
   type?: ProviderProtocol;
   authMode?: ProviderAuthMode;
@@ -197,15 +203,38 @@ export function getDesktopConfigPath(): string {
 export function loadDesktopConfig(): ResolvedDesktopConfig {
   const configPath = getDesktopConfigPath();
   const fileConfig = readMigratedConfigFile(configPath);
-  const providerName = process.env.SHIGUANG_LLM_PROVIDER
-    ?? fileConfig.llm?.provider
-    ?? "openai";
+  const llm = resolveDesktopLlmConfigFromFile(fileConfig);
+
+  const workspaceRoot = resolveWorkspaceRoot(fileConfig.workspaceRoot);
+
+  return {
+    configPath,
+    workspaceRoot,
+    toolApprovalMode: normalizeToolApprovalMode(fileConfig.toolApprovalMode),
+    llm,
+    mcpServers: resolveMcpServers(fileConfig.mcpServers),
+  };
+}
+
+export function resolveDesktopLlmConfig(overrides: LlmRuntimeOverrides = {}): ResolvedLlmConfig {
+  const configPath = getDesktopConfigPath();
+  const fileConfig = readMigratedConfigFile(configPath);
+  return resolveDesktopLlmConfigFromFile(fileConfig, overrides);
+}
+
+function resolveDesktopLlmConfigFromFile(fileConfig: DesktopConfigFile, overrides: LlmRuntimeOverrides = {}): ResolvedLlmConfig {
+  const providerName = firstNonEmpty(
+    overrides.provider,
+    process.env.SHIGUANG_LLM_PROVIDER,
+    fileConfig.llm?.provider,
+    "openai",
+  );
   const providerCatalog = mergeProviderCatalog(fileConfig.providers);
   const providerConfig = providerCatalog[providerName] ?? {};
   const providerType = normalizeProviderProtocol(providerConfig.type ?? fileConfig.llm?.type);
   const authMode = providerConfig.authMode ?? fileConfig.llm?.authMode ?? "api_key";
 
-  const llm: ResolvedLlmConfig = {
+  return {
     provider: providerName,
     providerType,
     authMode,
@@ -221,26 +250,20 @@ export function loadDesktopConfig(): ResolvedDesktopConfig {
         ?? readProviderApiKey(providerConfig)
         ?? readStoredProviderApiKey(fileConfig.llm)
         ?? "",
-    model: process.env.SHIGUANG_LLM_MODEL
-      ?? fileConfig.llm?.model
-      ?? providerConfig.model
-      ?? DEFAULT_MODEL,
+    model: firstNonEmpty(
+      overrides.model,
+      process.env.SHIGUANG_LLM_MODEL,
+      fileConfig.llm?.model,
+      providerConfig.model,
+      DEFAULT_MODEL,
+    ),
     maxTokens: normalizeMaxTokens(
-      process.env.SHIGUANG_LLM_MAX_TOKENS
+      overrides.maxTokens
+      ?? process.env.SHIGUANG_LLM_MAX_TOKENS
       ?? fileConfig.llm?.maxTokens
       ?? providerConfig.maxTokens
       ?? DEFAULT_MAX_TOKENS,
     ),
-  };
-
-  const workspaceRoot = resolveWorkspaceRoot(fileConfig.workspaceRoot);
-
-  return {
-    configPath,
-    workspaceRoot,
-    toolApprovalMode: normalizeToolApprovalMode(fileConfig.toolApprovalMode),
-    llm,
-    mcpServers: resolveMcpServers(fileConfig.mcpServers),
   };
 }
 
@@ -550,6 +573,14 @@ function maskApiKey(apiKey: string): string {
 
 function normalizeBaseURL(value: string): string {
   return value.replace(/\/+$/, "");
+}
+
+function firstNonEmpty(...values: Array<string | null | undefined>): string {
+  for (const value of values) {
+    const trimmed = typeof value === "string" ? value.trim() : "";
+    if (trimmed) return trimmed;
+  }
+  return "";
 }
 
 function normalizeProviderProtocol(value: ProviderProtocol | undefined): ProviderProtocol {

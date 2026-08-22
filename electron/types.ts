@@ -23,8 +23,15 @@ export interface DesktopSession {
   updatedAt: string;
   summary: string | null;
   workspaceRoot?: string | null;
+  llm?: DesktopSessionLlmSettings | null;
   tokenUsage?: DesktopTokenUsage;
   attention?: DesktopSessionAttention;
+}
+
+export interface DesktopSessionLlmSettings {
+  provider?: string;
+  model?: string;
+  maxTokens?: number;
 }
 
 export interface DesktopRun {
@@ -112,6 +119,11 @@ export interface SessionStatusRequest {
 export interface SessionWorkspaceRequest {
   sessionId: string;
   workspaceRoot: string;
+}
+
+export interface SessionLlmRequest {
+  sessionId: string;
+  llm: DesktopSessionLlmSettings | null;
 }
 
 export interface SessionDeleteRequest {
@@ -226,6 +238,7 @@ export interface ShiguangBridge {
   renameSession(req: SessionRenameRequest): Promise<DesktopSession>;
   updateSessionStatus(req: SessionStatusRequest): Promise<DesktopSession>;
   updateSessionWorkspace(req: SessionWorkspaceRequest): Promise<DesktopSession>;
+  updateSessionLlm(req: SessionLlmRequest): Promise<DesktopSession>;
   deleteSession(req: SessionDeleteRequest): Promise<{ sessionId: string }>;
   getSessionDetail(sessionId: string): Promise<DesktopSessionDetail>;
   getWorkspaceSnapshot(sessionId: string): Promise<DesktopWorkspaceSnapshot>;

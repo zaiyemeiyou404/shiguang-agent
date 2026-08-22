@@ -1,6 +1,6 @@
 {
   "name": "shiguang-agent",
-  "version": "0.2.29",
+  "version": "0.2.30",
   "description": "拾光 — a lightweight hybrid agent runtime with structured context, durable state, and pluggable tools.",
   "private": true,
   "type": "module",
@@ -50,7 +50,9 @@
       "target": [
         {
           "target": "dir",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     },
@@ -58,7 +60,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "signAndEditExecutable": false

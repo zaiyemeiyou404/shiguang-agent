@@ -17,6 +17,7 @@ import type {
   DesktopAttachment,
   DesktopSessionBranchResult,
   DesktopTokenUsage,
+  DesktopSessionLlmSettings,
 } from "./types.js";
 import { Agent } from "../dist/app/agent.js";
 import { RepositoryEventSink } from "../dist/runtime/event-sink.js";
@@ -74,10 +75,12 @@ import { createPlanner } from "./planner-factory.js";
 import { loadProjectAgentProfile } from "../dist/brain/agent-profile.js";
 import {
   loadDesktopConfig,
+  resolveDesktopLlmConfig,
   getDesktopSettings,
   saveDesktopSettings,
   getStoredProviderApiKey,
   type ResolvedDesktopConfig,
+  type ResolvedLlmConfig,
   type ResolvedMcpServerConfig,
   type ToolApprovalMode,
 } from "./config.js";
@@ -230,6 +233,30 @@ function isAutoTitleCandidate(session: DesktopSession): boolean {
     || /^新会话\s*\d*$/.test(title);
 }
 
+function normalizeSessionLlmSettings(llm: DesktopSessionLlmSettings | null | undefined): DesktopSessionLlmSettings | null {
+  if (!llm) return null;
+  const provider = llm.provider?.trim();
+  const model = llm.model?.trim();
+  const maxTokens = typeof llm.maxTokens === "number" && Number.isFinite(llm.maxTokens)
+    ? Math.max(256, Math.min(128000, Math.floor(llm.maxTokens)))
+    : undefined;
+  const normalized: DesktopSessionLlmSettings = {
+    ...(provider ? { provider } : {}),
+    ...(model ? { model } : {}),
+    ...(maxTokens ? { maxTokens } : {}),
+  };
+  return Object.keys(normalized).length > 0 ? normalized : null;
+}
+
+function resolveSessionLlmConfig(sessionLlm: DesktopSessionLlmSettings | null | undefined): ResolvedLlmConfig {
+  const normalized = normalizeSessionLlmSettings(sessionLlm);
+  return resolveDesktopLlmConfig({
+    provider: normalized?.provider,
+    model: normalized?.model,
+    maxTokens: normalized?.maxTokens,
+  });
+}
+
 function inferAutoTitlePrefix(text: string): string {
   if (/修|报错|错误|失败|error|bug|问题/.test(text)) return "修复 ";
   if (/发布|上传|github|release|提交|推送/.test(text)) return "发布 ";
@@ -371,7 +398,11 @@ export class DesktopAppService {
     const branched = await this.createSession(branchTitle);
     const summary = `分支自 ${sourceSession.title} · ${branchStatusLabel(sourceRun.status)}`;
     const updatedAt = new Date().toISOString();
-    const branchSession = this.store.updateSession(branched.id, { summary, updatedAt }) ?? branched;
+    const branchSession = this.store.updateSession(branched.id, {
+      summary,
+      updatedAt,
+      ...(sourceSession.llm ? { llm: sourceSession.llm } : {}),
+    }) ?? branched;
     await this.ensureSqliteSession(branchSession);
     await this.sessionRepository.update(branchSession.id, { summary, updatedAt: new Date(updatedAt) });
 
@@ -426,6 +457,20 @@ export class DesktopAppService {
     const updatedAt = new Date().toISOString();
     const updated = this.store.updateSession(sessionId, {
       workspaceRoot: resolvedWorkspaceRoot,
+      updatedAt,
+    });
+    if (!updated) throw new Error(`Session not found: ${sessionId}`);
+    await this.ensureSqliteSession(updated);
+    await this.sessionRepository.update(sessionId, { updatedAt: new Date(updatedAt) });
+    return this.decorateSession(updated);
+  }
+
+  async updateSessionLlm(sessionId: string, llm: DesktopSessionLlmSettings | null): Promise<DesktopSession> {
+    const session = this.store.getSession(sessionId);
+    if (!session) throw new Error(`Session not found: ${sessionId}`);
+    const updatedAt = new Date().toISOString();
+    const updated = this.store.updateSession(sessionId, {
+      llm: normalizeSessionLlmSettings(llm),
       updatedAt,
     });
     if (!updated) throw new Error(`Session not found: ${sessionId}`);
@@ -579,7 +624,7 @@ export class DesktopAppService {
     }
 
     (async () => {
-      const { agent, label, workspaceRoot } = await this.createAgentRuntime(sink, session.workspaceRoot ?? undefined);
+      const { agent, label, workspaceRoot } = await this.createAgentRuntime(sink, session.workspaceRoot ?? undefined, session.llm);
       const currentRunBeforeStart = await this.runRepository.get(runId);
       if (controller.signal.aborted || isRunStoppedByUser(currentRunBeforeStart?.status)) {
         return;
@@ -1017,7 +1062,7 @@ export class DesktopAppService {
     };
   }
 
-  private async createAgentRuntime(sink: RepositoryEventSink, workspaceRootOverride?: string): Promise<{
+  private async createAgentRuntime(sink: RepositoryEventSink, workspaceRootOverride?: string, sessionLlm?: DesktopSessionLlmSettings | null): Promise<{
     agent: Agent;
     label: string;
     workspaceRoot: string;
@@ -1026,9 +1071,10 @@ export class DesktopAppService {
     const workspaceRoot = resolve(normalize(workspaceRootOverride ?? desktopConfig.workspaceRoot));
     mkdirSync(workspaceRoot, { recursive: true });
     const agentProfile = loadProjectAgentProfile(workspaceRoot);
+    const sessionLlmConfig = resolveSessionLlmConfig(sessionLlm);
     const llmConfig = agentProfile?.model
-      ? { ...desktopConfig.llm, model: agentProfile.model }
-      : desktopConfig.llm;
+      ? { ...sessionLlmConfig, model: agentProfile.model }
+      : sessionLlmConfig;
     const { planner, label } = createPlanner(llmConfig);
     const tools = await this.createDesktopTools(desktopConfig, workspaceRoot);
     const agent = new Agent({
@@ -1271,8 +1317,9 @@ export class DesktopAppService {
 
     const sink = this.createRunEventSink();
     const session = this.store.getSession(run.sessionId);
-    const sessionWorkspace = session ? this.ensureSessionWorkspace(session).workspaceRoot ?? undefined : undefined;
-    const { agent, label, workspaceRoot } = await this.createAgentRuntime(sink, sessionWorkspace);
+    const sessionWithWorkspace = session ? this.ensureSessionWorkspace(session) : null;
+    const sessionWorkspace = sessionWithWorkspace?.workspaceRoot ?? undefined;
+    const { agent, label, workspaceRoot } = await this.createAgentRuntime(sink, sessionWorkspace, sessionWithWorkspace?.llm);
     const userMessage = await this.loadLatestUserMessage(run.sessionId, task);
     const controller = new AbortController();
     this.activeRunControllers.set(run.id, controller);

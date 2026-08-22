@@ -1,7 +1,7 @@
 import { type CSSProperties, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useDesktopSessions, useRunEvents } from "./hooks/useDesktopSessions";
 import { getDesktopBridge, getDesktopBridgeErrorMessage, requireDesktopBridge } from "./bridge";
-import type { DesktopSession, DesktopRun, DesktopConversationEntry, DesktopEvent, DesktopSettings, DesktopApproval, DesktopArtifact, DesktopProviderConnectionResult, DesktopAttachment, DesktopTokenUsage, ToolApprovalMode } from "./bridge";
+import type { DesktopSession, DesktopRun, DesktopConversationEntry, DesktopEvent, DesktopSettings, DesktopApproval, DesktopArtifact, DesktopProviderConnectionResult, DesktopAttachment, DesktopTokenUsage, DesktopSessionLlmSettings, ToolApprovalMode } from "./bridge";
 
 type PillVariant = "progress" | "safe" | "auto" | "todo";
 type BannerVariant = "info" | "warn" | "danger" | "success";
@@ -24,6 +24,15 @@ type ProviderModelOption = {
   label: string;
   value: string;
   hint: string;
+};
+
+type ComposerModelOption = {
+  label: string;
+  value: string;
+  hint: string;
+  provider: string;
+  model: string;
+  maxTokens?: number;
 };
 
 type SignalTone = "neutral" | "success" | "warn" | "danger" | "accent";
@@ -120,6 +129,46 @@ function isDeepSeekProvider(key: string, draft: ProviderDraft): boolean {
 function modelOptionsForProvider(key: string, draft: ProviderDraft): ProviderModelOption[] {
   if (isDeepSeekProvider(key, draft)) return DEEPSEEK_MODEL_OPTIONS;
   return [];
+}
+
+function composerModelValue(provider: string, model: string): string {
+  return `${provider}\u0000${model}`;
+}
+
+function buildComposerModelOptions(settings: DesktopSettings, activeProvider: string, activeModel: string): ComposerModelOption[] {
+  const options: ComposerModelOption[] = [];
+  const seen = new Set<string>();
+
+  const pushOption = (provider: string, model: string, label?: string, hint?: string, maxTokens?: number) => {
+    const cleanProvider = provider.trim();
+    const cleanModel = model.trim();
+    if (!cleanProvider || !cleanModel) return;
+    const value = composerModelValue(cleanProvider, cleanModel);
+    if (seen.has(value)) return;
+    seen.add(value);
+    options.push({
+      provider: cleanProvider,
+      model: cleanModel,
+      value,
+      label: label ?? `${cleanProvider} · ${cleanModel}`,
+      hint: hint ?? `当前会话使用 ${cleanProvider} / ${cleanModel}`,
+      ...(typeof maxTokens === "number" ? { maxTokens } : {}),
+    });
+  };
+
+  for (const [provider, rawProvider] of Object.entries(settings.providers ?? {})) {
+    const draft = providerDraftFromSettings(settings, provider);
+    const presetOptions = modelOptionsForProvider(provider, draft);
+    if (presetOptions.length > 0) {
+      for (const option of presetOptions) {
+        pushOption(provider, option.value, `${provider} · ${option.label}`, option.hint, rawProvider.maxTokens);
+      }
+    }
+    pushOption(provider, draft.model || settings.llm.model || "", undefined, undefined, rawProvider.maxTokens);
+  }
+
+  pushOption(activeProvider, activeModel);
+  return options;
 }
 
 function readPinnedSessions(): string[] {
@@ -3638,6 +3687,21 @@ function buildSettings(
   };
 }
 
+function buildSessionLlmSettings(provider: string, model: string, maxTokens: string | number | undefined): DesktopSessionLlmSettings | null {
+  const cleanProvider = provider.trim();
+  const cleanModel = typeof model === "string" ? model.trim() : "";
+  const parsedMaxTokens = typeof maxTokens === "number" ? maxTokens : Number.parseInt(String(maxTokens ?? ""), 10);
+  const normalizedMaxTokens = Number.isFinite(parsedMaxTokens)
+    ? Math.max(256, Math.min(128000, Math.floor(parsedMaxTokens)))
+    : undefined;
+  const llm: DesktopSessionLlmSettings = {
+    ...(cleanProvider ? { provider: cleanProvider } : {}),
+    ...(cleanModel ? { model: cleanModel } : {}),
+    ...(normalizedMaxTokens ? { maxTokens: normalizedMaxTokens } : {}),
+  };
+  return Object.keys(llm).length > 0 ? llm : null;
+}
+
 function formatMcpServersJson(servers: DesktopSettings["mcpServers"] | undefined): string {
   return JSON.stringify(servers ?? {}, null, 2);
 }
@@ -3742,7 +3806,9 @@ function SettingsDrawer({
   mode = "full",
   activeSessionId,
   currentSessionWorkspaceRoot,
+  currentSessionLlm,
   onSessionWorkspaceChanged,
+  onSessionLlmChanged,
 }: {
   open: boolean;
   onClose: () => void;
@@ -3751,7 +3817,9 @@ function SettingsDrawer({
   mode?: SettingsDrawerMode;
   activeSessionId?: string | null;
   currentSessionWorkspaceRoot?: string | null;
+  currentSessionLlm?: DesktopSessionLlmSettings | null;
   onSessionWorkspaceChanged?: () => void | Promise<void>;
+  onSessionLlmChanged?: () => void | Promise<void>;
 }) {
   const [workspaceRoot, setWorkspaceRoot] = useState("");
   const [activeProvider, setActiveProvider] = useState("openai");
@@ -3776,13 +3844,17 @@ function SettingsDrawer({
     if (!settings || !open) return;
     const catalog = providerCatalogFromSettings(settings);
     const providerKeys = Object.keys(catalog);
-    const providerKey = catalog[settings.llm.provider] ? settings.llm.provider : (providerKeys[0] ?? "openai");
+    const preferredProvider = fullMode ? settings.llm.provider : (currentSessionLlm?.provider ?? settings.llm.provider);
+    const providerKey = catalog[preferredProvider] ? preferredProvider : (providerKeys[0] ?? "openai");
     setWorkspaceRoot(settings.workspaceRoot ?? "");
     setActiveProvider(providerKey);
-    setActiveModel(settings.llm.model ?? catalog[providerKey]?.model ?? "");
-    setMaxTokens(settings.llm.maxTokens
-      ? String(settings.llm.maxTokens)
-      : catalog[providerKey]?.maxTokens
+    setActiveModel((fullMode ? settings.llm.model : currentSessionLlm?.model) ?? settings.llm.model ?? catalog[providerKey]?.model ?? "");
+    const effectiveMaxTokens = fullMode ? settings.llm.maxTokens : currentSessionLlm?.maxTokens;
+    setMaxTokens(effectiveMaxTokens
+      ? String(effectiveMaxTokens)
+      : settings.llm.maxTokens
+        ? String(settings.llm.maxTokens)
+        : catalog[providerKey]?.maxTokens
         ? String(catalog[providerKey]?.maxTokens)
         : "");
     setToolApprovalMode(settings.toolApprovalMode ?? "ask");
@@ -3793,7 +3865,7 @@ function SettingsDrawer({
     setSaveState("");
     setConnectionResult(null);
     setShowApiKey(false);
-  }, [settings, open]);
+  }, [currentSessionLlm, fullMode, settings, open]);
 
   if (!open || !settings) return null;
 
@@ -4047,14 +4119,16 @@ function SettingsDrawer({
     try {
       const workspaceChanged = fullMode && workspaceRoot.trim() !== (settings.workspaceRoot ?? "");
       const mcpServers = fullMode ? parseMcpServersJson(mcpServersJson) : settings.mcpServers;
+      const globalModel = settings.llm.model ?? "";
+      const globalMaxTokens = settings.llm.maxTokens ? String(settings.llm.maxTokens) : "";
       const next = {
         ...buildSettings(
           settings,
           providerCatalog,
           fullMode ? workspaceRoot : settings.workspaceRoot,
-          activeProvider,
-          activeModel,
-          maxTokens,
+          fullMode ? activeProvider : (settings.llm.provider ?? "openai"),
+          fullMode ? activeModel : globalModel,
+          fullMode ? maxTokens : globalMaxTokens,
           fullMode ? toolApprovalMode : (settings.toolApprovalMode ?? "ask"),
         ),
         mcpServers,
@@ -4062,6 +4136,13 @@ function SettingsDrawer({
       const bridge = requireDesktopBridge();
       const saved = await bridge.saveSettings(next);
       onSaved(saved);
+      if (!fullMode && activeSessionId) {
+        await bridge.updateSessionLlm({
+          sessionId: activeSessionId,
+          llm: buildSessionLlmSettings(activeProvider, activeModel, maxTokens),
+        });
+        await onSessionLlmChanged?.();
+      }
       const shouldSyncCurrentSessionWorkspace = fullMode
         && Boolean(activeSessionId)
         && Boolean(saved.workspaceRoot.trim())
@@ -4106,9 +4187,14 @@ function SettingsDrawer({
     ? providerDraftFromSettings(settings, activeProvider)
     : createProviderDraft(activeProvider);
   const providerDirty = JSON.stringify(normalizeProviderDraftForCompare(providerDraft)) !== JSON.stringify(normalizeProviderDraftForCompare(selectedSavedDraft));
-  const runtimeDirty = activeProvider !== (settings.llm.provider ?? "openai")
-    || activeModel.trim() !== (settings.llm.model ?? "")
-    || maxTokens.trim() !== (settings.llm.maxTokens ? String(settings.llm.maxTokens) : "")
+  const savedRuntimeProvider = fullMode ? (settings.llm.provider ?? "openai") : (currentSessionLlm?.provider ?? settings.llm.provider ?? "openai");
+  const savedRuntimeModel = fullMode ? (settings.llm.model ?? "") : (currentSessionLlm?.model ?? settings.llm.model ?? "");
+  const savedRuntimeMaxTokens = fullMode
+    ? (settings.llm.maxTokens ? String(settings.llm.maxTokens) : "")
+    : (currentSessionLlm?.maxTokens ? String(currentSessionLlm.maxTokens) : (settings.llm.maxTokens ? String(settings.llm.maxTokens) : ""));
+  const runtimeDirty = activeProvider !== savedRuntimeProvider
+    || activeModel.trim() !== savedRuntimeModel
+    || maxTokens.trim() !== savedRuntimeMaxTokens
     || (fullMode && workspaceRoot.trim() !== (settings.workspaceRoot ?? ""))
     || (fullMode && toolApprovalMode !== (settings.toolApprovalMode ?? "ask"))
     || (fullMode && mcpServersJson.trim() !== formatMcpServersJson(settings.mcpServers).trim());
@@ -4125,8 +4211,12 @@ function SettingsDrawer({
 
   const applyProviderModelOption = (option: ProviderModelOption) => {
     setActiveModel(option.value);
-    patchActiveProvider((prev) => ({ ...prev, model: option.value }));
-    setSaveState(`已切换到 ${option.label}（${option.value}），保存后生效。`);
+    if (fullMode) {
+      patchActiveProvider((prev) => ({ ...prev, model: option.value }));
+    }
+    setSaveState(fullMode
+      ? `已切换到 ${option.label}（${option.value}），保存后作为全局默认生效。`
+      : `已切换到 ${option.label}（${option.value}），保存后只对当前会话生效。`);
   };
 
   const providerDiffItems = [
@@ -4140,9 +4230,9 @@ function SettingsDrawer({
   ].filter((item) => item.current !== item.saved);
   const runtimeDiffItems = [
     { label: "默认工作目录", current: formatSettingsValue(workspaceRoot), saved: formatSettingsValue(settings.workspaceRoot) },
-    { label: "当前 Provider", current: activeProvider, saved: settings.llm.provider ?? "openai" },
-    { label: "运行模型", current: formatSettingsValue(activeModel), saved: formatSettingsValue(settings.llm.model) },
-    { label: "运行 maxTokens", current: formatSettingsValue(maxTokens), saved: formatSettingsValue(settings.llm.maxTokens ? String(settings.llm.maxTokens) : "") },
+    { label: "当前 Provider", current: activeProvider, saved: savedRuntimeProvider },
+    { label: "运行模型", current: formatSettingsValue(activeModel), saved: formatSettingsValue(savedRuntimeModel) },
+    { label: "运行 maxTokens", current: formatSettingsValue(maxTokens), saved: formatSettingsValue(savedRuntimeMaxTokens) },
     { label: "工具审批", current: toolApprovalModeLabel(toolApprovalMode), saved: toolApprovalModeLabel(settings.toolApprovalMode ?? "ask") },
   ].filter((item) => item.current !== item.saved);
   const visibleRuntimeDiffItems = fullMode ? runtimeDiffItems : runtimeDiffItems.slice(1, 4);
@@ -4153,13 +4243,13 @@ function SettingsDrawer({
         <aside className="panel settings-drawer settings-drawer-model-only">
           <div className="titlebar" style={{ padding: 0, borderBottom: "none" }}>
             <div className="title-group">
-              <h2>模型切换</h2>
-              <p>这里只改 Provider、模型、maxTokens 和 API；工作区请从左下角设置里改。</p>
+              <h2>当前会话模型</h2>
+              <p>Provider、模型和 maxTokens 只对当前会话生效；API 连接配置会保存到本机 provider。</p>
             </div>
             <div className="toolbar">
               <ToolBtn onClick={onClose}>关闭</ToolBtn>
               <ToolBtn onClick={() => { void testConnection(); }}>{testingConnection ? "测试中..." : "测试连接"}</ToolBtn>
-              <ToolBtn primary onClick={save}>{saving ? "保存中..." : "保存模型"}</ToolBtn>
+              <ToolBtn primary onClick={save}>{saving ? "保存中..." : "保存当前会话"}</ToolBtn>
             </div>
           </div>
 
@@ -4214,6 +4304,16 @@ function SettingsDrawer({
           <div className="detail-block settings-section-stack">
             <div className="section-title"><h3>模型</h3><span className="tiny">{activeProvider}</span></div>
             <div className="settings-inline-grid">
+              <div>
+                <label className="tiny">Provider</label>
+                <select className="settings-input" value={activeProvider} onChange={(e) => switchProvider(e.target.value)}>
+                  {providerOptions.map((key) => (
+                    <option key={`model-provider-${key}`} value={key}>
+                      {key}
+                    </option>
+                  ))}
+                </select>
+              </div>
               <div>
                 <label className="tiny">运行模型</label>
                 <input className="settings-input" value={activeModel} onChange={(e) => setActiveModel(e.target.value)} placeholder="deepseek-v4-flash / gpt-5 / openai/gpt-5" />
@@ -4333,11 +4433,11 @@ function SettingsDrawer({
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(5,8,14,0.58)", backdropFilter: "blur(8px)", zIndex: 20, display: "flex", justifyContent: "flex-end" }}>
-      <aside className="panel settings-drawer">
+      <aside className="panel settings-drawer settings-drawer-simple">
         <div className="titlebar" style={{ padding: 0, borderBottom: "none" }}>
           <div className="title-group">
-            <h2>模型与 Provider 设置</h2>
-            <p>Hermes / Craft 风格：当前模型 + provider 注册表</p>
+            <h2>设置</h2>
+            <p>常用项只保留默认工作区、默认模型和 API；Provider/MCP 等放在高级区。</p>
           </div>
           <div className="toolbar">
             <ToolBtn onClick={onClose}>关闭</ToolBtn>
@@ -4364,8 +4464,10 @@ function SettingsDrawer({
           </div>
         </div>
 
-        <div className="detail-block settings-section-stack">
-          <div className="section-title"><h3>Provider 工作台</h3><span className="tiny">选择、重命名、复制、删除、预设导入</span></div>
+        <details className="settings-advanced">
+          <summary>高级 Provider 管理</summary>
+          <div className="detail-block settings-section-stack">
+            <div className="section-title"><h3>Provider 工作台</h3><span className="tiny">选择、重命名、复制、删除、预设导入</span></div>
           <div className="provider-rename-row">
             <input
               className="settings-input"
@@ -4418,7 +4520,8 @@ function SettingsDrawer({
               );
             })}
           </div>
-        </div>
+          </div>
+        </details>
 
         <div className="detail-block settings-section-stack">
           <div className="section-title"><h3>当前配置</h3><span className="tiny">{settings.configPath}</span></div>
@@ -4481,21 +4584,23 @@ function SettingsDrawer({
               </p>
             </div>
           </div>
-          <div>
-            <label className="tiny">MCP Servers JSON</label>
-            <textarea
-              className="settings-input"
-              value={mcpServersJson}
-              onChange={(e) => setMcpServersJson(e.target.value)}
-              rows={9}
-              spellCheck={false}
-              style={{ fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace", resize: "vertical" }}
-              placeholder={'{\n  "filesystem": {\n    "transport": "stdio",\n    "command": "npx",\n    "args": ["-y", "@modelcontextprotocol/server-filesystem", "G:/projects"]\n  }\n}'}
-            />
-            <p className="muted" style={{ margin: 0 }}>
-              配置 stdio MCP server。保存后，新运行会自动通过 tools/list 发现工具，并按读/写/执行风险接入审批。
-            </p>
-          </div>
+          <details className="settings-nested-advanced">
+            <summary>MCP 工具服务器（高级）</summary>
+            <div>
+              <textarea
+                className="settings-input"
+                value={mcpServersJson}
+                onChange={(e) => setMcpServersJson(e.target.value)}
+                rows={7}
+                spellCheck={false}
+                style={{ fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace", resize: "vertical" }}
+                placeholder={'{\n  "filesystem": {\n    "transport": "stdio",\n    "command": "npx",\n    "args": ["-y", "@modelcontextprotocol/server-filesystem", "G:/projects"]\n  }\n}'}
+              />
+              <p className="muted" style={{ margin: "8px 0 0" }}>
+                配置 stdio MCP server。保存后，新运行会自动通过 tools/list 发现工具，并按读/写/执行风险接入审批。
+              </p>
+            </div>
+          </details>
         </div>
 
         <div className="detail-block settings-section-stack">
@@ -4590,6 +4695,8 @@ function SettingsDrawer({
           </div>
         </div>
 
+        <details className="settings-advanced">
+          <summary>高级信息、预设与迁移</summary>
         <div className="detail-block settings-section-stack">
           <div className="section-title"><h4>生效来源</h4><span className="tiny">当前运行到底会吃哪一层配置</span></div>
           <div className="settings-source-grid">
@@ -4668,8 +4775,9 @@ function SettingsDrawer({
             placeholder='{"activeProvider":"deepseek","runtime":{"model":"deepseek-chat"},"provider":{"baseURL":"https://api.deepseek.com/v1"}}'
           />
           <p className="muted">导出会带上当前 provider 草稿 + 运行层配置；导入后不会自动保存，需要你再点一次“保存”。</p>
-          {saveState ? <p className="muted">{saveState}</p> : null}
         </div>
+        </details>
+        {saveState ? <p className="settings-save-state muted">{saveState}</p> : null}
       </aside>
     </div>
   );
@@ -4759,17 +4867,17 @@ export default function App() {
     ? [...sortedEvents].reverse().find((event) => event.kind === "context_compacted" && isMeaningfulCompactionEvent(event))
     : undefined;
   const hasApprovedResume = Object.values(decisionState).includes("approved") && activeRun?.status === "running";
-  const currentProvider = settings?.providers[settings?.llm.provider ?? ""];
-  const providerLabel = settings?.llm.provider ?? "未设置";
-  const modelLabel = settings?.llm.model ?? currentProvider?.model ?? "未设置";
-  const providerKey = settings?.llm.provider || "deepseek";
-  const providerDraft = settings ? providerDraftFromSettings(settings, providerKey) : null;
-  const isDeepSeekRuntime = providerDraft ? isDeepSeekProvider(providerKey, providerDraft) : false;
+  const activeSession = sessions.find((session) => session.id === activeSessionId) ?? null;
+  const sessionLlm = detail?.session.llm ?? activeSession?.llm ?? null;
+  const providerKey = sessionLlm?.provider || settings?.llm.provider || "deepseek";
+  const currentProvider = settings?.providers[providerKey];
+  const providerLabel = providerKey || "未设置";
+  const modelLabel = sessionLlm?.model || settings?.llm.model || currentProvider?.model || "未设置";
   const quickModelOptions = useMemo(() => {
-    if (!settings || !providerDraft || !isDeepSeekRuntime) return [];
-    return modelOptionsForProvider(providerKey, providerDraft)
-      .filter((option) => option.value === "deepseek-v4-flash" || option.value === "deepseek-v4-pro");
-  }, [isDeepSeekRuntime, providerDraft, providerKey, settings]);
+    if (!settings) return [];
+    return buildComposerModelOptions(settings, providerKey, modelLabel);
+  }, [modelLabel, providerKey, settings]);
+  const composerModelSelectValue = composerModelValue(providerKey, modelLabel);
   const defaultWorkspaceLabel = settings?.workspaceRoot?.trim() || "未设置";
   const sessionWorkspaceLabel = detail?.session.workspaceRoot?.trim() || defaultWorkspaceLabel;
   const workspaceLabel = sessionWorkspaceLabel;
@@ -4817,7 +4925,6 @@ export default function App() {
   const latestSession = sortedSessions[0] ?? null;
   const pinnedSessions = sortedSessions.filter((session) => pinnedSessionIds.includes(session.id));
   const focusSessions = sortedSessions.filter((session) => session.attention?.hasPendingApproval || session.attention?.hasFailedRun || session.attention?.hasRunningRun);
-  const activeSession = sessions.find((session) => session.id === activeSessionId) ?? null;
   const activeSessionDraft = activeSessionId ? (sessionDrafts[activeSessionId] ?? "") : "";
   const visibleArtifacts = useMemo(() => activeRunId ? artifacts.filter((artifact) => artifact.runId === activeRunId) : artifacts, [activeRunId, artifacts]);
   const sessionArtifacts = useMemo(
@@ -4930,34 +5037,25 @@ export default function App() {
             ? "先修好模型设置，再启动下一次运行。"
             : "Shift+Enter 换行 · Enter 发送";
 
-  const handleQuickModelSwitch = async (option: ProviderModelOption) => {
-    if (!settings || quickModelSaving || !canQuickSwitchModel) return;
-    const providerKey = settings.llm.provider || "deepseek";
-    const previousProvider = settings.providers[providerKey] ?? {};
-    const nextSettings: DesktopSettings = {
-      ...settings,
-      llm: {
-        ...settings.llm,
-        provider: providerKey,
-        model: option.value,
-      },
-      providers: {
-        ...settings.providers,
-        [providerKey]: {
-          ...previousProvider,
-          model: option.value,
-        },
-      },
-    };
+  const handleQuickModelSwitch = async (option: ComposerModelOption) => {
+    if (!settings || !activeSessionId || quickModelSaving || !canQuickSwitchModel) return;
     setQuickModelSaving(option.value);
     try {
-      const saved = await requireDesktopBridge().saveSettings(nextSettings);
-      setSettings(saved);
+      await requireDesktopBridge().updateSessionLlm({
+        sessionId: activeSessionId,
+        llm: buildSessionLlmSettings(
+          option.provider,
+          option.model,
+          option.maxTokens ?? settings.providers[option.provider]?.maxTokens ?? settings.llm.maxTokens,
+        ),
+      });
+      await refreshSessions();
+      await refreshDetail();
       setSettingsError(null);
       setActionError(null);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setSettingsError(`切换 DeepSeek 模型失败：${message}`);
+      setSettingsError(`切换当前会话模型失败：${message}`);
     } finally {
       setQuickModelSaving(null);
     }
@@ -5537,7 +5635,12 @@ export default function App() {
         mode={settingsMode}
         activeSessionId={activeSessionId}
         currentSessionWorkspaceRoot={detail?.session.workspaceRoot ?? null}
+        currentSessionLlm={detail?.session.llm ?? activeSession?.llm ?? null}
         onSessionWorkspaceChanged={async () => {
+          await refreshSessions();
+          await refreshDetail();
+        }}
+        onSessionLlmChanged={async () => {
           await refreshSessions();
           await refreshDetail();
         }}
@@ -5866,22 +5969,23 @@ export default function App() {
                       <small>tokens</small>
                     </div>
                     {quickModelOptions.length > 0 ? (
-                      <div className="composer-model-switch" aria-label="DeepSeek 模型快捷切换">
-                        {quickModelOptions.map((option) => {
-                          const active = modelLabel === option.value;
-                          return (
-                            <button
-                              key={option.value}
-                              className={`composer-action model-quick-switch${active ? " active" : ""}`}
-                              type="button"
-                              title={active ? `当前正在使用 ${option.value}` : option.hint}
-                              disabled={!canQuickSwitchModel || quickModelSaving !== null || active}
-                              onClick={() => { void handleQuickModelSwitch(option); }}
-                            >
+                      <div className="composer-model-switch" aria-label="当前会话模型切换">
+                        <select
+                          className="composer-model-select"
+                          value={composerModelSelectValue}
+                          title="只切换当前会话的模型"
+                          disabled={!canQuickSwitchModel || quickModelSaving !== null}
+                          onChange={(event) => {
+                            const option = quickModelOptions.find((item) => item.value === event.target.value);
+                            if (option) void handleQuickModelSwitch(option);
+                          }}
+                        >
+                          {quickModelOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
                               {quickModelSaving === option.value ? "切换中..." : option.label}
-                            </button>
-                          );
-                        })}
+                            </option>
+                          ))}
+                        </select>
                       </div>
                     ) : (
                       <div className="composer-current-model" title={`当前 provider：${providerLabel}`}>
