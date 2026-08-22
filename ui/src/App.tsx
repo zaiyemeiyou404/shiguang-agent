@@ -4171,7 +4171,6 @@ function SettingsDrawer({
     }
   };
 
-  const connectionTone = connectionResult ? (connectionResult.ok ? "success" : "danger") : providerTone(providerDraft);
   const connectionLabel = connectionResult ? (connectionResult.ok ? "已连通" : "失败") : providerLabel(providerDraft);
   const activeProviderModelOptions = modelOptionsForProvider(activeProvider, providerDraft);
   const authSummary = providerDraft.authMode === "none"
@@ -4183,6 +4182,19 @@ function SettingsDrawer({
         : providerDraft.apiKeyEnv.trim()
           ? `将读取环境变量 ${providerDraft.apiKeyEnv.trim()}。`
           : "还没有可用的 API Key 来源。";
+  const connectionFeedbackClass = testingConnection
+    ? "testing"
+    : connectionResult
+      ? (connectionResult.ok ? "success" : "danger")
+      : "idle";
+  const connectionFeedbackTitle = testingConnection
+    ? "正在测试连接"
+    : connectionResult
+      ? (connectionResult.ok ? "连接成功" : "连接失败")
+      : "尚未测试连接";
+  const connectionFeedbackDetail = testingConnection
+    ? `正在使用 ${activeProvider} / ${activeModel || providerDraft.model || "未设置模型"} 发起测试请求。`
+    : connectionResult?.detail ?? authSummary;
   const selectedSavedDraft = settings.providers[activeProvider]
     ? providerDraftFromSettings(settings, activeProvider)
     : createProviderDraft(activeProvider);
@@ -4248,7 +4260,6 @@ function SettingsDrawer({
             </div>
             <div className="toolbar">
               <ToolBtn onClick={onClose}>关闭</ToolBtn>
-              <ToolBtn onClick={() => { void testConnection(); }}>{testingConnection ? "测试中..." : "测试连接"}</ToolBtn>
               <ToolBtn primary onClick={save}>{saving ? "保存中..." : "保存当前会话"}</ToolBtn>
             </div>
           </div>
@@ -4394,6 +4405,14 @@ function SettingsDrawer({
               <label className="tiny">API Key 环境变量</label>
               <input className="settings-input" value={providerDraft.apiKeyEnv} onChange={(e) => patchActiveProvider((prev) => ({ ...prev, apiKeyEnv: e.target.value }))} placeholder={providerDraft.authMode === "none" ? "不需要" : "DEEPSEEK_API_KEY"} disabled={providerDraft.authMode === "none"} />
             </div>
+            <div className={`provider-test-panel ${connectionFeedbackClass}`}>
+              <div>
+                <span className="tiny">连接测试</span>
+                <strong>{connectionFeedbackTitle}</strong>
+                <p>{connectionFeedbackDetail}</p>
+              </div>
+              <ToolBtn onClick={() => { void testConnection(); }}>{testingConnection ? "测试中..." : "测试连接"}</ToolBtn>
+            </div>
           </div>
 
           <div className="detail-block settings-section-stack">
@@ -4441,7 +4460,6 @@ function SettingsDrawer({
           </div>
           <div className="toolbar">
             <ToolBtn onClick={onClose}>关闭</ToolBtn>
-            <ToolBtn onClick={() => { void testConnection(); }}>{testingConnection ? "测试中..." : "测试连接"}</ToolBtn>
             <ToolBtn primary onClick={save}>{saving ? "保存中..." : "保存"}</ToolBtn>
           </div>
         </div>
@@ -4605,11 +4623,6 @@ function SettingsDrawer({
 
         <div className="detail-block settings-section-stack">
           <div className="section-title"><h3>Provider 注册表</h3><span className="tiny">{activeProvider}</span></div>
-          <div className="detail-row" style={{ alignItems: "center" }}>
-            <span className="tiny">连接状态</span>
-            <SignalPill tone={connectionTone}>{connectionLabel}</SignalPill>
-          </div>
-          <p className="muted" style={{ margin: 0 }}>{connectionResult?.detail ?? authSummary}</p>
           <div className="settings-inline-grid">
             <div>
               <label className="tiny">协议</label>
@@ -4692,6 +4705,14 @@ function SettingsDrawer({
             <div className="detail-row" style={{ justifyContent: "flex-start" }}>
               <span className="detail-value" style={{ textAlign: "left" }}>{CODEX_PROVIDER_HINT}</span>
             </div>
+          </div>
+          <div className={`provider-test-panel ${connectionFeedbackClass}`}>
+            <div>
+              <span className="tiny">连接测试</span>
+              <strong>{connectionFeedbackTitle}</strong>
+              <p>{connectionFeedbackDetail}</p>
+            </div>
+            <ToolBtn onClick={() => { void testConnection(); }}>{testingConnection ? "测试中..." : "测试连接"}</ToolBtn>
           </div>
         </div>
 

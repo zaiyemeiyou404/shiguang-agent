@@ -2,20 +2,20 @@
 
 拾光 Agent 是一个轻量级桌面 AI Agent。它把对话、工作区文件操作、工具调用、审批、运行记录和上下文压缩放在一个 Electron 桌面界面里，目标是做成一个下载后即可配置使用的小型个人工作台。
 
-当前版本：`0.2.30`
+当前版本：`0.2.31`
 
-本版重点：底部模型切换改为下拉框，并改成“当前会话模型”配置；不同会话可以使用不同 provider / 模型 / maxTokens，切换模型不会再影响其他会话。设置页也精简为常用项优先，高级 Provider、MCP、预设和导入导出折叠收纳。
+本版重点：把设置页的“测试连接”从标题栏移到 Provider/API 区域底部，并把连接成功、失败和测试中的反馈改成醒目的状态卡；底部模型切换仍保持“当前会话模型”下拉框，不影响其他会话。
 
 ## 下载使用
 
 在 GitHub Releases 页面下载 Windows 版本：
 
-- 安装包：`shiguang-agent-setup-0.2.30.exe`
+- 安装包：`shiguang-agent-setup-0.2.31.exe`
 - 免安装版：`win-unpacked.zip`
 
 安装包安装完成后会创建桌面快捷方式和开始菜单快捷方式。桌面上出现的是快捷方式，不是复制出来的独立 `.exe` 文件。
 
-`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.30`，才会生成新的正式 Release。
+`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.31`，才会生成新的正式 Release。
 
 如果使用免安装版，解压后运行：
 
@@ -298,8 +298,8 @@ examples/          示例配置
 推送 tag 后会自动构建 Release：
 
 ```bash
-git tag v0.2.30
-git push origin v0.2.30
+git tag v0.2.31
+git push origin v0.2.31
 ```
 
 Release 会上传：
