@@ -94,11 +94,14 @@ interface IntentFlags {
 
 function classifyIntent(text: string, history: ActionResult[]): IntentFlags {
   const hadMutation = history.some((result) => result.metadata?.workspaceMutation === true);
+  const explicitWebIntent = /网页|联网|上网|网上|网络搜索|网页搜索|搜索网页|搜索网络|搜一下|搜搜|搜索一下|查一下|查找一下|检索|官网|新闻|资料|文档|github|release|url|http|https|web|fetch|search online|browser|online|latest|current/.test(text);
+  const freshnessIntent = /最新|最近|今天|当前|现在|价格|版本|发布|release|latest|current|today|recent/.test(text);
+  const searchIntent = /搜|搜索|查|查询|查找|检索|look up|search|find/.test(text);
   return {
     inspect: /看|查看|分析|理解|梳理|检查|inspect|read|search|find|analy[sz]e|explain|map/.test(text),
     edit: /改|修|写|创建|生成|删除|移动|重命名|保存|fix|edit|write|create|delete|move|rename|patch|implement/.test(text),
     validate: hadMutation || /运行|测试|验证|打包|构建|报错|run|test|typecheck|build|validate|package|error/.test(text),
-    web: /网页|联网|搜索网络|github|release|url|http|https|web|fetch|search online|browser/.test(text),
+    web: explicitWebIntent || (searchIntent && freshnessIntent),
     memory: /记忆|记住|忘记|偏好|memory|remember|forget|preference/.test(text),
     git: /git|提交|差异|diff|status|commit|github|release|仓库/.test(text),
     mcp: /mcp|数据源|database|api|connector|server|tool/.test(text),
@@ -130,6 +133,8 @@ function scoreTool(
   if (tool.requiresApproval === true && !intent.edit && !intent.execute) score -= 8;
 
   if (intent.web && (contract.category === "web" || contract.category === "github" || haystack.includes("fetch"))) score += 24;
+  if (intent.web && name === "web_search") score += 36;
+  if (intent.web && name === "web_fetch" && /url|http|https|网页|链接|抓取|fetch/.test(text)) score += 30;
   if (intent.memory && contract.category === "memory") score += 24;
   if (intent.git && (contract.category === "git" || contract.category === "github")) score += 18;
   if (intent.mcp && contract.category === "mcp") score += 18;

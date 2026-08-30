@@ -88,6 +88,50 @@ test("tool selection uses contracts to avoid unrelated high-cost tools", () => {
   assert.deepEqual(names, ["read_text_file", "search_workspace"]);
 });
 
+test("tool selection keeps web search available for Chinese online lookup intent", () => {
+  const input = makeBrainInput([
+    {
+      name: "read_text_file",
+      description: "Read a file",
+      inputSchema: { type: "object" },
+      capability: "fs.read",
+      requiresApproval: false,
+    },
+    {
+      name: "search_workspace",
+      description: "Search local files",
+      inputSchema: { type: "object" },
+      capability: "fs.search",
+      requiresApproval: false,
+    },
+    {
+      name: "web_search",
+      description: "Search the public web",
+      inputSchema: { type: "object" },
+      capability: "web.search",
+      requiresApproval: false,
+    },
+    {
+      name: "web_fetch",
+      description: "Fetch a web page",
+      inputSchema: { type: "object" },
+      capability: "web.fetch",
+      requiresApproval: false,
+    },
+    {
+      name: "run_terminal_command",
+      description: "Run a shell command",
+      inputSchema: { type: "object" },
+      capability: "process.command",
+      requiresApproval: true,
+    },
+  ], "联网搜一下 deepseek harness 最新信息");
+
+  const selection = selectToolsForPlanner(input, 3);
+  const names = selection.selected.map((tool) => tool.name);
+  assert.ok(names.includes("web_search"));
+});
+
 function makeBrainInput(availableTools: ToolDescriptor[], userMessage: string): BrainInput {
   return {
     runId: "run_contract_test",

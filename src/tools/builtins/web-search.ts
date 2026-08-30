@@ -48,6 +48,36 @@ function extractDuckDuckGoResults(html: string, limit: number): Array<{ title: s
   return results;
 }
 
+function extractBingResults(html: string, limit: number): Array<{ title: string; url: string; snippet: string }> {
+  const results: Array<{ title: string; url: string; snippet: string }> = [];
+  const blockPattern = /<li[^>]+class="b_algo"[^>]*>[\s\S]*?<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>\s*<\/h2>[\s\S]*?(?:<p[^>]*>([\s\S]*?)<\/p>)?/gi;
+  for (const match of html.matchAll(blockPattern)) {
+    const url = decodeHtml(match[1] ?? "");
+    const title = decodeHtml((match[2] ?? "").replace(/<[^>]+>/g, " "));
+    const snippet = decodeHtml((match[3] ?? "").replace(/<[^>]+>/g, " "));
+    if (!title || !url) continue;
+    results.push({ title, url, snippet });
+    if (results.length >= limit) break;
+  }
+  return results;
+}
+
+async function fetchSearchHtml(url: URL, signal?: AbortSignal): Promise<string> {
+  const response = await fetch(url, {
+    signal,
+    headers: {
+      "User-Agent": "Mozilla/5.0 ShiguangAgent/1.0",
+      Accept: "text/html,application/xhtml+xml",
+      "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    },
+  });
+  const html = await response.text();
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}`);
+  }
+  return html;
+}
+
 export function createWebSearchTool(): Tool {
   return {
     descriptor: {
@@ -68,23 +98,35 @@ export function createWebSearchTool(): Tool {
     async execute(input: unknown, context?: ToolExecutionContext): Promise<unknown> {
       const parsed = parseInput(input);
       const limit = Math.max(1, Math.min(10, Math.trunc(parsed.limit ?? 5)));
-      const url = new URL("https://duckduckgo.com/html/");
-      url.searchParams.set("q", parsed.query);
-      const response = await fetch(url, {
-        signal: context?.signal,
-        headers: {
-          "User-Agent": "shiguang-agent",
-          Accept: "text/html",
-        },
-      });
-      const html = await response.text();
-      if (!response.ok) {
-        throw new Error(`web_search failed: ${response.status} ${response.statusText}`);
+      const errors: string[] = [];
+
+      const duckDuckGoUrl = new URL("https://duckduckgo.com/html/");
+      duckDuckGoUrl.searchParams.set("q", parsed.query);
+      try {
+        const html = await fetchSearchHtml(duckDuckGoUrl, context?.signal);
+        const results = extractDuckDuckGoResults(html, limit);
+        if (results.length > 0) {
+          return { query: parsed.query, provider: "duckduckgo", results };
+        }
+        errors.push("duckduckgo returned no parseable results");
+      } catch (error) {
+        errors.push(`duckduckgo: ${error instanceof Error ? error.message : String(error)}`);
       }
-      return {
-        query: parsed.query,
-        results: extractDuckDuckGoResults(html, limit),
-      };
+
+      const bingUrl = new URL("https://www.bing.com/search");
+      bingUrl.searchParams.set("q", parsed.query);
+      try {
+        const html = await fetchSearchHtml(bingUrl, context?.signal);
+        const results = extractBingResults(html, limit);
+        if (results.length > 0) {
+          return { query: parsed.query, provider: "bing", results };
+        }
+        errors.push("bing returned no parseable results");
+      } catch (error) {
+        errors.push(`bing: ${error instanceof Error ? error.message : String(error)}`);
+      }
+
+      throw new Error(`web_search failed: ${errors.join("; ")}. 请检查网络、代理/TUN、DNS 或防火墙设置。`);
     },
   };
 }

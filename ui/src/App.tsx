@@ -5758,6 +5758,23 @@ export default function App() {
               ) : null}
             </div>
 
+            <div className="session-tool-summary" title="Agent 当前内置工具能力">
+              <div className="session-tool-summary-head">
+                <span className="tiny">内置工具</span>
+                <span>可联网搜索</span>
+              </div>
+              <div className="session-tool-chip-row">
+                <span>文件</span>
+                <span>终端</span>
+                <span>Git</span>
+                <span>网页搜索</span>
+                <span>网页抓取</span>
+                <span>GitHub</span>
+                <span>MCP</span>
+                <span>记忆</span>
+              </div>
+            </div>
+
             <div className="session-list session-pane-list">
               {sessions.length === 0 ? (
                 <p className="muted" style={{ padding: 16 }}>还没有会话，点左上角新建一个。</p>

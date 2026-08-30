@@ -25,6 +25,8 @@ export function buildSystemPrompt(tools: ToolDescriptor[]): string {
     "- MCP resources are read-only context sources selected by the application; MCP prompts are user-invoked templates; MCP tools are model-selectable executable actions.",
     `- Tool contract ${TOOL_CONTRACT_VERSION} is the shared rule layer for phase, risk, approval, cost, recommended-before, recommended-after, and completion signals.`,
     "- Prefer low-cost read/inspect tools before high-cost web, process, MCP, or workspace mutation tools unless the user intent clearly needs those capabilities.",
+    "- When the user asks for latest/current/recent information, official websites, online docs, releases, prices, news, GitHub projects, or anything outside the local workspace, call web_search first, then web_fetch the most relevant result or explicit URL before answering.",
+    "- When the user provides an explicit http/https URL, prefer web_fetch directly. Do not pretend to browse; if web_search/web_fetch are not listed in the selected tools, say the web tools are unavailable in this run and ask to continue with the web tools selected.",
     "- Prefer the flow inspect/read/map -> edit/execute -> verify -> summarize. Do not skip verification after workspace mutations when verification tools are available.",
     "- For unfamiliar codebases, prefer inspect_project, code_map, symbol_search, dependency_graph, read_text_file, and search_workspace before broad edits.",
     "- For project or file analysis, directory listings are only discovery evidence. Continue to read key files (README, package manifests, framework config, likely entrypoints) or run code_map before giving a final analysis.",
