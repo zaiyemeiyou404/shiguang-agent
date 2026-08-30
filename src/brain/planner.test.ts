@@ -259,6 +259,136 @@ test("RulePlanner inspects projects for Chinese project lookup requests", async 
   assert.match(decision.reasoning ?? "", /inspect_project/);
 });
 
+test("RulePlanner uses web_search first for online lookup requests", async () => {
+  const planner = new RulePlanner();
+  const availableTools: ToolDescriptor[] = [
+    {
+      name: "web_search",
+      description: "Searches the public web",
+      inputSchema: { type: "object" },
+      capability: "web.search",
+    },
+    {
+      name: "search_workspace",
+      description: "Searches the workspace",
+      inputSchema: { type: "object" },
+    },
+    {
+      name: "inspect_project",
+      description: "Inspects the project",
+      inputSchema: { type: "object" },
+    },
+  ];
+
+  const decision = await planner.decide(makeInput([], availableTools, "你能搜索红色书籍吗"));
+
+  assert.deepEqual(decision.action, {
+    kind: "tool_call",
+    toolName: "web_search",
+    toolInput: { query: "红色书籍", limit: 5 },
+  });
+});
+
+test("LlmPlanner summarizes completed web search instead of continuing local project inspection", async () => {
+  const model = new RecordingModel({ kind: "tool_call", toolName: "inspect_project", toolInput: {} });
+  const planner = new LlmPlanner(model);
+  const availableTools: ToolDescriptor[] = [
+    {
+      name: "web_search",
+      description: "Searches the public web",
+      inputSchema: { type: "object" },
+      capability: "web.search",
+    },
+    {
+      name: "inspect_project",
+      description: "Inspects the project",
+      inputSchema: { type: "object" },
+    },
+    {
+      name: "read_text_file",
+      description: "Reads a file",
+      inputSchema: { type: "object" },
+    },
+  ];
+
+  const decision = await planner.decide(makeInput([
+    {
+      action: { kind: "tool_call", toolName: "web_search", toolInput: { query: "红色书籍", limit: 5 } },
+      ok: true,
+      output: {
+        query: "红色书籍",
+        provider: "bing",
+        results: [
+          { title: "红色经典书籍推荐", url: "https://example.test/red-books", snippet: "红色经典阅读推荐列表。" },
+        ],
+      },
+      metadata: {
+        category: "tool_observation",
+        summary: "searched the web",
+        retryable: false,
+        toolName: "web_search",
+      },
+    },
+  ], availableTools, "你能搜索红色书籍吗", {
+    step: 1,
+    phase: "summarize",
+    lastActionKind: "tool_call",
+    lastToolName: "web_search",
+  }));
+
+  assert.equal(model.calls, 0);
+  assert.equal(decision.action.kind, "respond");
+  assert.match(decision.action.content ?? "", /联网搜索/);
+  assert.match(decision.action.content ?? "", /红色经典书籍推荐/);
+});
+
+test("LlmPlanner summarizes completed web search when the user only clicks continue", async () => {
+  const model = new RecordingModel({ kind: "tool_call", toolName: "read_text_file", toolInput: { path: "pubspec.yaml" } });
+  const planner = new LlmPlanner(model);
+  const availableTools: ToolDescriptor[] = [
+    {
+      name: "web_search",
+      description: "Searches the public web",
+      inputSchema: { type: "object" },
+      capability: "web.search",
+    },
+    {
+      name: "read_text_file",
+      description: "Reads a file",
+      inputSchema: { type: "object" },
+    },
+  ];
+
+  const decision = await planner.decide(makeInput([
+    {
+      action: { kind: "tool_call", toolName: "web_search", toolInput: { query: "红色书籍", limit: 5 } },
+      ok: true,
+      output: {
+        query: "红色书籍",
+        provider: "bing",
+        results: [
+          { title: "红色经典书籍推荐", url: "https://example.test/red-books", snippet: "红色经典阅读推荐列表。" },
+        ],
+      },
+      metadata: {
+        category: "tool_observation",
+        summary: "searched the web",
+        retryable: false,
+        toolName: "web_search",
+      },
+    },
+  ], availableTools, "继续上次暂停的任务。", {
+    step: 1,
+    phase: "summarize",
+    lastActionKind: "tool_call",
+    lastToolName: "web_search",
+  }));
+
+  assert.equal(model.calls, 0);
+  assert.equal(decision.action.kind, "respond");
+  assert.match(decision.action.content ?? "", /红色经典书籍推荐/);
+});
+
 test("RulePlanner runs validation for Chinese runnable-project requests", async () => {
   const planner = new RulePlanner();
   const availableTools: ToolDescriptor[] = [

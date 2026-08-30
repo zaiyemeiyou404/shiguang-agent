@@ -22,6 +22,9 @@ export class LlmPlanner implements Planner {
       };
     }
 
+    const completedWebLookup = inferCompletedWebLookupResponse(input, lastResult);
+    if (completedWebLookup) return completedWebLookup;
+
     const request = this.buildRequest(input);
     const response = await this.model.generateDecision(request, context);
     const decision = { action: response.action, reasoning: response.reasoning };
@@ -226,6 +229,16 @@ function decideByPhase(
       const exhaustedSearchDecision = inferExhaustedRepairSearchDecision(input);
       if (exhaustedSearchDecision) return exhaustedSearchDecision;
 
+      const initialWebSearch = input.history.length === 0
+        ? inferInitialWebSearchQuery(message, input.availableTools)
+        : null;
+      if (initialWebSearch) {
+        return {
+          action: { kind: "tool_call", toolName: "web_search", toolInput: { query: initialWebSearch, limit: 5 } },
+          reasoning: `Phase investigate: user asked for online search; starting with web_search: ${initialWebSearch}`,
+        };
+      }
+
       const projectInspection = input.history.length === 0
         ? inferInitialProjectInspection(message, input.availableTools)
         : null;
@@ -299,6 +312,9 @@ function decideByPhase(
     }
 
     case "summarize": {
+      const webLookupResponse = inferCompletedWebLookupResponse(input, lastResult);
+      if (webLookupResponse) return webLookupResponse;
+
       const projectFollowupRead = inferProjectAnalysisFollowupRead(input, message);
       if (projectFollowupRead) {
         return {
@@ -331,6 +347,21 @@ function decideByPhase(
       return null;
     }
   }
+}
+
+function inferCompletedWebLookupResponse(input: BrainInput, lastResult: ActionResult | null): BrainDecision | null {
+  if (!lastResult || !lastResult.ok || lastResult.action.kind !== "tool_call") return null;
+  const toolName = lastResult.metadata?.toolName ?? lastResult.action.toolName;
+  if (toolName !== "web_search" && toolName !== "web_fetch") return null;
+  const message = latestUserMessage(input);
+  if (!isWebLookupIntent(message) && !isContinuationInstruction(message)) return null;
+
+  const content = summarizeObservation(lastResult, message);
+  if (!content) return null;
+  return {
+    action: { kind: "respond", content },
+    reasoning: `Web lookup completed with ${toolName}; returning online results instead of continuing local workspace inspection.`,
+  };
 }
 
 function inferPlannerPhase(input: BrainInput, lastResult: ActionResult | null, message: string): PlannerPhase {
@@ -485,9 +516,44 @@ function inferInitialSearchQuery(message: string, availableTools: ToolDescriptor
   return normalized.slice(0, 4).join(" ");
 }
 
+function inferInitialWebSearchQuery(message: string, availableTools: ToolDescriptor[]): string | null {
+  if (!hasTool(availableTools, "web_search")) return null;
+  if (!isWebLookupIntent(message)) return null;
+  if (isLocalWorkspaceLookupIntent(message)) return null;
+
+  const normalized = message
+    .replace(/你能|能不能|可以|帮我|请|一下|吗|？|\?/g, " ")
+    .replace(/联网|上网|网上|网页|网络|搜索|搜|查询|查找|查|检索/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return normalized || message.trim();
+}
+
 function needsInvestigation(message: string): boolean {
   return /\b(fix|debug|investigate|inspect|update|change|modify|edit|repair|error|failure|bug|find|search|read|show|list|open|locate|lookup|trace|explore)\b/i.test(message)
     || /修|改|看一下|检查|排查|调试|找|搜索|读取|打开|列出|项目|仓库|工程|报错|错误|失败|不能跑|能不能跑|测试|验证/.test(message);
+}
+
+function latestUserMessage(input: BrainInput): string {
+  return [...input.context.volatile].reverse().find((item) => item.kind === "user_turn")?.content
+    ?? input.context.volatile.find((item) => item.kind === "user_turn")?.content
+    ?? "";
+}
+
+function isWebLookupIntent(message: string): boolean {
+  const text = message.toLowerCase();
+  const hasWebWord = /联网|上网|网上|网页|网络搜索|网页搜索|搜索网页|搜索网络|官网|新闻|资料|文档|github|release|url|http|https|web|fetch|browser|online|latest|current/.test(text);
+  const hasFreshWord = /最新|最近|今天|当前|现在|价格|版本|发布|release|latest|current|today|recent/.test(text);
+  const hasSearchWord = /搜|搜索|查|查询|查找|检索|look up|search|find/.test(text);
+  return hasWebWord || (hasSearchWord && hasFreshWord) || (hasSearchWord && !isLocalWorkspaceLookupIntent(message));
+}
+
+function isLocalWorkspaceLookupIntent(message: string): boolean {
+  return /工作区|本地|项目|工程|代码|文件|目录|路径|仓库|workspace|repo|repository|codebase|file|folder|directory|path/.test(message.toLowerCase());
+}
+
+function isContinuationInstruction(message: string): boolean {
+  return /继续|续跑|暂停|checkpoint|上次|上一轮|resume|continue/i.test(message);
 }
 
 function inferEmptySearchFallback(
@@ -1352,6 +1418,43 @@ function summarizeObservation(lastResult: ActionResult | null, message: string):
       const linePart = typeof top.line === "number" ? `:${top.line}` : "";
       return `已找到一个高相关匹配：${top.file}${linePart}。下一步应该继续读取它。`;
     }
+  }
+
+  if (lastResult.action.toolName === "web_search") {
+    const output = lastResult.output as {
+      query?: unknown;
+      provider?: unknown;
+      results?: Array<{ title?: unknown; url?: unknown; snippet?: unknown }>;
+    } | null;
+    const query = typeof output?.query === "string" ? output.query : message.trim();
+    const provider = typeof output?.provider === "string" ? `（${output.provider}）` : "";
+    const results = Array.isArray(output?.results) ? output.results : [];
+    if (results.length === 0) {
+      return `我已联网搜索${provider}「${query}」，但没有拿到可用结果。可以换个关键词，或者让我抓取你指定的网页链接。`;
+    }
+    const lines = results.slice(0, 5).map((item, index) => {
+      const title = typeof item.title === "string" && item.title.trim() ? item.title.trim() : "未命名结果";
+      const url = typeof item.url === "string" && item.url.trim() ? item.url.trim() : "";
+      const snippet = typeof item.snippet === "string" && item.snippet.trim() ? `\n   ${item.snippet.trim()}` : "";
+      return `${index + 1}. ${title}${url ? `\n   ${url}` : ""}${snippet}`;
+    });
+    return `我已联网搜索${provider}「${query}」，找到这些结果：\n${lines.join("\n")}`;
+  }
+
+  if (lastResult.action.toolName === "web_fetch") {
+    const output = lastResult.output as { url?: unknown; title?: unknown; text?: unknown; content?: unknown; truncated?: unknown } | null;
+    const url = typeof output?.url === "string" ? output.url : "该网页";
+    const title = typeof output?.title === "string" && output.title.trim() ? `「${output.title.trim()}」` : "";
+    const content = typeof output?.text === "string"
+      ? output.text
+      : typeof output?.content === "string"
+        ? output.content
+        : "";
+    const preview = content.trim().slice(0, 700);
+    const truncatedNote = output?.truncated === true || content.length > 700
+      ? "\n\n内容较长，我先截取了前半部分；需要的话我可以继续抓取/整理。"
+      : "";
+    return `我已抓取网页${title}：${url}\n\n${preview || "页面已返回，但没有提取到明显正文。"}${truncatedNote}`;
   }
 
   return null;
