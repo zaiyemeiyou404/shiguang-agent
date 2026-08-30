@@ -61,11 +61,16 @@ export function selectToolsForPlanner(
     score: scoreTool(tool, intent, recentToolNames, input.history, text),
   }));
 
-  const selected = scored
-    .sort((left, right) => right.score - left.score || left.index - right.index)
-    .slice(0, Math.max(1, maxSelected))
-    .sort((left, right) => left.index - right.index)
-    .map((item) => item.tool);
+  const selected = ensurePinnedTools(
+    scored,
+    scored
+      .sort((left, right) => right.score - left.score || left.index - right.index)
+      .slice(0, Math.max(1, maxSelected))
+      .sort((left, right) => left.index - right.index)
+      .map((item) => item.tool),
+    pinnedToolsForIntent(intent, text),
+    maxSelected,
+  );
 
   return {
     selected,
@@ -94,6 +99,8 @@ interface IntentFlags {
 
 function classifyIntent(text: string, history: ActionResult[]): IntentFlags {
   const hadMutation = history.some((result) => result.metadata?.workspaceMutation === true);
+  const readableIntent = classifyReadableChineseIntent(text, hadMutation);
+  if (readableIntent) return readableIntent;
   const explicitWebIntent = /网页|联网|上网|网上|网络搜索|网页搜索|搜索网页|搜索网络|搜一下|搜搜|搜索一下|查一下|查找一下|检索|官网|新闻|资料|文档|github|release|url|http|https|web|fetch|search online|browser|online|latest|current/.test(text);
   const freshnessIntent = /最新|最近|今天|当前|现在|价格|版本|发布|release|latest|current|today|recent/.test(text);
   const searchIntent = /搜|搜索|查|查询|查找|检索|look up|search|find/.test(text);
@@ -107,6 +114,84 @@ function classifyIntent(text: string, history: ActionResult[]): IntentFlags {
     mcp: /mcp|数据源|database|api|connector|server|tool/.test(text),
     execute: /命令|终端|脚本|执行|启动|install|npm|pnpm|yarn|pip|command|terminal|shell/.test(text),
   };
+}
+
+function classifyReadableChineseIntent(text: string, hadMutation: boolean): IntentFlags | null {
+  if (!/[\u4e00-\u9fff]/.test(text)) return null;
+  const searchIntent = /搜索|搜一下|搜搜|查一下|查询|查找|检索|找一下|找找/.test(text);
+  const localWorkspaceIntent = /工作区|本地|目录|文件|项目|代码|仓库|工程/.test(text);
+  const explicitWebIntent = /网页|联网|上网|网上|网络搜索|网页搜索|搜索网页|搜索网络|联网查|官网|新闻|资料|文档|最新|最近|今天|当前|现在|价格|版本|发布/.test(text);
+  const inspectIntent = /看|查看|分析|理解|梳理|检查/.test(text);
+  const validateIntent = /运行|测试|验证|打包|构建|报错|杩愯|娴嬭瘯|楠岃瘉|鎵撳寘|鏋勫缓/.test(text);
+  const pathIntent = /(?:^|[\s"'(])[\w.-]+[\\/][\w./\\-]+|\b[\w.-]+\.(?:ts|tsx|js|jsx|json|py|md|css|html|dart|yaml|yml)\b/.test(text);
+  const editIntent = /改|修改|写|创建|生成|删除|移动|重命名|保存|淇|鏀|鍐|鍒涘缓|鐢熸垚/.test(text) || (pathIntent && validateIntent);
+  const memoryIntent = /记忆|记住|忘记|偏好/.test(text);
+  const gitIntent = /提交|差异|仓库/.test(text);
+  const mcpIntent = /数据源|工具协议|连接器/.test(text);
+  const executeIntent = /命令|终端|脚本|执行|启动/.test(text);
+  if (!(searchIntent || localWorkspaceIntent || explicitWebIntent || inspectIntent || editIntent || validateIntent || memoryIntent || gitIntent || mcpIntent || executeIntent)) {
+    return null;
+  }
+
+  return {
+    inspect: inspectIntent || searchIntent,
+    edit: editIntent,
+    validate: hadMutation || validateIntent,
+    web: explicitWebIntent || (searchIntent && !localWorkspaceIntent),
+    memory: memoryIntent,
+    git: gitIntent,
+    mcp: mcpIntent,
+    execute: executeIntent,
+  };
+}
+
+function pinnedToolsForIntent(intent: IntentFlags, _text: string): string[] {
+  if (!intent.web) return [];
+  return ["web_search", "web_fetch"];
+}
+
+function ensurePinnedTools(
+  scored: Array<{ tool: ToolDescriptor; index: number; score: number }>,
+  selected: ToolDescriptor[],
+  pinnedToolNames: string[],
+  maxSelected: number,
+): ToolDescriptor[] {
+  if (pinnedToolNames.length === 0) return selected;
+  const next = [...selected];
+  for (const pinnedName of pinnedToolNames) {
+    if (next.some((tool) => tool.name === pinnedName)) continue;
+    const pinned = scored.find((item) => item.tool.name === pinnedName)?.tool;
+    if (!pinned) continue;
+    if (next.length >= maxSelected) {
+      const removableIndex = findLowestPriorityNonPinnedIndex(next, scored, pinnedToolNames);
+      if (removableIndex >= 0) next.splice(removableIndex, 1);
+    }
+    next.push(pinned);
+  }
+  return next.sort((left, right) => {
+    const leftIndex = scored.find((item) => item.tool.name === left.name)?.index ?? 0;
+    const rightIndex = scored.find((item) => item.tool.name === right.name)?.index ?? 0;
+    return leftIndex - rightIndex;
+  });
+}
+
+function findLowestPriorityNonPinnedIndex(
+  selected: ToolDescriptor[],
+  scored: Array<{ tool: ToolDescriptor; index: number; score: number }>,
+  pinnedToolNames: string[],
+): number {
+  let lowestIndex = -1;
+  let lowestScore = Infinity;
+  for (let index = 0; index < selected.length; index++) {
+    const tool = selected[index];
+    if (!tool || pinnedToolNames.includes(tool.name)) continue;
+    const score = scored.find((item) => item.tool.name === tool.name)?.score ?? 0;
+    if (score < lowestScore) {
+      lowestScore = score;
+      lowestIndex = index;
+    }
+  }
+  return lowestIndex;
 }
 
 function scoreTool(

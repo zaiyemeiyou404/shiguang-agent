@@ -473,8 +473,8 @@ test("LlmPlanner sends a cost-aware subset of tool schemas to the model", async 
   assert.ok((model.lastRequest?.availableTools.length ?? 0) <= 14);
   assert.ok((model.lastRequest?.availableTools.length ?? 0) < availableTools.length);
   const selectedNames = new Set(model.lastRequest?.availableTools.map((tool) => tool.name) ?? []);
-  assert.ok(selectedNames.has("patch_text_file"));
-  assert.ok(selectedNames.has("run_validation"));
+  assert.ok(selectedNames.has("patch_text_file"), `selected tools: ${[...selectedNames].join(", ")}`);
+  assert.ok(selectedNames.has("run_validation"), `selected tools: ${[...selectedNames].join(", ")}`);
 });
 
 test("RulePlanner falls back to list_directory after an empty search result", async () => {
