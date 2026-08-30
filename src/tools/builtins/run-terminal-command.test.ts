@@ -1,6 +1,6 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
 import * as assert from "node:assert/strict";
 
@@ -68,14 +68,27 @@ test("run_terminal_command executes a workspace command", async () => {
   assert.match(result.stdout, /hello from tool/);
 });
 
-test("run_terminal_command rejects cwd escape", async () => {
+test("run_terminal_command allows obvious read-only commands outside the workspace", async () => {
   const { createRunTerminalCommandTool } = await loadModule();
   const workspaceRoot = await makeWorkspace();
+  const outsideRoot = await makeWorkspace();
+  const tool = createRunTerminalCommandTool(workspaceRoot);
+
+  const result = await tool.execute({ command: "dir", cwd: join(dirname(outsideRoot), basename(outsideRoot)) });
+  assertOutput(result);
+  assert.equal(result.ok, true);
+  assert.match(result.cwd.replace(/\\/g, "/"), new RegExp(`${basename(outsideRoot)}$`));
+});
+
+test("run_terminal_command rejects mutating commands outside the workspace", async () => {
+  const { createRunTerminalCommandTool } = await loadModule();
+  const workspaceRoot = await makeWorkspace();
+  const outsideRoot = await makeWorkspace();
   const tool = createRunTerminalCommandTool(workspaceRoot);
 
   await assert.rejects(
-    () => tool.execute({ command: "pwd", cwd: "../outside" }),
-    /workspace root/i,
+    () => tool.execute({ command: `${process.execPath} -e "require('fs').writeFileSync('x.txt','x')"`, cwd: outsideRoot }),
+    /escapes workspace root/i,
   );
 });
 

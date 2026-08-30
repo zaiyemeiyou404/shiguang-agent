@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
+import { relative, resolve } from "node:path";
 import type { Tool, ToolExecutionContext } from "../types.js";
-import { resolveWorkspacePath } from "./path-format.js";
+import { resolveWorkspacePath, toPortablePath } from "./path-format.js";
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 const MAX_OUTPUT_CHARS = 8_000;
@@ -54,16 +55,53 @@ function throwIfAborted(signal?: AbortSignal): void {
   }
 }
 
+function isInsideWorkspace(workspaceRoot: string, candidate: string): boolean {
+  const rel = relative(resolve(workspaceRoot), resolve(candidate));
+  return rel === "" || (!rel.startsWith("..") && !rel.startsWith("/") && !rel.startsWith("\\"));
+}
+
+function resolveTerminalCwd(workspaceRoot: string, cwd: string | undefined, command: string): string {
+  if (!cwd) return resolveWorkspacePath(workspaceRoot);
+  const candidate = resolve(workspaceRoot, cwd);
+  if (isInsideWorkspace(workspaceRoot, candidate)) return resolveWorkspacePath(workspaceRoot, cwd);
+  if (isReadOnlyCommand(command)) return candidate;
+  throw new Error(`run_terminal_command: cwd escapes workspace root for a command that may modify files. Use a workspace path for write/install/build/delete/move commands, or run an obvious read-only command outside the workspace. cwd=${cwd}`);
+}
+
+function isReadOnlyCommand(command: string): boolean {
+  const normalized = command.trim().toLowerCase();
+  if (!normalized) return false;
+  if (/[<>]/.test(normalized) || /\b(out-file|set-content|add-content|tee-object|new-item|remove-item|copy-item|move-item|rename-item)\b/.test(normalized)) {
+    return false;
+  }
+  if (/\b(rm|del|erase|move|mv|copy|cp|mkdir|md|rmdir|rd|touch)\b/.test(normalized)) return false;
+  if (/\b(npm|pnpm|yarn|bun)\s+(install|add|remove|update|run|build|test|exec|dlx|create)\b/.test(normalized)) return false;
+  if (/\b(pip|pipx|poetry|cargo|go|dotnet|mvn|gradle|flutter)\s+(install|add|remove|update|build|test|run|pub|get|upgrade)\b/.test(normalized)) return false;
+  if (/\bgit\s+(add|apply|am|bisect|checkout|clean|commit|fetch|merge|pull|push|rebase|reset|restore|revert|stash|switch|tag)\b/.test(normalized)) return false;
+
+  const segments = normalized
+    .split("|")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (segments.length === 0) return false;
+
+  return segments.every((segment) => {
+    const cleaned = segment.replace(/^(cmd\s+\/c|powershell(?:\.exe)?\s+-command)\s+/, "").trim();
+    return /^(\.?\/)?(pwd|cd|dir|ls|tree|type|cat|more|where|where\.exe|which|findstr|grep|rg|select-string|get-childitem|gci|get-content|gc|measure-object|sort-object|format-table|format-list)\b/.test(cleaned)
+      || /^git\s+(status|log|show|diff|branch|remote|rev-parse|ls-files|grep)\b/.test(cleaned);
+  });
+}
+
 export function createRunTerminalCommandTool(workspaceRoot: string): Tool {
   return {
     descriptor: {
       name: "run_terminal_command",
-      description: "Run a shell command inside the workspace. Accepts { command, cwd?, timeoutMs? } and returns exit code plus stdout/stderr.",
+      description: "Run a shell command. Mutating commands must run inside the workspace; obvious read-only commands may use an external cwd. Accepts { command, cwd?, timeoutMs? } and returns exit code plus stdout/stderr.",
       inputSchema: {
         type: "object",
         properties: {
-          command: { type: "string", description: "Shell command to run inside the workspace" },
-          cwd: { type: "string", description: "Optional relative subdirectory inside the workspace" },
+          command: { type: "string", description: "Shell command to run. Write/install/build/delete/move commands must stay inside the workspace." },
+          cwd: { type: "string", description: "Optional cwd. External cwd is allowed only for obvious read-only commands such as dir/ls/Get-Content/rg/git status." },
           timeoutMs: { type: "number", description: "Optional timeout in milliseconds" },
         },
         required: ["command"],
@@ -78,7 +116,7 @@ export function createRunTerminalCommandTool(workspaceRoot: string): Tool {
     async execute(input: unknown, context?: ToolExecutionContext): Promise<RunTerminalCommandOutput> {
       throwIfAborted(context?.signal);
       const { command, cwd, timeoutMs } = resolveInput(input);
-      const workingDirectory = resolveWorkspacePath(workspaceRoot, cwd);
+      const workingDirectory = resolveTerminalCwd(workspaceRoot, cwd, command);
       const timeout = Number.isFinite(timeoutMs) && (timeoutMs ?? 0) > 0
         ? Math.min(Math.trunc(timeoutMs as number), 120_000)
         : DEFAULT_TIMEOUT_MS;
@@ -110,7 +148,7 @@ export function createRunTerminalCommandTool(workspaceRoot: string): Tool {
           context?.signal?.removeEventListener("abort", abortHandler);
           resolvePromise({
             command,
-            cwd: workingDirectory,
+            cwd: toPortablePath(workingDirectory),
             ok,
             exitCode,
             stdout: trimOutput(stdout),
