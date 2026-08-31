@@ -125,3 +125,85 @@ test("web_fetch prefers news article body over navigation chrome", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("web_fetch extracts articleBody from JSON-LD when available", async () => {
+  const { createWebFetchTool } = await loadModule();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(
+    `<!doctype html>
+    <html>
+      <head>
+        <title>Red Culture Report</title>
+        <script type="application/ld+json">
+          {
+            "@context": "https://schema.org",
+            "@type": "NewsArticle",
+            "headline": "Red Culture Report",
+            "articleBody": "This is the real article body. It explains the research progress, current results, and future outlook in complete paragraphs."
+          }
+        </script>
+      </head>
+      <body>
+        <nav>Download the app. Follow us. Comment here.</nav>
+        <div>Navigation and sharing buttons only.</div>
+      </body>
+    </html>`,
+    {
+      status: 200,
+      headers: { "content-type": "text/html; charset=utf-8" },
+    },
+  );
+
+  try {
+    const tool = createWebFetchTool();
+    const result = await tool.execute({ url: "https://example.test/jsonld.html" });
+
+    assertOutput(result);
+    assert.match(result.text, /real article body/);
+    assert.doesNotMatch(result.text, /Navigation and sharing buttons/);
+    assert.equal(result.articleCandidates?.[0]?.source, "json-ld:articleBody");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("web_fetch can infer an article from dense paragraph clusters", async () => {
+  const { createWebFetchTool } = await loadModule();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(
+    `<!doctype html>
+    <html>
+      <head><title>Simple News Page</title></head>
+      <body>
+        <header>Home Search Download Client</header>
+        <div class="layout">
+          <aside>Recommended links and comments</aside>
+          <section>
+            <p>Source: Example Daily</p>
+            <p>The article begins with a substantial opening paragraph about the topic and why it matters to readers.</p>
+            <p>The second paragraph adds evidence, background, and details that belong to the real story rather than navigation.</p>
+            <p>The third paragraph closes the report with a useful summary and a clear takeaway for the audience.</p>
+          </section>
+        </div>
+        <footer>Copyright ICP comments download client</footer>
+      </body>
+    </html>`,
+    {
+      status: 200,
+      headers: { "content-type": "text/html; charset=utf-8" },
+    },
+  );
+
+  try {
+    const tool = createWebFetchTool();
+    const result = await tool.execute({ url: "https://example.test/paragraphs.html" });
+
+    assertOutput(result);
+    assert.match(result.text, /substantial opening paragraph/);
+    assert.match(result.text, /clear takeaway/);
+    assert.doesNotMatch(result.text, /Recommended links/);
+    assert.ok(result.articleCandidates?.some((candidate) => candidate.source.startsWith("paragraph_cluster")));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

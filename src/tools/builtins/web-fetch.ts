@@ -3,6 +3,7 @@ import type { Tool, ToolExecutionContext } from "../types.js";
 const MAX_TEXT_CHARS = 20_000;
 const MAX_HTML_PREVIEW_CHARS = 8_000;
 const DEFAULT_TIMEOUT_MS = 20_000;
+const HEAD_DECODE_BYTES = 16_384;
 
 interface WebFetchInput {
   url: string;
@@ -102,6 +103,39 @@ function htmlToText(html: string): string {
     .replace(/&#x([0-9a-f]+);/gi, (_, code: string) => String.fromCodePoint(Number.parseInt(code, 16))));
 }
 
+function normalizeCharset(value: string | undefined): string | null {
+  const charset = value?.trim().replace(/^["']|["']$/g, "").toLowerCase();
+  if (!charset) return null;
+  if (charset === "gb2312" || charset === "gbk" || charset === "gb18030") return "gb18030";
+  if (charset === "utf8") return "utf-8";
+  return charset;
+}
+
+function inferCharsetFromHtmlPreview(preview: string): string | null {
+  const direct = preview.match(/<meta\b[^>]*charset\s*=\s*["']?\s*([^"'>\s;]+)/i)?.[1];
+  if (direct) return normalizeCharset(direct);
+  const contentTypeMeta = preview.match(/<meta\b[^>]*http-equiv\s*=\s*["']content-type["'][^>]*content\s*=\s*["'][^"']*charset=([^"'\s;]+)/i)?.[1]
+    ?? preview.match(/<meta\b[^>]*content\s*=\s*["'][^"']*charset=([^"'\s;]+)[^"']*["'][^>]*http-equiv\s*=\s*["']content-type["']/i)?.[1];
+  return normalizeCharset(contentTypeMeta);
+}
+
+function inferCharset(contentType: string, bytes: Uint8Array): string {
+  const headerCharset = normalizeCharset(contentType.match(/charset\s*=\s*([^;]+)/i)?.[1]);
+  if (headerCharset) return headerCharset;
+
+  const headPreview = new TextDecoder("utf-8").decode(bytes.slice(0, HEAD_DECODE_BYTES));
+  return inferCharsetFromHtmlPreview(headPreview) ?? "utf-8";
+}
+
+function decodeBody(bytes: Uint8Array, contentType: string): string {
+  const charset = inferCharset(contentType, bytes);
+  try {
+    return new TextDecoder(charset).decode(bytes);
+  } catch {
+    return new TextDecoder("utf-8").decode(bytes);
+  }
+}
+
 function extractBodyHtml(html: string): string {
   return html.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i)?.[1] ?? html;
 }
@@ -122,9 +156,70 @@ function trimCandidateText(value: string): { text: string; truncated: boolean } 
   return trimWithLimit(value, 2_400, 2_400);
 }
 
+function extractJsonLdArticleBodies(html: string): Array<{ source: string; text: string }> {
+  const candidates: Array<{ source: string; text: string }> = [];
+  for (const match of html.matchAll(/<script\b[^>]*type\s*=\s*(['"])application\/ld\+json\1[^>]*>([\s\S]*?)<\/script>/gi)) {
+    const raw = htmlToText(match[2] ?? "").trim();
+    if (!raw) continue;
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      for (const body of findJsonArticleBodies(parsed)) {
+        candidates.push({ source: "json-ld:articleBody", text: body });
+      }
+    } catch {
+      for (const bodyMatch of raw.matchAll(/"articleBody"\s*:\s*"([\s\S]*?)"\s*(?:,|\})/gi)) {
+        const body = bodyMatch[1]?.replace(/\\"/g, "\"").replace(/\\n/g, "\n");
+        if (body) candidates.push({ source: "json-ld:articleBody", text: body });
+      }
+    }
+  }
+  return candidates;
+}
+
+function findJsonArticleBodies(value: unknown): string[] {
+  if (!value || typeof value !== "object") return [];
+  if (Array.isArray(value)) return value.flatMap(findJsonArticleBodies);
+  const record = value as Record<string, unknown>;
+  const bodies: string[] = [];
+  if (typeof record.articleBody === "string" && record.articleBody.trim()) {
+    bodies.push(record.articleBody.trim());
+  }
+  for (const nested of Object.values(record)) {
+    bodies.push(...findJsonArticleBodies(nested));
+  }
+  return bodies;
+}
+
+function collectParagraphCluster(html: string): Array<{ source: string; text: string }> {
+  const paragraphs = [...html.matchAll(/<p\b[^>]*>[\s\S]*?<\/p>/gi)]
+    .map((match) => htmlToText(match[0] ?? ""))
+    .map((text) => text.trim())
+    .filter((text) => text.length >= 8);
+  if (paragraphs.length < 2) return [];
+
+  const clusters: string[][] = [];
+  let current: string[] = [];
+  for (const paragraph of paragraphs) {
+    const isNoise = /^(APP|微信|下载|举报|评论|分享到|来源[:：]?\s*$|责任编辑[:：]?)/i.test(paragraph)
+      || /客户端|公众号|二维码|ICP备案|版权|未经授权/.test(paragraph);
+    if (isNoise) {
+      if (current.length > 0) clusters.push(current);
+      current = [];
+      continue;
+    }
+    current.push(paragraph);
+  }
+  if (current.length > 0) clusters.push(current);
+
+  return clusters
+    .map((cluster, index) => ({ source: `paragraph_cluster:${index + 1}`, text: cluster.join("\n\n") }))
+    .filter((candidate) => candidate.text.length > 120);
+}
+
 function collectReadableCandidates(html: string): Array<{ source: string; text: string }> {
   const candidates: Array<{ source: string; text: string }> = [];
   const body = extractBodyHtml(html);
+  candidates.push(...extractJsonLdArticleBodies(html));
   const structuralPatterns = [
     { source: "article", pattern: /<article\b[^>]*>[\s\S]*?<\/article>/gi },
     { source: "main", pattern: /<main\b[^>]*>[\s\S]*?<\/main>/gi },
@@ -136,7 +231,7 @@ function collectReadableCandidates(html: string): Array<{ source: string; text: 
   }
 
   const contentLike =
-    /(article|content|detail|details|main|news|post|entry|body|text|txt|rich|paragraph|正文|内容|稿件|文章)/i;
+    /(article|content|detail|details|main|news|post|entry|body|text|txt|rich|paragraph|TRS_Editor|正文|内容|稿件|文章|新闻)/i;
   for (const match of body.matchAll(/<(div|section|td)\b[^>]*>[\s\S]*?<\/\1>/gi)) {
     const block = match[0] ?? "";
     const openingTag = block.match(/^<[^>]+>/)?.[0] ?? "";
@@ -144,6 +239,7 @@ function collectReadableCandidates(html: string): Array<{ source: string; text: 
     if (contentLike.test(marker)) candidates.push({ source: marker.trim() || "content-like-block", text: block });
   }
 
+  candidates.push(...collectParagraphCluster(body));
   candidates.push({ source: "whole_body", text: body });
   return candidates
     .map((candidate) => ({ ...candidate, text: htmlToText(candidate.text) }))
@@ -152,11 +248,20 @@ function collectReadableCandidates(html: string): Array<{ source: string; text: 
 
 function scoreReadableText(text: string, title?: string): number {
   const lengthScore = Math.min(text.length, 20_000) / 100;
-  const punctuationScore = (text.match(/[。！？；：]/g)?.length ?? 0) * 4;
+  const punctuationScore = (text.match(/[。！？；：，、.!?;:,]/g)?.length ?? 0) * 4;
   const paragraphScore = (text.match(/\n\s*\n/g)?.length ?? 0) * 8;
   const titleScore = title && text.includes(title) ? 120 : 0;
-  const navPenalty = (text.match(/下载|扫码|客户端|关注|举报|评论|相关新闻|热新闻|进入频道/g)?.length ?? 0) * 18;
+  const navPenalty = (text.match(/下载|扫码|客户端|关注|举报|评论|相关新闻|热点新闻|热新闻|进入频道|版权所有|ICP备案/g)?.length ?? 0) * 18;
   return lengthScore + punctuationScore + paragraphScore + titleScore - navPenalty;
+}
+
+function candidateSourceBoost(source: string): number {
+  if (source.startsWith("json-ld:articleBody")) return 260;
+  if (source.startsWith("paragraph_cluster")) return 180;
+  if (source === "article") return 160;
+  if (source === "main") return 110;
+  if (source === "whole_body") return -140;
+  return 80;
 }
 
 function stripBoilerplateLines(text: string): string {
@@ -205,7 +310,7 @@ function extractReadableHtml(html: string): ExtractedReadableHtml {
       const focused = focusArticleText(candidate.text, title);
       return {
         source: candidate.source,
-        score: scoreReadableText(focused, title),
+        score: scoreReadableText(focused, title) + candidateSourceBoost(candidate.source),
         text: focused,
       };
     })
@@ -276,7 +381,8 @@ export function createWebFetchTool(): Tool {
       const url = assertHttpUrl(parsed.url);
       const response = await fetchWithTimeout(url, context?.signal);
       const contentType = response.headers.get("content-type") ?? "";
-      const raw = await response.text();
+      const rawBytes = new Uint8Array(await response.arrayBuffer());
+      const raw = decodeBody(rawBytes, contentType);
       if (!response.ok) {
         throw new Error(`web_fetch failed: ${response.status} ${response.statusText} - ${raw.slice(0, 300)}`);
       }
