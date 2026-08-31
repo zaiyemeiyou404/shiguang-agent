@@ -22,6 +22,12 @@ export { createInspectProjectTool } from "./builtins/inspect-project.js";
 export { createGitHubRepoTool } from "./builtins/github-repo.js";
 export { createWebFetchTool } from "./builtins/web-fetch.js";
 export { createWebSearchTool } from "./builtins/web-search.js";
+export {
+  createCustomExtensionTools,
+  loadCustomExtensionTools,
+  loadCustomSkills,
+  formatCustomSkillInstructions,
+} from "./builtins/custom-extensions.js";
 export { createCollectDiagnosticsTool } from "./builtins/collect-diagnostics.js";
 export {
   createStartBackgroundProcessTool,

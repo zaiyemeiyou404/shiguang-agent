@@ -1620,6 +1620,10 @@ function formatToolActivityName(toolName: string | null): string {
     github_repo: "读取 GitHub 仓库",
     web_search: "搜索网页",
     web_fetch: "抓取网页",
+    list_custom_extensions: "查看自定义扩展",
+    create_custom_skill: "创建 Skill",
+    create_custom_tool: "创建自定义工具",
+    run_custom_tool: "运行自定义工具",
     search_memory: "搜索记忆",
     remember_fact: "写入记忆",
     forget_memory: "删除记忆",
@@ -1674,6 +1678,10 @@ function formatToolPastTenseTitle(toolName: string | null, payload: Record<strin
     github_repo: "读取了 GitHub 仓库",
     web_search: "搜索了网页",
     web_fetch: "抓取了网页",
+    list_custom_extensions: "查看了自定义扩展",
+    create_custom_skill: "创建了 Skill",
+    create_custom_tool: "创建了自定义工具",
+    run_custom_tool: "运行了自定义工具",
     search_memory: "搜索了记忆",
     remember_fact: "写入了记忆",
     forget_memory: "删除了记忆",
@@ -5758,10 +5766,10 @@ export default function App() {
               ) : null}
             </div>
 
-            <div className="session-tool-summary" title="Agent 当前内置工具能力">
+            <div className="session-tool-summary" title="Agent 当前工具能力，包含内置工具和用户自定义扩展">
               <div className="session-tool-summary-head">
-                <span className="tiny">内置工具</span>
-                <span>可联网搜索</span>
+                <span className="tiny">工具</span>
+                <span>支持自扩展</span>
               </div>
               <div className="session-tool-chip-row">
                 <span>文件</span>
@@ -5772,6 +5780,8 @@ export default function App() {
                 <span>GitHub</span>
                 <span>MCP</span>
                 <span>记忆</span>
+                <span>Skill</span>
+                <span>自定义工具</span>
               </div>
             </div>
 

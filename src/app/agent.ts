@@ -37,6 +37,7 @@ export interface AgentOptions {
   memoryService?: MemoryService;
   workspaceRoot?: string;
   agentProfile?: AgentProfile | null;
+  customSkillInstructions?: string | null;
 }
 
 export interface AgentInput {
@@ -306,7 +307,7 @@ export class Agent {
 
   private mergedSystemInstructions(systemInstructions: string | undefined): string | undefined {
     const profileInstructions = formatAgentProfileInstructions(this.options.agentProfile ?? null);
-    const merged = [profileInstructions, systemInstructions?.trim()].filter(Boolean).join("\n\n");
+    const merged = [profileInstructions, this.options.customSkillInstructions?.trim(), systemInstructions?.trim()].filter(Boolean).join("\n\n");
     return merged || undefined;
   }
 

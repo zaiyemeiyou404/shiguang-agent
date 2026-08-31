@@ -2,20 +2,20 @@
 
 拾光 Agent 是一个轻量级桌面 AI Agent。它把对话、工作区文件操作、工具调用、审批、运行记录和上下文压缩放在一个 Electron 桌面界面里，目标是做成一个下载后即可配置使用的小型个人工作台。
 
-当前版本：`0.2.36`
+当前版本：`0.2.37`
 
-本版重点：修复 URL 直抓逻辑。用户粘贴 `http/https` 链接并说“看一下这个”时，会直接调用 `web_fetch` 打开网页内容，不再把整段链接当搜索关键词去搜；抓取结果会同时保留正文和短 HTML 预览，方便 Agent 继续分析网页结构。
+本版重点：新增自定义扩展工作台。Agent 可以创建可复用的 skill 指令和声明式自定义工具，扩展文件统一保存在应用数据目录的 `extensions/skills` 与 `extensions/tools` 下；已启用 skill 会注入后续运行提示词，自定义工具可通过 `run_custom_tool` 立即使用，并会在后续运行中以独立 `custom_*` 工具加载。
 
 ## 下载使用
 
 在 GitHub Releases 页面下载 Windows 版本：
 
-- 安装包：`shiguang-agent-setup-0.2.36.exe`
+- 安装包：`shiguang-agent-setup-0.2.37.exe`
 - 免安装版：`win-unpacked.zip`
 
 安装包安装完成后会创建桌面快捷方式和开始菜单快捷方式。桌面上出现的是快捷方式，不是复制出来的独立 `.exe` 文件。
 
-`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.36`，才会生成新的正式 Release。
+`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.37`，才会生成新的正式 Release。
 
 如果使用免安装版，解压后运行：
 
@@ -101,6 +101,7 @@ $env:GEMINI_API_KEY="你的 key"
 - 扩展工具：支持 GitHub 仓库读取、网页搜索/抓取、轻量代码诊断、后台进程管理和记忆管理；“联网搜一下/查最新/官网/URL”等表达会优先触发网页搜索工具。
 - 联网工具选择：中文搜索意图会在精简工具清单时强制保留 `web_search` / `web_fetch`，避免只显示“可联网搜索”但当前 run 实际没有网页工具。
 - URL 直抓：消息中出现明确 `http/https` 链接时，首轮会优先调用 `web_fetch`，不会把 URL 和“看一下这个”等中文补充一起丢给搜索引擎；HTML 页面会返回标题、清洗正文和短 HTML 预览。
+- 自定义扩展：支持 `create_custom_skill`、`create_custom_tool`、`list_custom_extensions`、`run_custom_tool`。Agent 可以自己创建可复用 skill 和声明式模板工具，经过审批后写入专门扩展目录，并在后续运行中自动加载。
 - 终端边界：`run_terminal_command` 支持在工作区外运行明显只读命令，例如 `dir`、`ls`、`Get-ChildItem`、`Get-Content`、`rg`、`git status`；但写入、删除、安装、构建、移动和重命名等命令必须在当前工作区内执行。
 - 工程理解：支持生成代码地图、搜索符号、分析轻量依赖图，帮助 Agent 更快读懂工程结构。
 - 审批机制：高风险工具会进入类似 Codex/Claude 的审查卡片，展示风险等级、影响范围、输入/diff 预览，并按“仅本次通过”恢复运行。
@@ -301,8 +302,8 @@ examples/          示例配置
 推送 tag 后会自动构建 Release：
 
 ```bash
-git tag v0.2.36
-git push origin v0.2.36
+git tag v0.2.37
+git push origin v0.2.37
 ```
 
 Release 会上传：

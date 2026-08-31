@@ -49,6 +49,12 @@ import { createInspectProjectTool } from "../dist/tools/builtins/inspect-project
 import { createGitHubRepoTool } from "../dist/tools/builtins/github-repo.js";
 import { createWebFetchTool } from "../dist/tools/builtins/web-fetch.js";
 import { createWebSearchTool } from "../dist/tools/builtins/web-search.js";
+import {
+  createCustomExtensionTools,
+  loadCustomExtensionTools,
+  loadCustomSkills,
+  formatCustomSkillInstructions,
+} from "../dist/tools/builtins/custom-extensions.js";
 import { createCollectDiagnosticsTool } from "../dist/tools/builtins/collect-diagnostics.js";
 import {
   createStartBackgroundProcessTool,
@@ -1076,7 +1082,10 @@ export class DesktopAppService {
       ? { ...sessionLlmConfig, model: agentProfile.model }
       : sessionLlmConfig;
     const { planner, label } = createPlanner(llmConfig);
-    const tools = await this.createDesktopTools(desktopConfig, workspaceRoot);
+    const policy = getShiguangWorkspacePolicy();
+    const customExtensionRoot = join(policy.userDataRoot, "extensions");
+    const customSkillInstructions = formatCustomSkillInstructions(loadCustomSkills(customExtensionRoot));
+    const tools = await this.createDesktopTools(desktopConfig, workspaceRoot, customExtensionRoot);
     const agent = new Agent({
       eventSink: sink,
       planner,
@@ -1086,15 +1095,18 @@ export class DesktopAppService {
       memoryService: this.memoryService,
       workspaceRoot,
       agentProfile,
+      customSkillInstructions,
     });
 
     const runtimeLabel = agentProfile ? `${label} · profile:${agentProfile.name}` : label;
     return { agent, label: runtimeLabel, workspaceRoot };
   }
 
-  private async createDesktopTools(desktopConfig: ResolvedDesktopConfig, workspaceRoot: string): Promise<Tool[]> {
+  private async createDesktopTools(desktopConfig: ResolvedDesktopConfig, workspaceRoot: string, customExtensionRoot: string): Promise<Tool[]> {
     return [
       ...this.createBuiltinDesktopTools(workspaceRoot),
+      ...createCustomExtensionTools(customExtensionRoot),
+      ...loadCustomExtensionTools(customExtensionRoot),
       ...await this.discoverMcpTools(desktopConfig.mcpServers),
     ];
   }
