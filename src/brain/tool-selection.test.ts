@@ -77,3 +77,40 @@ test("selectToolsForPlanner keeps web tools for Chinese web-search requests", ()
   assert.ok(selected.includes("web_fetch"));
 });
 
+test("selectToolsForPlanner keeps adaptive rule tools for correction requests", () => {
+  const tools = [
+    makeTool("inspect_project"),
+    makeTool("list_directory"),
+    makeTool("stat_path"),
+    makeTool("read_text_file"),
+    makeTool("search_workspace"),
+    makeTool("code_map"),
+    makeTool("symbol_search"),
+    makeTool("dependency_graph"),
+    makeTool("write_text_file"),
+    makeTool("patch_text_file"),
+    makeTool("copy_path"),
+    makeTool("move_path"),
+    makeTool("delete_path"),
+    makeTool("run_validation"),
+    makeTool("run_terminal_command"),
+    makeTool("git_status"),
+    makeTool("git_diff"),
+    makeTool("collect_diagnostics"),
+    makeTool("web_search"),
+    makeTool("web_fetch"),
+    makeTool("record_agent_rule", "Append a reusable approved operating rule"),
+    makeTool("list_custom_extensions", "List custom skills and tools"),
+    makeTool("search_memory"),
+    makeTool("remember_fact"),
+    makeTool("forget_memory"),
+  ];
+
+  const selected = selectToolsForPlanner(
+    makeInput("This was wrong. Reflect and learn a rule for next time.", tools),
+    14,
+  ).selected.map((tool) => tool.name);
+
+  assert.ok(selected.includes("record_agent_rule"));
+  assert.ok(selected.includes("list_custom_extensions"));
+});

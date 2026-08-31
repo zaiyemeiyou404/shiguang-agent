@@ -27,6 +27,13 @@ interface RunCustomToolInput {
   input?: Record<string, unknown>;
 }
 
+interface RecordAgentRuleInput {
+  scope: string;
+  rule: string;
+  evidence?: string;
+  enabled?: boolean;
+}
+
 export interface CustomSkill {
   name: string;
   description?: string;
@@ -199,6 +206,21 @@ function parseRunCustomToolInput(input: unknown): RunCustomToolInput {
   };
 }
 
+function parseRecordAgentRuleInput(input: unknown): RecordAgentRuleInput {
+  if (!input || typeof input !== "object") {
+    throw new Error("record_agent_rule: input must be { scope, rule, evidence?, enabled? }");
+  }
+  const obj = input as Record<string, unknown>;
+  if (typeof obj.scope !== "string" || !obj.scope.trim()) throw new Error("record_agent_rule: scope is required");
+  if (typeof obj.rule !== "string" || !obj.rule.trim()) throw new Error("record_agent_rule: rule is required");
+  return {
+    scope: obj.scope.slice(0, 160),
+    rule: obj.rule.slice(0, 2_000),
+    ...(typeof obj.evidence === "string" ? { evidence: obj.evidence.slice(0, 1_000) } : {}),
+    ...(typeof obj.enabled === "boolean" ? { enabled: obj.enabled } : {}),
+  };
+}
+
 function readToolManifest(path: string): CustomToolManifest | null {
   if (!existsSync(path)) return null;
   const stats = statSync(path);
@@ -250,6 +272,10 @@ function skillPath(extensionRoot: string, name: string): string {
   return path;
 }
 
+function agentRulesPath(extensionRoot: string): string {
+  return skillPath(extensionRoot, "agent_rules");
+}
+
 export function loadCustomSkills(extensionRoot: string): CustomSkill[] {
   const roots = ensureExtensionDirs(extensionRoot);
   return readdirSync(roots.skillsDir)
@@ -290,6 +316,7 @@ export function formatCustomSkillInstructions(skills: CustomSkill[]): string | n
 export function createCustomExtensionTools(extensionRoot: string): Tool[] {
   return [
     createListCustomExtensionsTool(extensionRoot),
+    createRecordAgentRuleTool(extensionRoot),
     createCreateCustomSkillTool(extensionRoot),
     createCreateCustomToolTool(extensionRoot),
     createRunCustomToolTool(extensionRoot),
@@ -324,6 +351,70 @@ export function createListCustomExtensionsTool(extensionRoot: string): Tool {
           ...tool,
           templateChars: template.length,
         })),
+      };
+    },
+  };
+}
+
+export function createRecordAgentRuleTool(extensionRoot: string): Tool {
+  return {
+    descriptor: {
+      name: "record_agent_rule",
+      description: "Append a reusable approved operating rule to Shiguang's agent_rules skill. Use this for durable lessons such as site extraction patterns, tool-routing rules, or project workflow habits.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          scope: { type: "string", description: "Short area this rule applies to, for example web_fetch, workspace, approvals, or a domain name." },
+          rule: { type: "string", description: "Reusable rule written as an instruction for future runs." },
+          evidence: { type: "string", description: "Optional short note explaining what observation led to this rule." },
+          enabled: { type: "boolean" },
+        },
+        required: ["scope", "rule"],
+      },
+      risk: "write",
+      requiresApproval: true,
+      capability: "extensions.rule.write",
+    },
+    previewApproval(input: unknown): ToolApprovalPreview {
+      const parsed = parseRecordAgentRuleInput(input);
+      return {
+        kind: "summary",
+        title: `记录 Agent 规则：${parsed.scope.trim()}`,
+        path: agentRulesPath(extensionRoot),
+        operation: "record_agent_rule",
+        warnings: ["这条规则会进入后续运行的提示词。请只保留可复用经验，不要写一次性任务内容、密钥或私人信息。"],
+      };
+    },
+    async execute(input: unknown): Promise<unknown> {
+      const parsed = parseRecordAgentRuleInput(input);
+      const path = agentRulesPath(extensionRoot);
+      const header = renderSkillMarkdown({
+        name: "agent_rules",
+        description: "Agent-authored adaptive operating rules",
+        instructions: [
+          "# Agent Rules",
+          "",
+          "These durable rules were written by Shiguang after user approval. Apply them when relevant; the latest user message remains authoritative.",
+          "",
+        ].join("\n"),
+        enabled: parsed.enabled !== false,
+      }, "agent_rules");
+      const existing = existsSync(path) ? readFileSync(path, "utf8").trimEnd() : header.trimEnd();
+      const entry = [
+        "",
+        `## ${parsed.scope.trim()}`,
+        "",
+        `- Rule: ${parsed.rule.trim()}`,
+        ...(parsed.evidence?.trim() ? [`- Evidence: ${parsed.evidence.trim()}`] : []),
+        `- Recorded: ${new Date().toISOString()}`,
+        "",
+      ].join("\n");
+      writeFileSync(path, `${existing}${entry}`, "utf8");
+      return {
+        name: "agent_rules",
+        path,
+        scope: parsed.scope.trim(),
+        status: "recorded",
       };
     },
   };
@@ -472,4 +563,3 @@ function runTemplateManifest(manifest: CustomToolManifest, input: Record<string,
     output: renderTemplate(manifest.template, input),
   };
 }
-

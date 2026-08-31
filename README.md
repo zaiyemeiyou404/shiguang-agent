@@ -2,7 +2,7 @@
 
 拾光 Agent 是一个轻量级桌面 AI Agent。它把对话、工作区文件操作、工具调用、审批、运行记录和上下文压缩放在一个 Electron 桌面界面里，目标是做成一个下载后即可配置使用的小型个人工作台。
 
-当前版本：`0.2.37`
+当前版本：`0.2.38`
 
 本版重点：新增自定义扩展工作台。Agent 可以创建可复用的 skill 指令和声明式自定义工具，扩展文件统一保存在应用数据目录的 `extensions/skills` 与 `extensions/tools` 下；已启用 skill 会注入后续运行提示词，自定义工具可通过 `run_custom_tool` 立即使用，并会在后续运行中以独立 `custom_*` 工具加载。
 
@@ -10,12 +10,12 @@
 
 在 GitHub Releases 页面下载 Windows 版本：
 
-- 安装包：`shiguang-agent-setup-0.2.37.exe`
+- 安装包：`shiguang-agent-setup-0.2.38.exe`
 - 免安装版：`win-unpacked.zip`
 
 安装包安装完成后会创建桌面快捷方式和开始菜单快捷方式。桌面上出现的是快捷方式，不是复制出来的独立 `.exe` 文件。
 
-`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.37`，才会生成新的正式 Release。
+`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.38`，才会生成新的正式 Release。
 
 如果使用免安装版，解压后运行：
 
@@ -302,8 +302,8 @@ examples/          示例配置
 推送 tag 后会自动构建 Release：
 
 ```bash
-git tag v0.2.37
-git push origin v0.2.37
+git tag v0.2.38
+git push origin v0.2.38
 ```
 
 Release 会上传：

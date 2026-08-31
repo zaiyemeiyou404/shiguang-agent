@@ -9,6 +9,24 @@ interface WebFetchInput {
   maxChars?: number;
 }
 
+interface ReadableCandidate {
+  source: string;
+  score: number;
+  text: string;
+  truncated: boolean;
+}
+
+interface ExtractedReadableHtml {
+  text: string;
+  articleCandidates: ReadableCandidate[];
+  extraction: {
+    strategy: "article_candidate" | "whole_body";
+    candidateCount: number;
+    needsModelReview: boolean;
+    hint: string;
+  };
+}
+
 function parseInput(input: unknown): WebFetchInput {
   if (typeof input === "string") return { url: input };
   if (!input || typeof input !== "object") {
@@ -58,8 +76,16 @@ function extractTitle(html: string): string | undefined {
   return htmlToText(title).replace(/\s+/g, " ").trim() || undefined;
 }
 
+function normalizeText(value: string): string {
+  return value
+    .replace(/\r\n?/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
 function htmlToText(html: string): string {
-  return html
+  return normalizeText(html
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
     .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, " ")
@@ -72,9 +98,140 @@ function htmlToText(html: string): string {
     .replace(/&gt;/gi, ">")
     .replace(/&quot;/gi, "\"")
     .replace(/&#39;/gi, "'")
-    .replace(/\n\s+\n/g, "\n\n")
-    .replace(/[ \t]{2,}/g, " ")
-    .trim();
+    .replace(/&#(\d+);/g, (_, code: string) => String.fromCodePoint(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, code: string) => String.fromCodePoint(Number.parseInt(code, 16))));
+}
+
+function extractBodyHtml(html: string): string {
+  return html.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i)?.[1] ?? html;
+}
+
+function decodeHtmlAttribute(value: string): string {
+  return value
+    .replace(/&quot;/gi, "\"")
+    .replace(/&#39;/gi, "'")
+    .replace(/&amp;/gi, "&");
+}
+
+function getAttribute(tag: string, attributeName: "class" | "id"): string {
+  const match = tag.match(new RegExp(`${attributeName}\\s*=\\s*(['"])([\\s\\S]*?)\\1`, "i"));
+  return match ? decodeHtmlAttribute(match[2] ?? "") : "";
+}
+
+function trimCandidateText(value: string): { text: string; truncated: boolean } {
+  return trimWithLimit(value, 2_400, 2_400);
+}
+
+function collectReadableCandidates(html: string): Array<{ source: string; text: string }> {
+  const candidates: Array<{ source: string; text: string }> = [];
+  const body = extractBodyHtml(html);
+  const structuralPatterns = [
+    { source: "article", pattern: /<article\b[^>]*>[\s\S]*?<\/article>/gi },
+    { source: "main", pattern: /<main\b[^>]*>[\s\S]*?<\/main>/gi },
+  ];
+  for (const { source, pattern } of structuralPatterns) {
+    for (const match of body.matchAll(pattern)) {
+      if (match[0]) candidates.push({ source, text: match[0] });
+    }
+  }
+
+  const contentLike =
+    /(article|content|detail|details|main|news|post|entry|body|text|txt|rich|paragraph|正文|内容|稿件|文章)/i;
+  for (const match of body.matchAll(/<(div|section|td)\b[^>]*>[\s\S]*?<\/\1>/gi)) {
+    const block = match[0] ?? "";
+    const openingTag = block.match(/^<[^>]+>/)?.[0] ?? "";
+    const marker = `${getAttribute(openingTag, "id")} ${getAttribute(openingTag, "class")}`;
+    if (contentLike.test(marker)) candidates.push({ source: marker.trim() || "content-like-block", text: block });
+  }
+
+  candidates.push({ source: "whole_body", text: body });
+  return candidates
+    .map((candidate) => ({ ...candidate, text: htmlToText(candidate.text) }))
+    .filter((candidate) => candidate.text.trim());
+}
+
+function scoreReadableText(text: string, title?: string): number {
+  const lengthScore = Math.min(text.length, 20_000) / 100;
+  const punctuationScore = (text.match(/[。！？；：]/g)?.length ?? 0) * 4;
+  const paragraphScore = (text.match(/\n\s*\n/g)?.length ?? 0) * 8;
+  const titleScore = title && text.includes(title) ? 120 : 0;
+  const navPenalty = (text.match(/下载|扫码|客户端|关注|举报|评论|相关新闻|热新闻|进入频道/g)?.length ?? 0) * 18;
+  return lengthScore + punctuationScore + paragraphScore + titleScore - navPenalty;
+}
+
+function stripBoilerplateLines(text: string): string {
+  const noisyLine =
+    /^(APP|微信|举报|更多|>|<|-+>|扫码查看|全文播报|进入频道|我要评论|查看更多评论|打开|关闭|取消|关注我们|精彩评论\s*\d*|天\s+周\s+月)$/;
+  const noisyContains =
+    /下载.*客户端|建议使用浏览器扫码下载|违法和不良信息举报中心|版权所有|Copyright|ICP备|许可证|跟帖评论自律管理承诺书|扫描或长按关注/;
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !noisyLine.test(line) && !noisyContains.test(line))
+    .join("\n");
+}
+
+function focusArticleText(text: string, title?: string): string {
+  let focused = normalizeText(stripBoilerplateLines(text));
+  if (title) {
+    const first = focused.indexOf(title);
+    const second = first >= 0 ? focused.indexOf(title, first + title.length) : -1;
+    const start = second >= 0 ? second : first;
+    if (start >= 0) focused = focused.slice(start).trim();
+  }
+
+  const stopMarkers = [
+    "未经授权，严禁转载",
+    "打开川观新闻，阅读全文",
+    "精彩评论",
+    "相关新闻",
+    "热新闻",
+    "关注我们",
+  ];
+  for (const marker of stopMarkers) {
+    const index = focused.indexOf(marker);
+    if (index > 80) {
+      focused = focused.slice(0, index).trim();
+    }
+  }
+  return focused;
+}
+
+function extractReadableHtml(html: string): ExtractedReadableHtml {
+  const title = extractTitle(html);
+  const candidates = collectReadableCandidates(html);
+  const rankedCandidates = candidates
+    .map((candidate) => {
+      const focused = focusArticleText(candidate.text, title);
+      return {
+        source: candidate.source,
+        score: scoreReadableText(focused, title),
+        text: focused,
+      };
+    })
+    .filter((candidate) => candidate.text.length > 80)
+    .sort((a, b) => b.score - a.score);
+  const best = rankedCandidates[0]?.text ?? focusArticleText(htmlToText(extractBodyHtml(html)), title);
+  const articleCandidates = rankedCandidates.slice(0, 5).map((candidate) => {
+    const trimmed = trimCandidateText(candidate.text);
+    return {
+      source: candidate.source,
+      score: Math.round(candidate.score),
+      text: trimmed.text,
+      truncated: trimmed.truncated,
+    };
+  });
+  const strategy = rankedCandidates.length > 0 ? "article_candidate" : "whole_body";
+  return {
+    text: best,
+    articleCandidates,
+    extraction: {
+      strategy,
+      candidateCount: rankedCandidates.length,
+      needsModelReview: articleCandidates.length > 1 || /扫码|APP|下载|评论|举报|客户端/.test(best),
+      hint: "Model should review articleCandidates and choose the block that best matches the user's requested page/article body. If text contains navigation, app download, comment, or footer boilerplate, prefer a cleaner candidate.",
+    },
+  };
 }
 
 async function fetchWithTimeout(url: URL, signal?: AbortSignal): Promise<Response> {
@@ -124,7 +281,8 @@ export function createWebFetchTool(): Tool {
         throw new Error(`web_fetch failed: ${response.status} ${response.statusText} - ${raw.slice(0, 300)}`);
       }
       const isHtml = /html/i.test(contentType) || /<!doctype html|<html[\s>]/i.test(raw.slice(0, 500));
-      const readable = isHtml ? htmlToText(raw) : raw.trim();
+      const extracted = isHtml ? extractReadableHtml(raw) : null;
+      const readable = extracted ? extracted.text : raw.trim();
       const limited = trimText(readable, parsed.maxChars ?? MAX_TEXT_CHARS);
       const htmlFields = isHtml ? trimHtmlPreview(raw) : {};
       return {
@@ -134,6 +292,12 @@ export function createWebFetchTool(): Tool {
         title: isHtml ? extractTitle(raw) : undefined,
         text: limited.text,
         truncated: limited.truncated,
+        ...(extracted
+          ? {
+              articleCandidates: extracted.articleCandidates,
+              extraction: extracted.extraction,
+            }
+          : {}),
         ...htmlFields,
       };
     },

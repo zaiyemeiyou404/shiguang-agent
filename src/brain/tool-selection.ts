@@ -95,12 +95,18 @@ interface IntentFlags {
   git: boolean;
   mcp: boolean;
   execute: boolean;
+  adaptive?: boolean;
 }
 
 function classifyIntent(text: string, history: ActionResult[]): IntentFlags {
   const hadMutation = history.some((result) => result.metadata?.workspaceMutation === true);
   const readableIntent = classifyReadableChineseIntent(text, hadMutation);
-  if (readableIntent) return readableIntent;
+  if (readableIntent) {
+    return {
+      ...readableIntent,
+      adaptive: inferAdaptiveLearningIntent(text),
+    };
+  }
   const explicitWebIntent = /网页|联网|上网|网上|网络搜索|网页搜索|搜索网页|搜索网络|搜一下|搜搜|搜索一下|查一下|查找一下|检索|官网|新闻|资料|文档|github|release|url|http|https|web|fetch|search online|browser|online|latest|current/.test(text);
   const freshnessIntent = /最新|最近|今天|当前|现在|价格|版本|发布|release|latest|current|today|recent/.test(text);
   const searchIntent = /搜|搜索|查|查询|查找|检索|look up|search|find/.test(text);
@@ -114,6 +120,10 @@ function classifyIntent(text: string, history: ActionResult[]): IntentFlags {
     mcp: /mcp|数据源|database|api|connector|server|tool/.test(text),
     execute: /命令|终端|脚本|执行|启动|install|npm|pnpm|yarn|pip|command|terminal|shell/.test(text),
   };
+}
+
+function inferAdaptiveLearningIntent(text: string): boolean {
+  return /错|不对|为什么|啥意思|不是|应该|质疑|反思|总结|保存|记住|规则|学一下|学习|降智|混乱|重复|没用|没有|wrong|incorrect|why|reflect|learn|rule|memory|remember|hermes/.test(text);
 }
 
 function classifyReadableChineseIntent(text: string, hadMutation: boolean): IntentFlags | null {
@@ -145,9 +155,13 @@ function classifyReadableChineseIntent(text: string, hadMutation: boolean): Inte
   };
 }
 
-function pinnedToolsForIntent(intent: IntentFlags, _text: string): string[] {
-  if (!intent.web) return [];
-  return ["web_search", "web_fetch"];
+function pinnedToolsForIntent(intent: IntentFlags, text: string): string[] {
+  const pinned: string[] = [];
+  if (intent.web) pinned.push("web_search", "web_fetch");
+  if (intent.adaptive || intent.memory || inferAdaptiveLearningIntent(text)) {
+    pinned.push("record_agent_rule", "list_custom_extensions");
+  }
+  return pinned;
 }
 
 function ensurePinnedTools(
@@ -221,6 +235,8 @@ function scoreTool(
   if (intent.web && name === "web_search") score += 36;
   if (intent.web && name === "web_fetch" && /url|http|https|网页|链接|抓取|fetch/.test(text)) score += 30;
   if (intent.memory && contract.category === "memory") score += 24;
+  if ((intent.adaptive || intent.memory || inferAdaptiveLearningIntent(text)) && name === "record_agent_rule") score += 42;
+  if ((intent.adaptive || intent.memory || inferAdaptiveLearningIntent(text)) && name === "list_custom_extensions") score += 16;
   if (intent.git && (contract.category === "git" || contract.category === "github")) score += 18;
   if (intent.mcp && contract.category === "mcp") score += 18;
   if (intent.execute && contract.category === "process") score += 16;

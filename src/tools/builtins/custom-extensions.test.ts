@@ -66,6 +66,38 @@ test("custom extension tools create, list, and run a declarative custom tool", a
   assert.ok((listed.tools[0]?.templateChars ?? 0) > 0);
 });
 
+test("agent rules can be recorded as a durable custom skill", async () => {
+  const {
+    createCustomExtensionTools,
+    loadCustomSkills,
+    formatCustomSkillInstructions,
+  } = await loadModule();
+  const extensionRoot = await makeExtensionRoot();
+  const recordRule = createCustomExtensionTools(extensionRoot).find((tool) => tool.descriptor.name === "record_agent_rule");
+  assert.ok(recordRule);
+  assert.equal(recordRule.descriptor.requiresApproval, true);
+
+  const recorded = await recordRule.execute({
+    scope: "web_fetch",
+    rule: "When a fetched news page includes articleCandidates, choose the candidate matching the article title before answering.",
+    evidence: "A news page returned navigation text before the article body.",
+  }) as { name: string; status: string; path: string };
+
+  assert.equal(recorded.name, "agent_rules");
+  assert.equal(recorded.status, "recorded");
+
+  const skills = loadCustomSkills(extensionRoot);
+  const rules = skills.find((skill) => skill.name === "agent_rules");
+  assert.ok(rules);
+  assert.match(rules.instructions, /When a fetched news page includes articleCandidates/);
+  assert.match(rules.instructions, /web_fetch/);
+
+  const prompt = formatCustomSkillInstructions(skills);
+  assert.ok(prompt);
+  assert.match(prompt, /Agent Rules/);
+  assert.match(prompt, /articleCandidates/);
+});
+
 test("custom skills are rendered as prompt instructions when enabled", async () => {
   const {
     createCustomExtensionTools,
@@ -91,4 +123,3 @@ test("custom skills are rendered as prompt instructions when enabled", async () 
   assert.match(prompt, /User custom skills are active/);
   assert.match(prompt, /回答代码审查时先列风险/);
 });
-

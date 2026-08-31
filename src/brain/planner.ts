@@ -22,7 +22,9 @@ export class LlmPlanner implements Planner {
       };
     }
 
-    const completedWebLookup = inferCompletedWebLookupResponse(input, lastResult);
+    const completedWebLookup = shouldLetModelReviewWebFetch(lastResult)
+      ? null
+      : inferCompletedWebLookupResponse(input, lastResult);
     if (completedWebLookup) return completedWebLookup;
 
     const initialWebFetch = input.history.length === 0
@@ -55,6 +57,15 @@ export class LlmPlanner implements Planner {
       workingMemory: input.workingMemory,
     };
   }
+}
+
+function shouldLetModelReviewWebFetch(lastResult: ActionResult | null): boolean {
+  if (!lastResult || !lastResult.ok || lastResult.action.kind !== "tool_call") return false;
+  const toolName = lastResult.metadata?.toolName ?? lastResult.action.toolName;
+  if (toolName !== "web_fetch") return false;
+  const output = lastResult.output;
+  if (!output || typeof output !== "object" || Array.isArray(output)) return false;
+  return Array.isArray((output as Record<string, unknown>).articleCandidates);
 }
 
 async function inferDeterministicToolFallback(

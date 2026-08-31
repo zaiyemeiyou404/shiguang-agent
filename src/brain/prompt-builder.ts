@@ -27,6 +27,8 @@ export function buildSystemPrompt(tools: ToolDescriptor[]): string {
     "- Prefer low-cost read/inspect tools before high-cost web, process, MCP, or workspace mutation tools unless the user intent clearly needs those capabilities.",
     "- When the user asks for latest/current/recent information, official websites, online docs, releases, prices, news, GitHub projects, or anything outside the local workspace, call web_search first, then web_fetch the most relevant result or explicit URL before answering.",
     "- When the user provides an explicit http/https URL, prefer web_fetch directly. Do not pretend to browse; if web_search/web_fetch are not listed in the selected tools, say the web tools are unavailable in this run and ask to continue with the web tools selected.",
+    "- For web_fetch results, review text, extraction, articleCandidates, and htmlPreview together. Do not blindly trust the first text if it looks like navigation, app download prompts, comments, or footer boilerplate. Select the candidate that best matches the user's requested article/page body, then answer from that evidence.",
+    "- If a web page extraction pattern is useful for future runs, record it as an agent rule with record_agent_rule instead of relying on one-off memory in the chat.",
     "- Terminal workspace policy: obvious read-only commands may inspect external directories when the user asks; any command that writes, deletes, installs, builds, moves, renames, or mutates state must stay inside the active workspace.",
     "- Prefer the flow inspect/read/map -> edit/execute -> verify -> summarize. Do not skip verification after workspace mutations when verification tools are available.",
     "- For unfamiliar codebases, prefer inspect_project, code_map, symbol_search, dependency_graph, read_text_file, and search_workspace before broad edits.",
@@ -43,6 +45,13 @@ export function buildSystemPrompt(tools: ToolDescriptor[]): string {
     "- If the user asks what you saw or which file you read, answer with the actual tool/action scope first: directory inspected, file read, validation run, or inferred path. Do not repeat the same old summary as if it were new work.",
     "- If a previous answer was already given and the user challenges it, acknowledge the ambiguity directly and explain what was explicit versus inferred.",
     "- Avoid copy-pasting the same summary across turns. Add new evidence, name the source of the evidence, or state that no new file was read.",
+    "",
+    "Hermes-style reflection and learning policy:",
+    "- When the user questions an answer, reports an error, says the behavior is wrong/confusing/repeated, or asks why something happened, first reflect against concrete evidence before acting again.",
+    "- Reflection must identify: what evidence was actually observed, what assumption may have been wrong, the corrected next-step rule, and whether the rule is reusable.",
+    "- If the corrected rule is reusable across future tasks, call record_agent_rule with a short scope, durable rule, and evidence. Do not save secrets, one-off task details, private content, or huge logs.",
+    "- Do not use record_agent_rule as a substitute for finishing the user's current task. Save the rule only after you have enough evidence, then continue or answer clearly.",
+    "- If record_agent_rule is not available, include the reusable lesson in your response and say it was not persisted because the rule tool is unavailable.",
     "",
     "Workspace mutation policy:",
     "- Read or search before risky writes when the needed location is unclear.",
@@ -101,6 +110,9 @@ function compactHistoryOutput(result: ActionResult): unknown {
   if (toolName === "run_validation" && isRecord(output)) {
     return compactValidationOutput(output);
   }
+  if (toolName === "web_fetch" && isRecord(output)) {
+    return compactWebFetchOutput(output);
+  }
   if (toolName === "code_map" || toolName === "dependency_graph" || toolName === "symbol_search") {
     return compactGenericOutput(output, HISTORY_GENERIC_CHAR_LIMIT);
   }
@@ -158,6 +170,26 @@ function compactValidationOutput(output: Record<string, unknown>): Record<string
     ...pick(output, ["ok", "mode", "summary"]),
     commands,
     commandsShownForPrompt: commands.length,
+  };
+}
+
+function compactWebFetchOutput(output: Record<string, unknown>): Record<string, unknown> {
+  const candidates = Array.isArray(output.articleCandidates)
+    ? output.articleCandidates.slice(0, 4).map((item) => {
+        if (!isRecord(item)) return compactGenericOutput(item, 400);
+        return {
+          ...pick(item, ["source", "score", "truncated"]),
+          text: typeof item.text === "string" ? truncateForHistory(item.text, 900) : undefined,
+        };
+      })
+    : [];
+  return {
+    ...pick(output, ["url", "status", "contentType", "title", "truncated", "extraction"]),
+    text: typeof output.text === "string" ? truncateForHistory(output.text, 1200) : undefined,
+    articleCandidates: candidates,
+    articleCandidatesShownForPrompt: candidates.length,
+    htmlPreview: typeof output.htmlPreview === "string" ? truncateForHistory(output.htmlPreview, 800) : undefined,
+    htmlPreviewTruncated: output.htmlPreviewTruncated,
   };
 }
 
