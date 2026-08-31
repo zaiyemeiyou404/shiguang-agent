@@ -289,6 +289,60 @@ test("RulePlanner uses web_search first for online lookup requests", async () =>
   });
 });
 
+test("RulePlanner fetches explicit URLs before searching", async () => {
+  const planner = new RulePlanner();
+  const availableTools: ToolDescriptor[] = [
+    {
+      name: "web_fetch",
+      description: "Fetches a public web page",
+      inputSchema: { type: "object" },
+      capability: "web.fetch",
+    },
+    {
+      name: "web_search",
+      description: "Searches the public web",
+      inputSchema: { type: "object" },
+      capability: "web.search",
+    },
+  ];
+
+  const decision = await planner.decide(makeInput([], availableTools, "https://www.qstheory.cn/20251003/325d53ba1cd148e6ac1c6fdf3d8cf953/c.html看一下这个"));
+
+  assert.deepEqual(decision.action, {
+    kind: "tool_call",
+    toolName: "web_fetch",
+    toolInput: { url: "https://www.qstheory.cn/20251003/325d53ba1cd148e6ac1c6fdf3d8cf953/c.html" },
+  });
+});
+
+test("LlmPlanner fetches explicit URLs before consulting the model", async () => {
+  const model = new RecordingModel({ kind: "tool_call", toolName: "web_search", toolInput: { query: "https" } });
+  const planner = new LlmPlanner(model);
+  const availableTools: ToolDescriptor[] = [
+    {
+      name: "web_fetch",
+      description: "Fetches a public web page",
+      inputSchema: { type: "object" },
+      capability: "web.fetch",
+    },
+    {
+      name: "web_search",
+      description: "Searches the public web",
+      inputSchema: { type: "object" },
+      capability: "web.search",
+    },
+  ];
+
+  const decision = await planner.decide(makeInput([], availableTools, "https://example.test/article.html 看一下这个"));
+
+  assert.equal(model.calls, 0);
+  assert.deepEqual(decision.action, {
+    kind: "tool_call",
+    toolName: "web_fetch",
+    toolInput: { url: "https://example.test/article.html" },
+  });
+});
+
 test("LlmPlanner summarizes completed web search instead of continuing local project inspection", async () => {
   const model = new RecordingModel({ kind: "tool_call", toolName: "inspect_project", toolInput: {} });
   const planner = new LlmPlanner(model);

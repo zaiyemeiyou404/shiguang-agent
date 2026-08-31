@@ -25,6 +25,16 @@ export class LlmPlanner implements Planner {
     const completedWebLookup = inferCompletedWebLookupResponse(input, lastResult);
     if (completedWebLookup) return completedWebLookup;
 
+    const initialWebFetch = input.history.length === 0
+      ? inferInitialWebFetchUrl(latestUserMessage(input), input.availableTools)
+      : null;
+    if (initialWebFetch) {
+      return {
+        action: { kind: "tool_call", toolName: "web_fetch", toolInput: { url: initialWebFetch } },
+        reasoning: `User provided an explicit URL; fetching it directly: ${initialWebFetch}`,
+      };
+    }
+
     const request = this.buildRequest(input);
     const response = await this.model.generateDecision(request, context);
     const decision = { action: response.action, reasoning: response.reasoning };
@@ -232,6 +242,15 @@ function decideByPhase(
       const initialWebSearch = input.history.length === 0
         ? inferInitialWebSearchQuery(message, input.availableTools)
         : null;
+      const initialWebFetch = input.history.length === 0
+        ? inferInitialWebFetchUrl(message, input.availableTools)
+        : null;
+      if (initialWebFetch) {
+        return {
+          action: { kind: "tool_call", toolName: "web_fetch", toolInput: { url: initialWebFetch } },
+          reasoning: `Phase investigate: user provided an explicit URL; fetching it directly: ${initialWebFetch}`,
+        };
+      }
       if (initialWebSearch) {
         return {
           action: { kind: "tool_call", toolName: "web_search", toolInput: { query: initialWebSearch, limit: 5 } },
@@ -518,6 +537,7 @@ function inferInitialSearchQuery(message: string, availableTools: ToolDescriptor
 
 function inferInitialWebSearchQuery(message: string, availableTools: ToolDescriptor[]): string | null {
   if (!hasTool(availableTools, "web_search")) return null;
+  if (extractFirstHttpUrl(message)) return null;
   if (!isWebLookupIntent(message)) return null;
   if (isLocalWorkspaceLookupIntent(message)) return null;
 
@@ -527,6 +547,26 @@ function inferInitialWebSearchQuery(message: string, availableTools: ToolDescrip
     .replace(/\s+/g, " ")
     .trim();
   return normalized || message.trim();
+}
+
+function inferInitialWebFetchUrl(message: string, availableTools: ToolDescriptor[]): string | null {
+  if (!hasTool(availableTools, "web_fetch")) return null;
+  return extractFirstHttpUrl(message);
+}
+
+function extractFirstHttpUrl(message: string): string | null {
+  const raw = message.match(/https?:\/\/[^\s"'<>]+/i)?.[0];
+  if (!raw) return null;
+  const cjkIndex = raw.search(/[\u4e00-\u9fff]/);
+  const withoutTrailingText = cjkIndex > 0 ? raw.slice(0, cjkIndex) : raw;
+  const trimmed = withoutTrailingText.replace(/[),.;，。！？、]+$/g, "");
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
 }
 
 function needsInvestigation(message: string): boolean {
@@ -1442,19 +1482,32 @@ function summarizeObservation(lastResult: ActionResult | null, message: string):
   }
 
   if (lastResult.action.toolName === "web_fetch") {
-    const output = lastResult.output as { url?: unknown; title?: unknown; text?: unknown; content?: unknown; truncated?: unknown } | null;
+    const output = lastResult.output as {
+      url?: unknown;
+      title?: unknown;
+      text?: unknown;
+      content?: unknown;
+      htmlPreview?: unknown;
+      truncated?: unknown;
+      htmlPreviewTruncated?: unknown;
+    } | null;
     const url = typeof output?.url === "string" ? output.url : "该网页";
     const title = typeof output?.title === "string" && output.title.trim() ? `「${output.title.trim()}」` : "";
     const content = typeof output?.text === "string"
       ? output.text
       : typeof output?.content === "string"
         ? output.content
-        : "";
+        : typeof output?.htmlPreview === "string"
+          ? output.htmlPreview
+          : "";
     const preview = content.trim().slice(0, 700);
-    const truncatedNote = output?.truncated === true || content.length > 700
+    const truncatedNote = output?.truncated === true || output?.htmlPreviewTruncated === true || content.length > 700
       ? "\n\n内容较长，我先截取了前半部分；需要的话我可以继续抓取/整理。"
       : "";
-    return `我已抓取网页${title}：${url}\n\n${preview || "页面已返回，但没有提取到明显正文。"}${truncatedNote}`;
+    const fallback = typeof output?.htmlPreview === "string" && output.htmlPreview.trim()
+      ? `没有提取到明显正文，但页面返回了 HTML 预览：\n${output.htmlPreview.trim().slice(0, 700)}`
+      : "页面已返回，但没有提取到明显正文。";
+    return `我已抓取网页${title}：${url}\n\n${preview || fallback}${truncatedNote}`;
   }
 
   return null;

@@ -1,6 +1,7 @@
 import type { Tool, ToolExecutionContext } from "../types.js";
 
 const MAX_TEXT_CHARS = 20_000;
+const MAX_HTML_PREVIEW_CHARS = 8_000;
 const DEFAULT_TIMEOUT_MS = 20_000;
 
 interface WebFetchInput {
@@ -31,12 +32,30 @@ function assertHttpUrl(rawUrl: string): URL {
   return url;
 }
 
-function trim(value: string, maxChars: number): { text: string; truncated: boolean } {
-  const limit = Math.max(1_000, Math.min(MAX_TEXT_CHARS, Math.trunc(maxChars)));
+function trimWithLimit(value: string, maxChars: number, hardLimit: number): { text: string; truncated: boolean } {
+  const limit = Math.max(1_000, Math.min(hardLimit, Math.trunc(maxChars)));
   return {
     text: value.slice(0, limit),
     truncated: value.length > limit,
   };
+}
+
+function trimText(value: string, maxChars: number): { text: string; truncated: boolean } {
+  return trimWithLimit(value, maxChars, MAX_TEXT_CHARS);
+}
+
+function trimHtmlPreview(value: string): { htmlPreview: string; htmlPreviewTruncated: boolean } {
+  const limited = trimWithLimit(value, MAX_HTML_PREVIEW_CHARS, MAX_HTML_PREVIEW_CHARS);
+  return {
+    htmlPreview: limited.text,
+    htmlPreviewTruncated: limited.truncated,
+  };
+}
+
+function extractTitle(html: string): string | undefined {
+  const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1];
+  if (!title) return undefined;
+  return htmlToText(title).replace(/\s+/g, " ").trim() || undefined;
 }
 
 function htmlToText(html: string): string {
@@ -67,8 +86,9 @@ async function fetchWithTimeout(url: URL, signal?: AbortSignal): Promise<Respons
     return await fetch(url, {
       signal: controller.signal,
       headers: {
-        "User-Agent": "shiguang-agent",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ShiguangAgent/1.0",
         Accept: "text/html,text/plain,application/json;q=0.9,*/*;q=0.5",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
       },
     });
   } finally {
@@ -103,16 +123,19 @@ export function createWebFetchTool(): Tool {
       if (!response.ok) {
         throw new Error(`web_fetch failed: ${response.status} ${response.statusText} - ${raw.slice(0, 300)}`);
       }
-      const readable = /html/i.test(contentType) ? htmlToText(raw) : raw.trim();
-      const limited = trim(readable, parsed.maxChars ?? MAX_TEXT_CHARS);
+      const isHtml = /html/i.test(contentType) || /<!doctype html|<html[\s>]/i.test(raw.slice(0, 500));
+      const readable = isHtml ? htmlToText(raw) : raw.trim();
+      const limited = trimText(readable, parsed.maxChars ?? MAX_TEXT_CHARS);
+      const htmlFields = isHtml ? trimHtmlPreview(raw) : {};
       return {
         url: url.toString(),
         status: response.status,
         contentType,
+        title: isHtml ? extractTitle(raw) : undefined,
         text: limited.text,
         truncated: limited.truncated,
+        ...htmlFields,
       };
     },
   };
 }
-
