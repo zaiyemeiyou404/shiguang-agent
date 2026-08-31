@@ -13,6 +13,8 @@ export class LlmPlanner implements Planner {
 
   async decide(input: BrainInput, context?: PlannerContext): Promise<BrainDecision> {
     const lastResult = input.history.length > 0 ? input.history[input.history.length - 1] ?? null : null;
+    const latestUrlFetch = inferLatestUserUrlFetch(input);
+    if (latestUrlFetch) return latestUrlFetch;
     // 一旦确认发生了 workspace mutation，优先自动跑验证，再把结果交回模型处理。
     const automaticValidationMode = inferAutomaticValidationMode(lastResult, input.availableTools);
     if (automaticValidationMode) {
@@ -21,6 +23,9 @@ export class LlmPlanner implements Planner {
         reasoning: `Successful workspace mutation detected; running validation mode: ${automaticValidationMode}`,
       };
     }
+
+    const webSearchFollowupFetch = inferWebSearchFollowupFetch(input, lastResult);
+    if (webSearchFollowupFetch) return webSearchFollowupFetch;
 
     const completedWebLookup = shouldLetModelReviewWebFetch(lastResult)
       ? null
@@ -66,6 +71,65 @@ function shouldLetModelReviewWebFetch(lastResult: ActionResult | null): boolean 
   const output = lastResult.output;
   if (!output || typeof output !== "object" || Array.isArray(output)) return false;
   return Array.isArray((output as Record<string, unknown>).articleCandidates);
+}
+
+function inferWebSearchFollowupFetch(input: BrainInput, lastResult: ActionResult | null): BrainDecision | null {
+  if (!lastResult || !lastResult.ok || lastResult.action.kind !== "tool_call") return null;
+  const toolName = lastResult.metadata?.toolName ?? lastResult.action.toolName;
+  if (toolName !== "web_search") return null;
+  if (!hasTool(input.availableTools, "web_fetch")) return null;
+
+  const url = firstWebSearchResultUrl(lastResult.output);
+  if (!url) return null;
+  if (hasFetchedUrl(input.history, url)) return null;
+
+  return {
+    action: { kind: "tool_call", toolName: "web_fetch", toolInput: { url } },
+    reasoning: `Web search only discovered candidate pages; fetching the top result before answering: ${url}`,
+  };
+}
+
+function inferLatestUserUrlFetch(input: BrainInput): BrainDecision | null {
+  const url = inferInitialWebFetchUrl(latestUserMessage(input), input.availableTools);
+  if (!url) return null;
+  if (hasFetchedUrl(input.history, url)) return null;
+
+  return {
+    action: { kind: "tool_call", toolName: "web_fetch", toolInput: { url } },
+    reasoning: `Latest user message contains an explicit URL; fetching it directly before search or stale workspace history: ${url}`,
+  };
+}
+
+function firstWebSearchResultUrl(output: unknown): string | null {
+  if (!output || typeof output !== "object" || Array.isArray(output)) return null;
+  const results = (output as { results?: unknown }).results;
+  if (!Array.isArray(results)) return null;
+  for (const item of results) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const raw = (item as { url?: unknown }).url;
+    if (typeof raw !== "string" || !raw.trim()) continue;
+    try {
+      const parsed = new URL(raw.trim());
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") return parsed.toString();
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+function hasFetchedUrl(history: ActionResult[], url: string): boolean {
+  return history.some((result) => {
+    const toolName = result.metadata?.toolName ?? result.action.toolName;
+    if (toolName !== "web_fetch") return false;
+    const inputUrl = result.action.kind === "tool_call" && result.action.toolInput && typeof result.action.toolInput === "object"
+      ? (result.action.toolInput as { url?: unknown }).url
+      : undefined;
+    const outputUrl = result.output && typeof result.output === "object" && !Array.isArray(result.output)
+      ? (result.output as { url?: unknown }).url
+      : undefined;
+    return inputUrl === url || outputUrl === url;
+  });
 }
 
 async function inferDeterministicToolFallback(
@@ -115,6 +179,8 @@ export class RulePlanner implements Planner {
       ? input.history[input.history.length - 1]
       : null;
     const phase = inferPlannerPhase(input, lastResult ?? null, msg);
+    const latestUrlFetch = inferLatestUserUrlFetch(input);
+    if (latestUrlFetch) return latestUrlFetch;
 
     // RulePlanner 是最小可运行兜底：没有模型时，靠 phase + history 做有限状态流转。
     if (input.history.length === 0 && msg.toLowerCase().startsWith(echoPrefix)) {
@@ -250,6 +316,9 @@ function decideByPhase(
       const exhaustedSearchDecision = inferExhaustedRepairSearchDecision(input);
       if (exhaustedSearchDecision) return exhaustedSearchDecision;
 
+      const webSearchFollowupFetch = inferWebSearchFollowupFetch(input, lastResult);
+      if (webSearchFollowupFetch) return webSearchFollowupFetch;
+
       const initialWebSearch = input.history.length === 0
         ? inferInitialWebSearchQuery(message, input.availableTools)
         : null;
@@ -342,6 +411,9 @@ function decideByPhase(
     }
 
     case "summarize": {
+      const webSearchFollowupFetch = inferWebSearchFollowupFetch(input, lastResult);
+      if (webSearchFollowupFetch) return webSearchFollowupFetch;
+
       const webLookupResponse = inferCompletedWebLookupResponse(input, lastResult);
       if (webLookupResponse) return webLookupResponse;
 

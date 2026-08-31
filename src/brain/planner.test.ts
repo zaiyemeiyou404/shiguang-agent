@@ -343,6 +343,84 @@ test("LlmPlanner fetches explicit URLs before consulting the model", async () =>
   });
 });
 
+test("LlmPlanner prioritizes the latest explicit URL over stale workspace history", async () => {
+  const model = new RecordingModel({ kind: "tool_call", toolName: "read_text_file", toolInput: { path: "pubspec.yaml" } });
+  const planner = new LlmPlanner(model);
+  const availableTools: ToolDescriptor[] = [
+    {
+      name: "web_fetch",
+      description: "Fetches a public web page",
+      inputSchema: { type: "object" },
+      capability: "web.fetch",
+    },
+    {
+      name: "web_search",
+      description: "Searches the public web",
+      inputSchema: { type: "object" },
+      capability: "web.search",
+    },
+    {
+      name: "read_text_file",
+      description: "Reads a local file",
+      inputSchema: { type: "object" },
+      capability: "fs.read",
+    },
+  ];
+
+  const decision = await planner.decide(makeInput([
+    {
+      action: { kind: "tool_call", toolName: "read_text_file", toolInput: { path: "worktest/traintime_pda-main/pubspec.yaml" } },
+      ok: true,
+      output: { path: "worktest/traintime_pda-main/pubspec.yaml", content: "name: watermeter\n" },
+    },
+  ], availableTools, "看一下这个 https://cbgc.scol.com.cn/home/5754395"));
+
+  assert.equal(model.calls, 0);
+  assert.deepEqual(decision.action, {
+    kind: "tool_call",
+    toolName: "web_fetch",
+    toolInput: { url: "https://cbgc.scol.com.cn/home/5754395" },
+  });
+});
+
+test("RulePlanner prioritizes the latest explicit URL over stale workspace history", async () => {
+  const planner = new RulePlanner();
+  const availableTools: ToolDescriptor[] = [
+    {
+      name: "web_fetch",
+      description: "Fetches a public web page",
+      inputSchema: { type: "object" },
+      capability: "web.fetch",
+    },
+    {
+      name: "web_search",
+      description: "Searches the public web",
+      inputSchema: { type: "object" },
+      capability: "web.search",
+    },
+    {
+      name: "read_text_file",
+      description: "Reads a local file",
+      inputSchema: { type: "object" },
+      capability: "fs.read",
+    },
+  ];
+
+  const decision = await planner.decide(makeInput([
+    {
+      action: { kind: "tool_call", toolName: "read_text_file", toolInput: { path: "worktest/traintime_pda-main/pubspec.yaml" } },
+      ok: true,
+      output: { path: "worktest/traintime_pda-main/pubspec.yaml", content: "name: watermeter\n" },
+    },
+  ], availableTools, "看一下这个 https://cbgc.scol.com.cn/home/5754395"));
+
+  assert.deepEqual(decision.action, {
+    kind: "tool_call",
+    toolName: "web_fetch",
+    toolInput: { url: "https://cbgc.scol.com.cn/home/5754395" },
+  });
+});
+
 test("LlmPlanner summarizes completed web search instead of continuing local project inspection", async () => {
   const model = new RecordingModel({ kind: "tool_call", toolName: "inspect_project", toolInput: {} });
   const planner = new LlmPlanner(model);
