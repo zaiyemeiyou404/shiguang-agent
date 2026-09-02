@@ -66,6 +66,80 @@ test("custom extension tools create, list, and run a declarative custom tool", a
   assert.ok((listed.tools[0]?.templateChars ?? 0) > 0);
 });
 
+test("custom skills support layered trigger-based selection", async () => {
+  const {
+    createCustomExtensionTools,
+    loadCustomSkills,
+    formatCustomSkillInstructions,
+    selectCustomSkills,
+  } = await loadModule();
+  const extensionRoot = await makeExtensionRoot();
+  const createSkill = createCustomExtensionTools(extensionRoot).find((tool) => tool.descriptor.name === "create_custom_skill");
+  assert.ok(createSkill);
+
+  await createSkill.execute({
+    name: "web article reader",
+    description: "Read web article bodies",
+    layer: "domain",
+    scope: "web_fetch",
+    triggers: ["http", "网页", "文章", "新闻", "正文"],
+    priority: 85,
+    instructions: "Explicit URLs must be fetched directly and summarized from the real article body.",
+  });
+  await createSkill.execute({
+    name: "python reviewer",
+    description: "Review Python files",
+    layer: "domain",
+    scope: "read_text_file",
+    triggers: ["python", ".py"],
+    priority: 70,
+    instructions: "Focus on Python code quality.",
+  });
+
+  const skills = loadCustomSkills(extensionRoot);
+  const selectedForWeb = selectCustomSkills(skills, {
+    userMessage: "看一下这个 https://example.test/news.html 的正文",
+    availableTools: ["web_fetch", "web_search"],
+  });
+  assert.deepEqual(selectedForWeb.map((skill) => skill.name), ["web_article_reader"]);
+
+  const prompt = formatCustomSkillInstructions(skills, {
+    userMessage: "看一下这个 https://example.test/news.html 的正文",
+    availableTools: ["web_fetch", "web_search"],
+  });
+  assert.ok(prompt);
+  assert.match(prompt, /Layer: domain/);
+  assert.match(prompt, /Scope: web_fetch/);
+  assert.match(prompt, /Explicit URLs must be fetched directly/);
+  assert.doesNotMatch(prompt, /Focus on Python code quality/);
+});
+
+test("default web article reader skill is seeded and selected for URLs", async () => {
+  const {
+    ensureDefaultCustomSkills,
+    loadCustomSkills,
+    formatCustomSkillInstructions,
+  } = await loadModule();
+  const extensionRoot = await makeExtensionRoot();
+
+  const created = ensureDefaultCustomSkills(extensionRoot);
+  assert.equal(created.length, 1);
+
+  const skills = loadCustomSkills(extensionRoot);
+  const webSkill = skills.find((skill) => skill.name === "web_article_reader");
+  assert.ok(webSkill);
+  assert.equal(webSkill.layer, "domain");
+  assert.equal(webSkill.scope, "web_fetch");
+
+  const prompt = formatCustomSkillInstructions(skills, {
+    userMessage: "Please read https://example.test/story.html and summarize the article.",
+    availableTools: ["web_fetch", "web_search"],
+  });
+  assert.ok(prompt);
+  assert.match(prompt, /web_article_reader/);
+  assert.match(prompt, /call web_fetch on that exact URL first/);
+});
+
 test("agent rules can be recorded as a durable custom skill", async () => {
   const {
     createCustomExtensionTools,
@@ -120,6 +194,6 @@ test("custom skills are rendered as prompt instructions when enabled", async () 
 
   const prompt = formatCustomSkillInstructions(skills);
   assert.ok(prompt);
-  assert.match(prompt, /User custom skills are active/);
+  assert.match(prompt, /Relevant Shiguang skills are active/);
   assert.match(prompt, /回答代码审查时先列风险/);
 });

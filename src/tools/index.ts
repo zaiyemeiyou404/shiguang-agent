@@ -24,9 +24,11 @@ export { createWebFetchTool } from "./builtins/web-fetch.js";
 export { createWebSearchTool } from "./builtins/web-search.js";
 export {
   createCustomExtensionTools,
+  ensureDefaultCustomSkills,
   loadCustomExtensionTools,
   loadCustomSkills,
   formatCustomSkillInstructions,
+  selectCustomSkills,
 } from "./builtins/custom-extensions.js";
 export { createCollectDiagnosticsTool } from "./builtins/collect-diagnostics.js";
 export {

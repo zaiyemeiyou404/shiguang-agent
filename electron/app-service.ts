@@ -51,9 +51,9 @@ import { createWebFetchTool } from "../dist/tools/builtins/web-fetch.js";
 import { createWebSearchTool } from "../dist/tools/builtins/web-search.js";
 import {
   createCustomExtensionTools,
+  ensureDefaultCustomSkills,
   loadCustomExtensionTools,
   loadCustomSkills,
-  formatCustomSkillInstructions,
 } from "../dist/tools/builtins/custom-extensions.js";
 import { createCollectDiagnosticsTool } from "../dist/tools/builtins/collect-diagnostics.js";
 import {
@@ -1084,7 +1084,8 @@ export class DesktopAppService {
     const { planner, label } = createPlanner(llmConfig);
     const policy = getShiguangWorkspacePolicy();
     const customExtensionRoot = join(policy.userDataRoot, "extensions");
-    const customSkillInstructions = formatCustomSkillInstructions(loadCustomSkills(customExtensionRoot));
+    ensureDefaultCustomSkills(customExtensionRoot);
+    const customSkills = loadCustomSkills(customExtensionRoot);
     const tools = await this.createDesktopTools(desktopConfig, workspaceRoot, customExtensionRoot);
     const agent = new Agent({
       eventSink: sink,
@@ -1095,7 +1096,7 @@ export class DesktopAppService {
       memoryService: this.memoryService,
       workspaceRoot,
       agentProfile,
-      customSkillInstructions,
+      customSkills,
     });
 
     const runtimeLabel = agentProfile ? `${label} · profile:${agentProfile.name}` : label;

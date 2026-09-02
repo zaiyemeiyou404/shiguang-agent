@@ -2,7 +2,7 @@
 
 拾光 Agent 是一个轻量级桌面 AI Agent。它把对话、工作区文件操作、工具调用、审批、运行记录和上下文压缩放在一个 Electron 桌面界面里，目标是做成一个下载后即可配置使用的小型个人工作台。
 
-当前版本：`0.2.40`
+当前版本：`0.2.41`
 
 本版重点：新增自定义扩展工作台。Agent 可以创建可复用的 skill 指令和声明式自定义工具，扩展文件统一保存在应用数据目录的 `extensions/skills` 与 `extensions/tools` 下；已启用 skill 会注入后续运行提示词，自定义工具可通过 `run_custom_tool` 立即使用，并会在后续运行中以独立 `custom_*` 工具加载。
 
@@ -10,12 +10,12 @@
 
 在 GitHub Releases 页面下载 Windows 版本：
 
-- 安装包：`shiguang-agent-setup-0.2.40.exe`
+- 安装包：`shiguang-agent-setup-0.2.41.exe`
 - 免安装版：`win-unpacked.zip`
 
 安装包安装完成后会创建桌面快捷方式和开始菜单快捷方式。桌面上出现的是快捷方式，不是复制出来的独立 `.exe` 文件。
 
-`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.40`，才会生成新的正式 Release。
+`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.41`，才会生成新的正式 Release。
 
 如果使用免安装版，解压后运行：
 
@@ -206,6 +206,34 @@ Inspect before editing, make the smallest safe change, then validate.
 
 MCP 工具命名会带上 server 前缀，例如 `mcp_filesystem_read_file`。读工具默认无需审批；写入、删除、执行类工具会按风险进入审批。
 
+## Skill Contract
+
+拾光 Agent 使用 `shiguang.skill.v1` 作为可复用 skill 标准。skill 不是工具本身，而是“什么时候该用什么方法”的分层规则；真正执行仍由 `web_fetch`、`web_search`、文件工具、终端工具、MCP 工具等完成。
+
+skill 分为 `global`、`domain`、`project`、`session`、`task` 五层：
+
+- `global`：通用工作习惯，默认可注入。
+- `domain`：面向某类任务或工具，例如网页正文读取、代码审查、测试修复。
+- `project`：面向当前工作区项目。
+- `session`：面向当前会话。
+- `task`：面向当前任务，优先级最高。
+
+每个 skill Markdown frontmatter 支持：
+
+```yaml
+name: web_article_reader
+description: Fetch explicit URLs and extract the real article body before answering.
+enabled: true
+contract: shiguang.skill.v1
+layer: domain
+scope: web_fetch
+triggers: http, https, url, article, news, 正文, 网页
+priority: 85
+version: 1
+```
+
+启动时会自动补齐默认 `web_article_reader` skill。它会要求 Agent 在用户给出明确 URL 时优先直接调用 `web_fetch`，不要先搜索 URL 字符串，也不要被旧会话里的本地项目上下文带偏；只有直接抓取失败、内容不完整或需要交叉验证时才进入 `web_search`。
+
 ## 常见问题
 
 ### 直接用浏览器打开 Vite 页面为什么不能用？
@@ -302,8 +330,8 @@ examples/          示例配置
 推送 tag 后会自动构建 Release：
 
 ```bash
-git tag v0.2.40
-git push origin v0.2.40
+git tag v0.2.41
+git push origin v0.2.41
 ```
 
 Release 会上传：

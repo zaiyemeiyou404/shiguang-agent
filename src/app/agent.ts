@@ -17,6 +17,10 @@ import {
 import { ActionDispatcher } from "../runtime/dispatcher.js";
 import { ToolRegistry } from "../tools/registry.js";
 import type { Tool } from "../tools/types.js";
+import {
+  formatCustomSkillInstructions,
+  type CustomSkill,
+} from "../tools/builtins/custom-extensions.js";
 import { echoTool } from "../tools/builtins/echo.js";
 import type { EventSink } from "../runtime/event-sink.js";
 import type { TurnRepository } from "../state/repositories.js";
@@ -38,6 +42,7 @@ export interface AgentOptions {
   workspaceRoot?: string;
   agentProfile?: AgentProfile | null;
   customSkillInstructions?: string | null;
+  customSkills?: CustomSkill[];
 }
 
 export interface AgentInput {
@@ -104,7 +109,7 @@ export class Agent {
       const { bundle, diagnostics } = await this.contextService.buildAndRender({
         userTurn: input.userMessage,
         ...input.contextInput,
-        systemInstructions: this.mergedSystemInstructions(input.contextInput.systemInstructions),
+        systemInstructions: this.mergedSystemInstructions(input.contextInput.systemInstructions, input),
       });
       await this.emitContextCompactionEvent(input.runId, diagnostics);
 
@@ -139,7 +144,12 @@ export class Agent {
       const { bundle, diagnostics } = await this.contextService.buildAndRender({
         userTurn: input.userMessage,
         ...input.contextInput,
-        systemInstructions: this.mergedSystemInstructions(input.contextInput.systemInstructions),
+        systemInstructions: this.mergedSystemInstructions(input.contextInput.systemInstructions, {
+          runId: input.runId,
+          userMessage: input.userMessage,
+          contextInput: input.contextInput,
+          signal: input.signal,
+        }),
       });
       await this.emitContextCompactionEvent(input.runId, diagnostics);
 
@@ -297,7 +307,7 @@ export class Agent {
     if (!this.options.turnRepository) return;
 
     const sessionId = input.contextInput.task.sessionId;
-    const systemInstructions = this.mergedSystemInstructions(input.contextInput.systemInstructions)?.trim();
+    const systemInstructions = this.mergedSystemInstructions(input.contextInput.systemInstructions, input)?.trim();
     if (systemInstructions && shouldPersistSystemTurn(priorTurns, systemInstructions)) {
       await this.options.turnRepository.create(makeTurn(sessionId, "system", systemInstructions));
     }
@@ -305,9 +315,16 @@ export class Agent {
     await this.options.turnRepository.create(makeTurn(sessionId, "user", input.userMessage));
   }
 
-  private mergedSystemInstructions(systemInstructions: string | undefined): string | undefined {
+  private mergedSystemInstructions(systemInstructions: string | undefined, input: AgentInput): string | undefined {
     const profileInstructions = formatAgentProfileInstructions(this.options.agentProfile ?? null);
-    const merged = [profileInstructions, this.options.customSkillInstructions?.trim(), systemInstructions?.trim()].filter(Boolean).join("\n\n");
+    const selectedSkillInstructions = this.options.customSkills
+      ? formatCustomSkillInstructions(this.options.customSkills, {
+          userMessage: input.userMessage,
+          availableTools: this.availableToolDescriptors(),
+          workspaceRoot: this.options.workspaceRoot,
+        })
+      : this.options.customSkillInstructions?.trim();
+    const merged = [profileInstructions, selectedSkillInstructions?.trim(), systemInstructions?.trim()].filter(Boolean).join("\n\n");
     return merged || undefined;
   }
 

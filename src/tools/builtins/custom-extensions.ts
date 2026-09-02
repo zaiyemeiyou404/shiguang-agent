@@ -6,12 +6,20 @@ const EXTENSION_VERSION = "shiguang.extension.v1" as const;
 const MAX_SKILL_BYTES = 64 * 1024;
 const MAX_TOOL_BYTES = 64 * 1024;
 const MAX_TEMPLATE_CHARS = 16_000;
+const SKILL_CONTRACT_VERSION = "shiguang.skill.v1" as const;
+
+type SkillLayer = "global" | "domain" | "project" | "session" | "task";
 
 interface CreateCustomSkillInput {
   name: string;
   description?: string;
   instructions: string;
   enabled?: boolean;
+  layer?: SkillLayer;
+  scope?: string;
+  triggers?: string[];
+  priority?: number;
+  version?: number;
 }
 
 interface CreateCustomToolInput {
@@ -40,6 +48,12 @@ export interface CustomSkill {
   enabled: boolean;
   path: string;
   instructions: string;
+  contract: typeof SKILL_CONTRACT_VERSION;
+  layer: SkillLayer;
+  scope?: string;
+  triggers: string[];
+  priority: number;
+  version: number;
 }
 
 export interface CustomToolManifest {
@@ -50,6 +64,13 @@ export interface CustomToolManifest {
   inputSchema: Record<string, unknown>;
   template: string;
   enabled: boolean;
+}
+
+export interface CustomSkillSelectionContext {
+  userMessage?: string;
+  availableTools?: Array<string | { name: string }>;
+  workspaceRoot?: string;
+  maxSkills?: number;
 }
 
 interface ExtensionRoots {
@@ -111,6 +132,12 @@ function parseSkillMarkdown(content: string, path: string, fallbackName: string)
     enabled: readBoolean(frontmatter.enabled, true),
     path,
     instructions: body.trim(),
+    contract: SKILL_CONTRACT_VERSION,
+    layer: readSkillLayer(frontmatter.layer),
+    ...(readString(frontmatter.scope) ? { scope: readString(frontmatter.scope) } : {}),
+    triggers: readStringList(frontmatter.triggers),
+    priority: readInteger(frontmatter.priority, defaultSkillPriority(readSkillLayer(frontmatter.layer))),
+    version: readInteger(frontmatter.version, 1),
   };
 }
 
@@ -135,18 +162,134 @@ function readBoolean(value: unknown, fallback: boolean): boolean {
   return fallback;
 }
 
+function readInteger(value: unknown, fallback: number): number {
+  if (typeof value !== "string") return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function readStringList(value: unknown): string[] {
+  if (typeof value !== "string") return [];
+  return value
+    .split(/[,|]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 24);
+}
+
+function readSkillLayer(value: unknown): SkillLayer {
+  if (typeof value !== "string") return "global";
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "domain" || normalized === "project" || normalized === "session" || normalized === "task") return normalized;
+  return "global";
+}
+
+function serializeSkillLayer(value: SkillLayer | undefined): SkillLayer {
+  return value ?? "global";
+}
+
+function defaultSkillPriority(layer: SkillLayer): number {
+  switch (layer) {
+    case "task": return 90;
+    case "session": return 80;
+    case "project": return 70;
+    case "domain": return 60;
+    case "global": return 50;
+  }
+}
+
 function renderSkillMarkdown(input: CreateCustomSkillInput, safeName: string): string {
   const description = input.description?.trim() ?? "";
+  const layer = serializeSkillLayer(input.layer);
+  const priority = typeof input.priority === "number" ? Math.trunc(input.priority) : defaultSkillPriority(layer);
   return [
     "---",
     `name: ${safeName}`,
     description ? `description: ${description}` : null,
     `enabled: ${input.enabled === false ? "false" : "true"}`,
+    `contract: ${SKILL_CONTRACT_VERSION}`,
+    `layer: ${layer}`,
+    input.scope?.trim() ? `scope: ${input.scope.trim()}` : null,
+    input.triggers && input.triggers.length > 0 ? `triggers: ${input.triggers.map((trigger) => trigger.trim()).filter(Boolean).join(", ")}` : null,
+    `priority: ${priority}`,
+    `version: ${typeof input.version === "number" ? Math.max(1, Math.trunc(input.version)) : 1}`,
     "---",
     "",
     input.instructions.trim(),
     "",
   ].filter((line): line is string => line !== null).join("\n");
+}
+
+const DEFAULT_CUSTOM_SKILLS: CreateCustomSkillInput[] = [
+  {
+    name: "web_article_reader",
+    description: "Fetch explicit URLs and extract the real article body before answering.",
+    enabled: true,
+    layer: "domain",
+    scope: "web_fetch",
+    triggers: [
+      "http",
+      "https",
+      "url",
+      "link",
+      "webpage",
+      "article",
+      "news",
+      "body",
+      "网页",
+      "网址",
+      "链接",
+      "文章",
+      "新闻",
+      "正文",
+      "抓取",
+    ],
+    priority: 85,
+    version: 1,
+    instructions: [
+      "# Web Article Reader",
+      "",
+      "Use this skill when the latest user message asks to read, inspect, summarize, or explain a web page, article, news page, blog post, announcement, or an explicit http/https URL.",
+      "",
+      "## Routing",
+      "",
+      "1. If the latest user message contains an explicit http:// or https:// URL, call web_fetch on that exact URL first.",
+      "2. Do not search the URL string first, and do not continue an unrelated local workspace task from older conversation history.",
+      "3. Use web_search only when there is no explicit URL, direct fetch fails, the fetched content is incomplete, or cross-checking is necessary.",
+      "4. After web_search, fetch the most relevant original source page before giving a content answer; do not answer from snippets alone.",
+      "",
+      "## Article Body Selection",
+      "",
+      "1. Prefer articleCandidates or structured article text that matches the page title, author/date area, and topic keywords.",
+      "2. Prefer sources in this order: JSON-LD articleBody, article/main content containers, dense contiguous paragraph clusters, then whole-page text as a fallback.",
+      "3. Exclude navigation, login/register prompts, download/app banners, QR-code sections, copyright footers, comments, related links, ads, and duplicated boilerplate.",
+      "4. Do not choose the longest candidate by length alone. Choose the candidate that continues the title/topic coherently with the least boilerplate.",
+      "",
+      "## Answering",
+      "",
+      "1. Complete the user's requested reading, extraction, explanation, or summary directly from the fetched page.",
+      "2. Preserve key names, numbers, dates, places, and claims. Mark inference clearly if you infer beyond the text.",
+      "3. Include the source URL. If extraction is incomplete, say what was captured, what is missing, and why.",
+      "4. When the user only says 'look at this', briefly state the page topic, core content, and notable details. Do not only repeat tool output.",
+      "",
+      "## Stop Condition",
+      "",
+      "Stop once a credible article body has been found and the user's question has been answered. Do not keep reading local files, modifying projects, or searching unrelated topics.",
+    ].join("\n"),
+  },
+];
+
+export function ensureDefaultCustomSkills(extensionRoot: string): string[] {
+  const roots = ensureExtensionDirs(extensionRoot);
+  const created: string[] = [];
+  for (const skill of DEFAULT_CUSTOM_SKILLS) {
+    const safeName = safeExtensionName(skill.name);
+    const path = skillPath(extensionRoot, safeName);
+    if (existsSync(path)) continue;
+    writeFileSync(path, renderSkillMarkdown(skill, safeName), "utf8");
+    created.push(path);
+  }
+  return created;
 }
 
 function normalizeInputSchema(value: unknown): Record<string, unknown> {
@@ -172,6 +315,11 @@ function parseCreateSkillInput(input: unknown): CreateCustomSkillInput {
     instructions: obj.instructions.slice(0, MAX_SKILL_BYTES),
     ...(typeof obj.description === "string" ? { description: obj.description } : {}),
     ...(typeof obj.enabled === "boolean" ? { enabled: obj.enabled } : {}),
+    ...(typeof obj.layer === "string" ? { layer: readSkillLayer(obj.layer) } : {}),
+    ...(typeof obj.scope === "string" ? { scope: obj.scope } : {}),
+    ...(Array.isArray(obj.triggers) ? { triggers: obj.triggers.filter((item): item is string => typeof item === "string").slice(0, 24) } : {}),
+    ...(typeof obj.priority === "number" ? { priority: obj.priority } : {}),
+    ...(typeof obj.version === "number" ? { version: obj.version } : {}),
   };
 }
 
@@ -297,15 +445,62 @@ export function loadCustomToolManifests(extensionRoot: string): CustomToolManife
     .filter((tool): tool is CustomToolManifest => Boolean(tool));
 }
 
-export function formatCustomSkillInstructions(skills: CustomSkill[]): string | null {
-  const enabled = skills.filter((skill) => skill.enabled && skill.instructions.trim());
+function normalizeAvailableToolNames(tools: CustomSkillSelectionContext["availableTools"]): Set<string> {
+  return new Set((tools ?? []).map((tool) => typeof tool === "string" ? tool : tool.name).filter(Boolean));
+}
+
+function scoreCustomSkill(skill: CustomSkill, context?: CustomSkillSelectionContext): number {
+  if (!skill.enabled || !skill.instructions.trim()) return Number.NEGATIVE_INFINITY;
+  const text = [
+    context?.userMessage ?? "",
+    context?.workspaceRoot ?? "",
+  ].join("\n").toLowerCase();
+  const availableTools = normalizeAvailableToolNames(context?.availableTools);
+  let score = skill.priority;
+
+  if (skill.layer === "global") score += 8;
+  if (skill.layer === "domain") score += 16;
+  if (skill.layer === "project" && context?.workspaceRoot) score += 18;
+  if (skill.layer === "session") score += 12;
+  if (skill.layer === "task") score += 20;
+
+  const haystack = `${text}\n${Array.from(availableTools).join("\n").toLowerCase()}`;
+  const triggers = skill.triggers.map((trigger) => trigger.toLowerCase()).filter(Boolean);
+  if (triggers.length > 0) {
+    const matches = triggers.filter((trigger) => haystack.includes(trigger));
+    if (matches.length === 0 && skill.layer !== "global") return Number.NEGATIVE_INFINITY;
+    score += matches.length * 28;
+  }
+
+  if (skill.scope && availableTools.has(skill.scope)) score += 35;
+  if (skill.scope && haystack.includes(skill.scope.toLowerCase())) score += 24;
+  return score;
+}
+
+export function selectCustomSkills(skills: CustomSkill[], context?: CustomSkillSelectionContext): CustomSkill[] {
+  const maxSkills = Math.max(1, Math.min(context?.maxSkills ?? 6, 12));
+  return skills
+    .map((skill) => ({ skill, score: scoreCustomSkill(skill, context) }))
+    .filter((item) => Number.isFinite(item.score))
+    .sort((a, b) => b.score - a.score || a.skill.name.localeCompare(b.skill.name))
+    .slice(0, maxSkills)
+    .map((item) => item.skill);
+}
+
+export function formatCustomSkillInstructions(skills: CustomSkill[], context?: CustomSkillSelectionContext): string | null {
+  const enabled = selectCustomSkills(skills, context);
   if (enabled.length === 0) return null;
   return [
-    "User custom skills are active.",
-    "These are user/Agent-authored reusable instructions. Follow them when relevant, but the latest user message remains authoritative.",
+    "Relevant Shiguang skills are active.",
+    "These are selected user/Agent-authored reusable instructions. Follow them when relevant, but the latest user message remains authoritative.",
+    "Skill contract: shiguang.skill.v1. Layers: global < domain < project < session < task. Higher priority and trigger matches are injected first.",
     "",
     ...enabled.map((skill) => [
       `Skill: ${skill.name}`,
+      `Layer: ${skill.layer}`,
+      skill.scope ? `Scope: ${skill.scope}` : null,
+      skill.triggers.length > 0 ? `Triggers: ${skill.triggers.join(", ")}` : null,
+      `Priority: ${skill.priority}`,
       skill.description ? `Description: ${skill.description}` : null,
       `Source: ${skill.path}`,
       skill.instructions,
@@ -432,6 +627,11 @@ export function createCreateCustomSkillTool(extensionRoot: string): Tool {
           description: { type: "string" },
           instructions: { type: "string" },
           enabled: { type: "boolean" },
+          layer: { type: "string", enum: ["global", "domain", "project", "session", "task"] },
+          scope: { type: "string" },
+          triggers: { type: "array", items: { type: "string" } },
+          priority: { type: "number" },
+          version: { type: "number" },
         },
         required: ["name", "instructions"],
       },
