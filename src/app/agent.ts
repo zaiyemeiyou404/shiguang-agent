@@ -310,7 +310,7 @@ export class Agent {
     if (!this.options.turnRepository) return;
 
     const sessionId = input.contextInput.task.sessionId;
-    const systemInstructions = this.mergedSystemInstructions(input.contextInput.systemInstructions, input)?.trim();
+    const systemInstructions = input.contextInput.systemInstructions?.trim();
     if (systemInstructions && shouldPersistSystemTurn(priorTurns, systemInstructions)) {
       await this.options.turnRepository.create(makeTurn(sessionId, "system", systemInstructions));
     }

@@ -932,6 +932,14 @@ function safeMarkdownHref(rawHref: string): string | null {
   return null;
 }
 
+function isInternalPromptLeak(content: string): boolean {
+  const text = content.trim();
+  return text.startsWith("Relevant Shiguang skills are active.")
+    || text.startsWith("Agent profile:")
+    || text.includes("Skill contract: shiguang.skill.v1")
+    || text.includes("These are selected user/Agent-authored reusable instructions.");
+}
+
 function LegacySimpleChatTranscript({ events }: { events: DesktopEvent[] }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   type ChatTranscriptItem = {
@@ -980,6 +988,7 @@ function LegacySimpleChatTranscript({ events }: { events: DesktopEvent[] }) {
         : typeof payload.content === "string"
           ? payload.content.trim()
           : "";
+      if (body && isInternalPromptLeak(body)) return [];
       return [{
         id: event.id,
         role: "system" as const,
@@ -1080,6 +1089,7 @@ function SimpleChatTranscript({
     if (entry.kind === "approval_granted" || entry.kind === "approval_denied") return [];
     const content = typeof entry.content === "string" ? entry.content.trim() : "";
     if (!content) return [];
+    if (entry.role === "system" && isInternalPromptLeak(content)) return [];
     const turn = { role: entry.role };
     return [{
       id: entry.id,

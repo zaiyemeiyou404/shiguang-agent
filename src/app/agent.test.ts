@@ -6,6 +6,9 @@ import type { BrainDecision } from "../brain/types.js";
 import type { Planner } from "../brain/planner.js";
 import { InMemoryEventSink } from "../runtime/event-sink.js";
 import type { Tool } from "../tools/types.js";
+import type { Turn } from "../core/types.js";
+import type { TurnRepository } from "../state/repositories.js";
+import type { CustomSkill } from "../tools/builtins/custom-extensions.js";
 
 test("Agent auto-continues after a step budget slice before returning final feedback", async () => {
   let decisions = 0;
@@ -159,6 +162,59 @@ test("Agent profile allowlist limits the planner-visible tool registry", async (
   assert.deepEqual(seenToolNames[0], ["allowed_tool"]);
 });
 
+test("Agent injects custom skills into prompts without persisting them as visible system turns", async () => {
+  let sawSkillPrompt = false;
+  const planner: Planner = {
+    async decide(input): Promise<BrainDecision> {
+      sawSkillPrompt = input.context.stable.some((item) => {
+        return item.kind === "system_instruction"
+          && item.content.includes("Relevant Shiguang skills are active")
+          && item.content.includes("Skill: web_article_reader");
+      });
+      return {
+        action: { kind: "respond", content: "skill prompt applied" },
+        reasoning: "Verified custom skill prompt injection.",
+      };
+    },
+  };
+
+  const turns = new InMemoryTurnRepository();
+  const sink = new InMemoryEventSink();
+  const agent = new Agent({
+    eventSink: sink,
+    planner,
+    turnRepository: turns,
+    customSkills: [testSkill("web_article_reader", "When a URL is provided, fetch the page before answering.")],
+  });
+  const now = new Date("2026-01-01T00:00:00.000Z");
+
+  await agent.run({
+    runId: "run_skill_prompt_visibility",
+    userMessage: "看一下 https://example.test/article",
+    contextInput: {
+      task: {
+        id: "task_skill_prompt_visibility",
+        sessionId: "sess_skill_prompt_visibility",
+        parentTaskId: null,
+        title: "Skill prompt visibility",
+        description: null,
+        status: "in_progress",
+        priority: 0,
+        createdAt: now,
+        updatedAt: now,
+      },
+      recentRuns: [],
+      linkedArtifacts: [],
+      memories: [],
+    },
+  });
+
+  assert.equal(sawSkillPrompt, true);
+  const persistedTurns = await turns.listBySession("sess_skill_prompt_visibility");
+  assert.deepEqual(persistedTurns.map((turn) => turn.role), ["user", "assistant"]);
+  assert.equal(persistedTurns.some((turn) => turn.content.includes("Relevant Shiguang skills are active")), false);
+});
+
 test("Agent emits task-loop progress events for the desktop run readout", async () => {
   const planner: Planner = {
     async decide(): Promise<BrainDecision> {
@@ -219,4 +275,31 @@ function testTool(name: string): Tool {
       return `${name} executed`;
     },
   };
+}
+
+function testSkill(name: string, instructions: string): CustomSkill {
+  return {
+    name,
+    enabled: true,
+    path: `.shiguang/skills/${name}.md`,
+    instructions,
+    contract: "shiguang.skill.v1",
+    layer: "global",
+    triggers: ["https://", "网页", "文章"],
+    priority: 50,
+    version: 1,
+  };
+}
+
+class InMemoryTurnRepository implements TurnRepository {
+  private turns: Turn[] = [];
+
+  async create(turn: Turn): Promise<void> {
+    this.turns.push(turn);
+  }
+
+  async listBySession(sessionId: string, limit?: number): Promise<Turn[]> {
+    const matched = this.turns.filter((turn) => turn.sessionId === sessionId);
+    return typeof limit === "number" ? matched.slice(-limit) : matched;
+  }
 }
