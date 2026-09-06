@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import * as assert from "node:assert/strict";
 
-import { runLoop } from "./loop.js";
+import { applyActionResultToWorkingMemory, runLoop } from "./loop.js";
 import { RulePlanner } from "./planner.js";
 import type { BrainDecision, BrainInput, ActionResult } from "./types.js";
 import type { ContextBundle, ContextItem } from "../context/types.js";
@@ -84,7 +84,371 @@ test("runLoop pauses with step_limit when the step budget is exhausted", async (
   assert.equal(state.steps, 2);
   assert.equal(state.stopReason, "step_limit");
   assert.match(state.stopSummary ?? "", /2 步安全预算/);
+  assert.match(state.stopSummary ?? "", /最近工具：list_directory/);
   assert.equal(state.history.length, 2);
+});
+
+test("runLoop starts a fresh task-loop for a standalone new task", async () => {
+  const staleResult: ActionResult = {
+    action: { kind: "tool_call", toolName: "web_fetch", toolInput: { url: "https://old.example.test" } },
+    ok: true,
+    output: { url: "https://old.example.test", text: "old page body".repeat(30) },
+    metadata: { category: "tool_observation", summary: "old web fetch", retryable: false, toolName: "web_fetch" },
+  };
+  const plannerHistoryLengths: number[] = [];
+
+  const state = await runLoop(
+    {
+      context: makeContext("分析 README.md"),
+      runId: "run_fresh_task_loop",
+      priorTurns: [],
+      history: [staleResult],
+      workingMemory: {
+        step: 9,
+        phase: "summarize",
+        lastActionKind: "tool_call",
+        taskLoop: {
+          objective: "看 https://old.example.test",
+          mode: "web",
+          evidenceCount: 3,
+          completionGateCount: 0,
+          currentTaskId: "answer",
+          needsFinalAnswer: true,
+        },
+      },
+      availableTools: [{ name: "inspect_project", description: "Inspect project", inputSchema: { type: "object" } }],
+    },
+    {
+      planner: {
+        async decide(input): Promise<BrainDecision> {
+          plannerHistoryLengths.push(input.history.length);
+          return {
+            action: { kind: "tool_call", toolName: "inspect_project", toolInput: {} },
+            reasoning: "Inspect the new workspace task.",
+          };
+        },
+      },
+      policy: {
+        async check(next): Promise<BrainDecision> {
+          return next;
+        },
+      },
+      dispatcher: {
+        async dispatch(next): Promise<ActionResult> {
+          return {
+            action: next.action,
+            ok: true,
+            output: { topLevelEntries: [{ name: "README.md", kind: "file" }] },
+            metadata: { category: "tool_observation", summary: "inspected new task", retryable: false, toolName: "inspect_project" },
+          };
+        },
+      },
+      evaluator: {
+        async evaluate() {
+          return { kind: "continue" } as const;
+        },
+      },
+    },
+    1,
+  );
+
+  assert.equal(plannerHistoryLengths[0], 0);
+  assert.equal(state.steps, 1);
+  assert.equal(state.history.length, 1);
+  assert.equal(state.workingMemory.taskLoop?.objective, "分析 README.md");
+  assert.equal(state.workingMemory.taskLoop?.mode, "workspace");
+});
+
+test("applyActionResultToWorkingMemory records a compact task-loop evidence ledger", () => {
+  const previous = {
+    step: 0,
+    phase: "investigate" as const,
+    lastActionKind: null,
+    taskLoop: {
+      objective: "read README.md",
+      mode: "workspace" as const,
+      evidenceCount: 0,
+      completionGateCount: 0,
+      currentTaskId: "analyze_evidence",
+      tasks: [{
+        id: "analyze_evidence",
+        title: "Read key file",
+        status: "active" as const,
+        criteria: [{ id: "key_file_evidence", description: "key file", status: "pending" as const }],
+        attempts: 0,
+      }],
+    },
+  };
+
+  const next = applyActionResultToWorkingMemory(previous, 1, {
+    action: { kind: "tool_call", toolName: "read_text_file", toolInput: { path: "README.md" } },
+    ok: true,
+    output: { path: "README.md", content: "# Project\n" },
+    metadata: {
+      category: "tool_observation",
+      summary: "read README.md",
+      retryable: false,
+      toolName: "read_text_file",
+    },
+  });
+
+  assert.deepEqual(next.taskLoop?.evidenceLog, [{
+    step: 1,
+    toolName: "read_text_file",
+    kind: "file",
+    quality: "strong",
+    target: "README.md",
+    summary: "read README.md",
+  }]);
+  assert.equal(next.taskLoop?.lastEvidenceTool, "read_text_file");
+});
+
+test("applyActionResultToWorkingMemory marks final readiness only after self-check passes", () => {
+  const previous = {
+    step: 0,
+    phase: "investigate" as const,
+    lastActionKind: null,
+    taskLoop: {
+      objective: "read README.md",
+      mode: "workspace" as const,
+      evidenceCount: 0,
+      completionGateCount: 0,
+      currentTaskId: "analyze_evidence",
+      tasks: [{
+        id: "analyze_evidence",
+        title: "Read key file",
+        status: "active" as const,
+        criteria: [{ id: "key_file_evidence", description: "key file", status: "pending" as const }],
+        attempts: 0,
+      }],
+    },
+  };
+
+  const next = applyActionResultToWorkingMemory(previous, 1, {
+    action: { kind: "tool_call", toolName: "read_text_file", toolInput: { path: "README.md" } },
+    ok: true,
+    output: { path: "README.md", content: "# Project\n" },
+    metadata: {
+      category: "tool_observation",
+      summary: "read README.md",
+      retryable: false,
+      toolName: "read_text_file",
+    },
+  });
+
+  assert.equal(next.taskLoop?.selfCheck?.status, "passed");
+  assert.equal(next.taskLoop?.needsFinalAnswer, true);
+});
+
+test("runLoop keeps the previous checkpoint for continuation messages", async () => {
+  const previousResult: ActionResult = {
+    action: { kind: "tool_call", toolName: "read_text_file", toolInput: { path: "README.md" } },
+    ok: true,
+    output: { path: "README.md", content: "# Project" },
+    metadata: { category: "tool_observation", summary: "read README", retryable: false, toolName: "read_text_file" },
+  };
+  const plannerHistoryLengths: number[] = [];
+
+  const state = await runLoop(
+    {
+      context: makeContext("继续上次暂停的任务。"),
+      runId: "run_resume_task_loop",
+      priorTurns: [],
+      history: [previousResult],
+      workingMemory: {
+        step: 1,
+        phase: "investigate",
+        lastActionKind: "tool_call",
+        taskLoop: {
+          objective: "分析 README.md",
+          mode: "workspace",
+          evidenceCount: 1,
+          completionGateCount: 0,
+          currentTaskId: "analyze_evidence",
+          needsFinalAnswer: false,
+        },
+      },
+      availableTools: [],
+    },
+    {
+      planner: {
+        async decide(input): Promise<BrainDecision> {
+          plannerHistoryLengths.push(input.history.length);
+          return { action: { kind: "respond", content: "继续完成。" }, reasoning: "Resume previous checkpoint." };
+        },
+      },
+      policy: {
+        async check(next): Promise<BrainDecision> {
+          return next;
+        },
+      },
+      dispatcher: {
+        async dispatch(next): Promise<ActionResult> {
+          return {
+            action: next.action,
+            ok: true,
+            output: next.action.content,
+            metadata: { category: "assistant_response", summary: "resumed", retryable: false },
+          };
+        },
+      },
+      evaluator: {
+        async evaluate() {
+          return { kind: "stop", reason: "respond" } as const;
+        },
+      },
+    },
+    2,
+  );
+
+  assert.equal(plannerHistoryLengths[0], 1);
+  assert.equal(state.steps, 2);
+  assert.equal(state.history.length, 2);
+  assert.equal(state.workingMemory.taskLoop?.objective, "分析 README.md");
+});
+
+test("runLoop gates premature final feedback until active task-loop evidence is collected", async () => {
+  const dispatchedTools: string[] = [];
+
+  const state = await runLoop(
+    {
+      context: makeContext("修改 src/app.ts"),
+      runId: "run_task_loop_premature_response_gate",
+      priorTurns: [],
+      history: [],
+      workingMemory: {
+        step: 0,
+        phase: "investigate",
+        lastActionKind: null,
+        taskLoop: {
+          objective: "修改 src/app.ts",
+          mode: "edit",
+          evidenceCount: 0,
+          completionGateCount: 0,
+          currentTaskId: "collect_evidence",
+          tasks: [{
+            id: "collect_evidence",
+            title: "检查目标文件",
+            status: "active",
+            criteria: [{ id: "target_evidence", description: "已读取目标文件", status: "pending" }],
+            attempts: 0,
+          }],
+        },
+      },
+      availableTools: [{ name: "read_text_file", description: "Read a file", inputSchema: { type: "object" } }],
+    },
+    {
+      planner: {
+        async decide(): Promise<BrainDecision> {
+          return { action: { kind: "respond", content: "已经完成。" }, reasoning: "Model tried to answer too early." };
+        },
+      },
+      policy: {
+        async check(next): Promise<BrainDecision> {
+          assert.equal(next.action.kind, "tool_call");
+          return next;
+        },
+      },
+      dispatcher: {
+        async dispatch(next): Promise<ActionResult> {
+          dispatchedTools.push(next.action.toolName ?? "");
+          return {
+            action: next.action,
+            ok: true,
+            output: { path: "src/app.ts", content: "export const app = true;\n" },
+            metadata: { category: "tool_observation", summary: "read src/app.ts", retryable: false, toolName: next.action.toolName },
+          };
+        },
+      },
+      evaluator: {
+        async evaluate() {
+          return { kind: "continue" } as const;
+        },
+      },
+    },
+    1,
+  );
+
+  assert.deepEqual(dispatchedTools, ["read_text_file"]);
+  assert.equal(state.history[0]?.action.toolName, "read_text_file");
+  assert.equal(state.workingMemory.taskLoop?.tasks?.[0]?.criteria[0]?.status, "satisfied");
+});
+
+test("runLoop returns final feedback instead of spending tools after task-loop answer is ready", async () => {
+  let dispatcherCalls = 0;
+  const seededRead: ActionResult = {
+    action: { kind: "tool_call", toolName: "read_text_file", toolInput: { path: "README.md" } },
+    ok: true,
+    output: { path: "README.md", content: "# Project\nReady evidence." },
+    metadata: { category: "tool_observation", summary: "read README.md", retryable: false, toolName: "read_text_file" },
+  };
+
+  const state = await runLoop(
+    {
+      context: makeContext("继续上次暂停的任务。"),
+      runId: "run_task_loop_ready_tool_gate",
+      priorTurns: [],
+      history: [seededRead],
+      workingMemory: {
+        step: 1,
+        phase: "summarize",
+        lastActionKind: "tool_call",
+        taskLoop: {
+          objective: "分析 README.md",
+          mode: "workspace",
+          evidenceCount: 1,
+          completionGateCount: 0,
+          currentTaskId: "answer",
+          needsFinalAnswer: true,
+          tasks: [{
+            id: "answer",
+            title: "最终反馈",
+            status: "active",
+            criteria: [{ id: "final_feedback", description: "输出最终反馈", status: "pending" }],
+            attempts: 0,
+          }],
+        },
+      },
+      availableTools: [{ name: "list_directory", description: "List directory", inputSchema: { type: "object" }, risk: "read" }],
+    },
+    {
+      planner: {
+        async decide(): Promise<BrainDecision> {
+          return {
+            action: { kind: "tool_call", toolName: "list_directory", toolInput: { path: "." } },
+            reasoning: "Model tried to keep using tools.",
+          };
+        },
+      },
+      policy: {
+        async check(next): Promise<BrainDecision> {
+          assert.equal(next.action.kind, "respond");
+          return next;
+        },
+      },
+      dispatcher: {
+        async dispatch(next): Promise<ActionResult> {
+          dispatcherCalls += 1;
+          return {
+            action: next.action,
+            ok: true,
+            output: next.action.content,
+            metadata: { category: "assistant_response", summary: "final feedback", retryable: false },
+          };
+        },
+      },
+      evaluator: {
+        async evaluate() {
+          return { kind: "stop", reason: "respond" } as const;
+        },
+      },
+    },
+    2,
+  );
+
+  assert.equal(dispatcherCalls, 1);
+  assert.equal(state.history[1]?.action.kind, "respond");
+  assert.match(String(state.history[1]?.output), /README.md/);
 });
 
 test("runLoop pauses on model usage budget before dispatching another tool", async () => {
@@ -235,6 +599,627 @@ test("runLoop redirects repeated read-only discovery tools to key file reads", a
   assert.deepEqual(dispatchedTools, ["list_directory", "read_text_file"]);
   assert.equal(state.history[1]?.action.toolName, "read_text_file");
   assert.deepEqual(state.history[1]?.action.toolInput, { path: "pubspec.yaml" });
+});
+
+test("runLoop recovers repeated web fetches with search instead of local file tools", async () => {
+  const repeatedFetch: BrainDecision = {
+    action: { kind: "tool_call", toolName: "web_fetch", toolInput: { url: "https://example.test/article" } },
+    reasoning: "Model keeps fetching the same weak article page.",
+  };
+  const dispatchedTools: string[] = [];
+
+  const state = await runLoop(
+    {
+      context: makeContext("看一下 https://example.test/article 的正文"),
+      runId: "run_web_fetch_recovery",
+      priorTurns: [],
+      history: [{
+        action: repeatedFetch.action,
+        ok: true,
+        output: { url: "https://example.test/article", text: "" },
+        metadata: { category: "tool_observation", summary: "fetched weak page", retryable: false, toolName: "web_fetch" },
+      }],
+      workingMemory: {
+        step: 1,
+        phase: "investigate",
+        lastActionKind: "tool_call",
+        taskLoop: {
+          objective: "看一下 https://example.test/article 的正文",
+          mode: "web",
+          evidenceCount: 1,
+          completionGateCount: 0,
+          currentTaskId: "analyze_evidence",
+          tasks: [{
+            id: "analyze_evidence",
+            title: "提取网页正文",
+            status: "active",
+            criteria: [{ id: "body_evidence", description: "已拿到正文", status: "pending" }],
+            attempts: 1,
+          }],
+        },
+      },
+      availableTools: [
+        { name: "web_fetch", description: "Fetch web page", inputSchema: { type: "object" }, risk: "read" },
+        { name: "web_search", description: "Search web", inputSchema: { type: "object" }, risk: "read" },
+        { name: "read_text_file", description: "Read file", inputSchema: { type: "object" }, risk: "read" },
+      ],
+    },
+    {
+      planner: {
+        async decide(): Promise<BrainDecision> {
+          return repeatedFetch;
+        },
+      },
+      policy: {
+        async check(next): Promise<BrainDecision> {
+          return next;
+        },
+      },
+      dispatcher: {
+        async dispatch(next): Promise<ActionResult> {
+          dispatchedTools.push(next.action.toolName ?? "");
+          return {
+            action: next.action,
+            ok: true,
+            output: { query: "example article", results: [{ title: "Article mirror", url: "https://mirror.example.test/article" }] },
+            metadata: { category: "tool_observation", summary: "searched alternate source", retryable: false, toolName: next.action.toolName },
+          };
+        },
+      },
+      evaluator: {
+        async evaluate() {
+          return { kind: "continue" } as const;
+        },
+      },
+    },
+    2,
+  );
+
+  assert.equal(dispatchedTools[0], "web_search");
+  assert.equal(state.history[1]?.action.toolName, "web_search");
+});
+
+test("runLoop summarizes collected evidence instead of repeating read-only tools without recovery", async () => {
+  const repeatedList: BrainDecision = {
+    action: { kind: "tool_call", toolName: "list_directory", toolInput: { path: "." } },
+    reasoning: "Model keeps listing the same directory.",
+  };
+  const seededList: ActionResult = {
+    action: repeatedList.action,
+    ok: true,
+    output: { entries: [] },
+    metadata: {
+      category: "tool_observation",
+      summary: "Listed the workspace root.",
+      retryable: false,
+      toolName: "list_directory",
+    },
+  };
+
+  let dispatcherCalls = 0;
+  const state = await runLoop(
+    {
+      context: makeContext("inspect this folder"),
+      runId: "run_readonly_final_feedback",
+      priorTurns: [],
+      history: [seededList],
+      workingMemory: {
+        step: 1,
+        phase: "investigate",
+        lastActionKind: "tool_call",
+        lastToolName: "list_directory",
+      },
+      availableTools: [
+        {
+          name: "list_directory",
+          description: "List a directory",
+          inputSchema: { type: "object" },
+          risk: "read",
+        },
+      ],
+    },
+    {
+      planner: {
+        async decide(): Promise<BrainDecision> {
+          return repeatedList;
+        },
+      },
+      policy: {
+        async check(next): Promise<BrainDecision> {
+          assert.equal(next.action.kind, "respond");
+          return next;
+        },
+      },
+      dispatcher: {
+        async dispatch(next): Promise<ActionResult> {
+          dispatcherCalls += 1;
+          assert.equal(next.action.kind, "respond");
+          return {
+            action: next.action,
+            ok: true,
+            output: next.action.content,
+            metadata: {
+              category: "assistant_response",
+              summary: "Read-only feedback sent.",
+              retryable: false,
+            },
+          };
+        },
+      },
+      evaluator: {
+        async evaluate(decision) {
+          assert.equal(decision.action.kind, "respond");
+          return { kind: "stop", reason: "respond" } as const;
+        },
+      },
+    },
+    3,
+  );
+
+  assert.equal(dispatcherCalls, 1);
+  assert.equal(state.stopReason, "respond");
+  assert.match(String(state.lastResult?.output), /list_directory/);
+  assert.match(String(state.lastResult?.output), /Listed the workspace root/);
+});
+
+test("runLoop tracks task-loop evidence and final-answer readiness", async () => {
+  const decisions: BrainDecision[] = [
+    {
+      action: { kind: "tool_call", toolName: "read_text_file", toolInput: { path: "README.md" } },
+      reasoning: "Read the requested file.",
+    },
+  ];
+
+  const state = await runLoop(
+    {
+      context: makeContext("analyze README.md"),
+      runId: "run_task_loop_memory",
+      priorTurns: [],
+      history: [],
+      availableTools: [
+        {
+          name: "read_text_file",
+          description: "Read a file",
+          inputSchema: { type: "object" },
+          risk: "read",
+        },
+      ],
+    },
+    {
+      planner: {
+        async decide(): Promise<BrainDecision> {
+          return decisions.shift() ?? { action: { kind: "respond", content: "done" } };
+        },
+      },
+      policy: {
+        async check(next): Promise<BrainDecision> {
+          return next;
+        },
+      },
+      dispatcher: {
+        async dispatch(next): Promise<ActionResult> {
+          if (next.action.kind === "respond") {
+            return {
+              action: next.action,
+              ok: true,
+              output: next.action.content,
+              metadata: { category: "assistant_response", summary: "done", retryable: false },
+            };
+          }
+
+          return {
+            action: next.action,
+            ok: true,
+            output: { path: "README.md", content: "# Project\nDetails" },
+            metadata: {
+              category: "tool_observation",
+              summary: "Read README.md",
+              retryable: false,
+              toolName: "read_text_file",
+            },
+          };
+        },
+      },
+      evaluator: {
+        async evaluate(_decision, result) {
+          return result?.action.kind === "respond"
+            ? { kind: "stop", reason: "respond" } as const
+            : { kind: "continue" } as const;
+        },
+      },
+    },
+    1,
+  );
+
+  assert.equal(state.workingMemory.taskLoop?.objective, "analyze README.md");
+  assert.equal(state.workingMemory.taskLoop?.mode, "workspace");
+  assert.equal(state.workingMemory.taskLoop?.evidenceCount, 1);
+  assert.equal(state.workingMemory.taskLoop?.lastEvidenceKind, "file");
+  assert.equal(state.workingMemory.taskLoop?.lastEvidenceTool, "read_text_file");
+  assert.equal(state.workingMemory.taskLoop?.lastEvidenceTarget, "README.md");
+  assert.equal(state.workingMemory.taskLoop?.needsFinalAnswer, true);
+});
+
+test("runLoop does not block key file reads just because workspace task-loop reached answer phase", async () => {
+  const codeMapResult: ActionResult = {
+    action: { kind: "tool_call", toolName: "code_map", toolInput: { maxFiles: 1200 } },
+    ok: true,
+    output: { entrypoints: ["lib/main.dart"], fileStats: { filesScanned: 80 } },
+    metadata: {
+      category: "tool_observation",
+      summary: "mapped project structure",
+      retryable: false,
+      toolName: "code_map",
+    },
+  };
+
+  const state = await runLoop(
+    {
+      context: makeContext("继续分析这个项目"),
+      runId: "run_answer_phase_still_needs_file_evidence",
+      priorTurns: [],
+      history: [codeMapResult],
+      workingMemory: {
+        step: 1,
+        phase: "summarize",
+        lastActionKind: "tool_call",
+        lastToolName: "code_map",
+        taskLoop: {
+          objective: "分析这个项目",
+          mode: "workspace",
+          evidenceCount: 1,
+          completionGateCount: 0,
+          currentTaskId: "answer",
+          tasks: [
+            {
+              id: "answer",
+              title: "基于已检查证据说明结论",
+              status: "active",
+              criteria: [{ id: "final_feedback", description: "final answer", status: "pending" }],
+              attempts: 0,
+            },
+          ],
+          needsFinalAnswer: false,
+        },
+      },
+      availableTools: [
+        { name: "read_text_file", description: "Read file", inputSchema: { type: "object" }, risk: "read" },
+      ],
+    },
+    {
+      planner: {
+        async decide(): Promise<BrainDecision> {
+          return {
+            action: { kind: "tool_call", toolName: "read_text_file", toolInput: { path: "lib/main.dart" } },
+            reasoning: "Need entrypoint evidence before final project feedback.",
+          };
+        },
+      },
+      policy: {
+        async check(next): Promise<BrainDecision> {
+          assert.equal(next.action.kind, "tool_call");
+          assert.equal(next.action.toolName, "read_text_file");
+          return next;
+        },
+      },
+      dispatcher: {
+        async dispatch(next): Promise<ActionResult> {
+          return {
+            action: next.action,
+            ok: true,
+            output: { path: "lib/main.dart", content: "void main() {}\n" },
+            metadata: {
+              category: "tool_observation",
+              summary: "read lib/main.dart",
+              retryable: false,
+              toolName: "read_text_file",
+            },
+          };
+        },
+      },
+      evaluator: {
+        async evaluate() {
+          return { kind: "continue" } as const;
+        },
+      },
+    },
+    2,
+  );
+
+  assert.equal(state.lastResult?.action.kind, "tool_call");
+  assert.equal(state.lastResult?.action.toolName, "read_text_file");
+  assert.equal(state.workingMemory.taskLoop?.lastEvidenceTool, "read_text_file");
+});
+
+test("runLoop advances the task-loop plan after read-only evidence", async () => {
+  const state = await runLoop(
+    {
+      context: makeContext("analyze README.md"),
+      runId: "run_task_loop_plan_read",
+      priorTurns: [],
+      history: [],
+      availableTools: [
+        {
+          name: "read_text_file",
+          description: "Read a file",
+          inputSchema: { type: "object" },
+          risk: "read",
+        },
+      ],
+    },
+    {
+      planner: {
+        async decide(): Promise<BrainDecision> {
+          return {
+            action: { kind: "tool_call", toolName: "read_text_file", toolInput: { path: "README.md" } },
+            reasoning: "Read the requested file.",
+          };
+        },
+      },
+      policy: {
+        async check(next): Promise<BrainDecision> {
+          return next;
+        },
+      },
+      dispatcher: {
+        async dispatch(next): Promise<ActionResult> {
+          return {
+            action: next.action,
+            ok: true,
+            output: { path: "README.md", content: "# Project\nDetails" },
+            metadata: {
+              category: "tool_observation",
+              summary: "Read README.md",
+              retryable: false,
+              toolName: "read_text_file",
+            },
+          };
+        },
+      },
+      evaluator: {
+        async evaluate() {
+          return { kind: "continue" } as const;
+        },
+      },
+    },
+    1,
+  );
+
+  assert.equal(state.workingMemory.taskLoop?.currentStep, "answer");
+  assert.deepEqual(state.workingMemory.taskLoop?.plan?.map((item) => [item.id, item.status]), [
+    ["collect_evidence", "done"],
+    ["analyze_evidence", "done"],
+    ["answer", "active"],
+  ]);
+  assert.equal(state.workingMemory.taskLoop?.currentTaskId, "answer");
+  assert.equal(
+    state.workingMemory.taskLoop?.tasks?.find((task) => task.id === "analyze_evidence")?.criteria[0]?.status,
+    "satisfied",
+  );
+});
+
+test("runLoop advances the task-loop plan from edit to validation", async () => {
+  const decisions: BrainDecision[] = [
+    {
+      action: { kind: "tool_call", toolName: "write_text_file", toolInput: { path: "star.py", content: "print('*')\n" } },
+      reasoning: "Create the requested file.",
+    },
+  ];
+
+  const state = await runLoop(
+    {
+      context: makeContext("build star.py"),
+      runId: "run_task_loop_plan_edit",
+      priorTurns: [],
+      history: [],
+      availableTools: [
+        {
+          name: "write_text_file",
+          description: "Write a file",
+          inputSchema: { type: "object" },
+          effects: { workspaceMutation: true, validationMode: "all" },
+        },
+        {
+          name: "run_validation",
+          description: "Validate workspace",
+          inputSchema: { type: "object" },
+        },
+      ],
+    },
+    {
+      planner: {
+        async decide(): Promise<BrainDecision> {
+          return decisions.shift() ?? { action: { kind: "respond", content: "done" } };
+        },
+      },
+      policy: {
+        async check(next): Promise<BrainDecision> {
+          return next;
+        },
+      },
+      dispatcher: {
+        async dispatch(next): Promise<ActionResult> {
+          const toolName = next.action.toolName;
+          return {
+            action: next.action,
+            ok: true,
+            output: toolName === "run_validation" ? { ok: true, mode: "all" } : { path: "star.py" },
+            metadata: {
+              category: "tool_observation",
+              summary: toolName === "run_validation" ? "Validation passed." : "Wrote star.py",
+              retryable: false,
+              toolName,
+              ...(toolName === "write_text_file" ? { workspaceMutation: true, validationMode: "all" as const } : {}),
+            },
+          };
+        },
+      },
+      evaluator: {
+        async evaluate() {
+          return { kind: "continue" } as const;
+        },
+      },
+    },
+    1,
+  );
+
+  assert.equal(state.workingMemory.taskLoop?.currentStep, "verify");
+  assert.deepEqual(state.workingMemory.taskLoop?.plan?.map((item) => [item.id, item.status]), [
+    ["collect_evidence", "done"],
+    ["apply_change", "done"],
+    ["verify", "active"],
+    ["answer", "pending"],
+  ]);
+  assert.equal(state.workingMemory.taskLoop?.currentTaskId, "verify");
+  assert.equal(
+    state.workingMemory.taskLoop?.tasks?.find((task) => task.id === "apply_change")?.criteria[0]?.status,
+    "satisfied",
+  );
+});
+
+test("runLoop maps web search and fetch results into task criteria", async () => {
+  const decisions: BrainDecision[] = [
+    {
+      action: { kind: "tool_call", toolName: "web_search", toolInput: { query: "red books" } },
+      reasoning: "Search the requested web topic.",
+    },
+    {
+      action: { kind: "tool_call", toolName: "web_fetch", toolInput: { url: "https://example.test/article" } },
+      reasoning: "Fetch the candidate article.",
+    },
+  ];
+
+  const state = await runLoop(
+    {
+      context: makeContext("联网搜索红色书籍并看看正文"),
+      runId: "run_task_loop_web_criteria",
+      priorTurns: [],
+      history: [],
+      availableTools: [
+        { name: "web_search", description: "Search web", inputSchema: { type: "object" } },
+        { name: "web_fetch", description: "Fetch web page", inputSchema: { type: "object" } },
+      ],
+    },
+    {
+      planner: {
+        async decide(): Promise<BrainDecision> {
+          return decisions.shift() ?? { action: { kind: "respond", content: "done" } };
+        },
+      },
+      policy: {
+        async check(next): Promise<BrainDecision> {
+          return next;
+        },
+      },
+      dispatcher: {
+        async dispatch(next): Promise<ActionResult> {
+          const toolName = next.action.toolName;
+          return {
+            action: next.action,
+            ok: true,
+            output: toolName === "web_fetch"
+              ? { url: "https://example.test/article", text: "这是一段已经抽取出来的网页正文。".repeat(20) }
+              : { query: "red books", results: [{ title: "红色书籍", url: "https://example.test/article" }] },
+            metadata: {
+              category: "tool_observation",
+              summary: toolName === "web_fetch" ? "Fetched article body." : "Found candidate article.",
+              retryable: false,
+              toolName,
+            },
+          };
+        },
+      },
+      evaluator: {
+        async evaluate() {
+          return { kind: "continue" } as const;
+        },
+      },
+    },
+    2,
+  );
+
+  assert.equal(state.workingMemory.taskLoop?.currentTaskId, "answer");
+  assert.equal(
+    state.workingMemory.taskLoop?.tasks?.find((task) => task.id === "collect_evidence")?.criteria[0]?.status,
+    "satisfied",
+  );
+  assert.equal(
+    state.workingMemory.taskLoop?.tasks?.find((task) => task.id === "analyze_evidence")?.criteria[0]?.status,
+    "satisfied",
+  );
+});
+
+test("runLoop unblocks task-loop target evidence after recovery discovery", async () => {
+  const failedRead: ActionResult = {
+    action: { kind: "tool_call", toolName: "read_text_file", toolInput: { path: "src/missing.ts" } },
+    ok: false,
+    output: null,
+    error: "ENOENT",
+    metadata: {
+      category: "tool_error",
+      summary: "missing file",
+      retryable: false,
+      toolName: "read_text_file",
+    },
+  };
+  const workingMemory = applyActionResultToWorkingMemory(
+    {
+      step: 0,
+      phase: "investigate",
+      taskLoop: {
+        objective: "修改 src/missing.ts",
+        mode: "edit",
+        evidenceCount: 0,
+        completionGateCount: 0,
+        currentStep: "collect_evidence",
+        plan: [
+          { id: "collect_evidence", title: "Inspect", status: "active" },
+          { id: "apply_change", title: "Apply", status: "pending" },
+        ],
+        currentTaskId: "collect_evidence",
+        tasks: [
+          {
+            id: "collect_evidence",
+            title: "Inspect the target file or failing diagnostic",
+            status: "active",
+            criteria: [{ id: "target_evidence", description: "target", status: "pending" }],
+            attempts: 0,
+          },
+          {
+            id: "apply_change",
+            title: "Apply one focused workspace change",
+            status: "pending",
+            dependsOn: ["collect_evidence"],
+            criteria: [{ id: "workspace_mutated", description: "mutate", status: "pending" }],
+            attempts: 0,
+          },
+        ],
+      },
+      lastActionKind: null,
+    },
+    1,
+    failedRead,
+  );
+
+  const recovered = applyActionResultToWorkingMemory(
+    workingMemory,
+    2,
+    {
+      action: { kind: "tool_call", toolName: "search_workspace", toolInput: { query: "src/missing.ts" } },
+      ok: true,
+      output: { results: [{ file: "src/app.ts", line: 1 }] },
+      metadata: {
+        category: "tool_observation",
+        summary: "found src/app.ts",
+        retryable: false,
+        toolName: "search_workspace",
+      },
+    },
+  );
+
+  assert.equal(recovered.taskLoop?.tasks?.find((task) => task.id === "collect_evidence")?.status, "done");
+  assert.equal(recovered.taskLoop?.tasks?.find((task) => task.id === "collect_evidence")?.criteria[0]?.status, "satisfied");
+  assert.equal(recovered.taskLoop?.currentTaskId, "apply_change");
 });
 
 test("runLoop tracks the latest validation failure in working memory", async () => {

@@ -3,7 +3,9 @@ import type {
   BrainDecision,
   ActionResult,
   ActionResultCategory,
+  TaskLoopCriterionStatus,
   PlannerPhase,
+  TaskLoopPlanStatus,
   WorkingMemorySnapshot,
 } from "./types.js";
 import type { Planner } from "./planner.js";
@@ -11,6 +13,7 @@ import type { Policy } from "./policy.js";
 import type { Evaluator, LoopStopReason } from "./evaluator.js";
 import type { ToolExecutionContext, ValidationModeHint } from "../tools/types.js";
 import { addUsageToRunUsage, emptyRunTokenUsage, type LlmTokenUsage, type RunTokenUsage } from "./usage.js";
+import { judgeTaskCompletion } from "./completion.js";
 
 export interface LoopDeps {
   planner: Planner;
@@ -30,6 +33,15 @@ export interface LoopContext {
     maxPromptEstimateTokens?: number;
   };
   onUsage?(usage: LlmTokenUsage, total: RunTokenUsage): Promise<void> | void;
+  onTaskLoop?(
+    workingMemory: WorkingMemorySnapshot,
+    event: {
+      step: number;
+      phase: "initialized" | "advanced" | "checkpoint" | "finalized";
+      summary: string;
+      result?: ActionResult;
+    },
+  ): Promise<void> | void;
 }
 
 export interface LoopState {
@@ -50,6 +62,10 @@ const DEFAULT_USAGE_BUDGET = {
   maxTotalTokens: 180_000,
   maxPromptEstimateTokens: 220_000,
 };
+const MAX_TASK_LOOP_EVIDENCE_LOG = 12;
+
+type TaskLoopEvidenceLogEntry = NonNullable<NonNullable<WorkingMemorySnapshot["taskLoop"]>["evidenceLog"]>[number];
+type TaskLoopSelfCheck = NonNullable<NonNullable<WorkingMemorySnapshot["taskLoop"]>["selfCheck"]>;
 
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
@@ -57,14 +73,187 @@ function throwIfAborted(signal?: AbortSignal): void {
   }
 }
 
-function createInitialWorkingMemory(input: BrainInput): WorkingMemorySnapshot {
-  return {
+function createInitialWorkingMemory(input: BrainInput, resetForNewTask = shouldStartFreshTaskLoop(input)): WorkingMemorySnapshot {
+  const initial: WorkingMemorySnapshot = {
     // 所有 run 默认从 investigate 起步；resume 时再由外部注入已有 workingMemory 覆盖。
     phase: "investigate",
     step: 0,
+    taskLoop: createInitialTaskLoop(input),
     lastActionKind: null,
-    ...input.workingMemory,
   };
+  if (!input.workingMemory || resetForNewTask) return initial;
+  return {
+    ...initial,
+    ...input.workingMemory,
+    taskLoop: input.workingMemory.taskLoop ?? initial.taskLoop,
+  };
+}
+
+function createInitialTaskLoop(input: BrainInput): NonNullable<WorkingMemorySnapshot["taskLoop"]> {
+  const objective = latestUserMessage(input).trim();
+  const mode = inferTaskLoopMode(objective);
+  return {
+    objective: objective || "Continue the current task.",
+    mode,
+    evidenceCount: 0,
+    completionGateCount: 0,
+    currentStep: "collect_evidence",
+    plan: createTaskLoopPlan(mode),
+    currentTaskId: "collect_evidence",
+    tasks: createTaskLoopTasks(mode),
+    needsFinalAnswer: false,
+  };
+}
+
+function shouldStartFreshTaskLoop(input: BrainInput): boolean {
+  const previous = input.workingMemory?.taskLoop;
+  if (!previous) return false;
+  const message = latestUserMessage(input).trim();
+  if (!message || isContinuationTaskMessage(message)) return false;
+
+  const previousObjective = normalizeTaskObjective(previous.objective);
+  const nextObjective = normalizeTaskObjective(message);
+  if (!nextObjective || nextObjective === previousObjective) return false;
+
+  const previousMode = previous.mode;
+  const nextMode = inferTaskLoopMode(message);
+  if (nextMode !== "chat" && nextMode !== previousMode) return true;
+
+  const previousAnchor = extractTaskAnchor(previous.objective) ?? previous.lastEvidenceTarget ?? "";
+  const nextAnchor = extractTaskAnchor(message);
+  if (nextAnchor && !normalizeTaskObjective(previousAnchor).includes(normalizeTaskObjective(nextAnchor))) return true;
+
+  return isLikelyStandaloneTaskMessage(message) && previous.needsFinalAnswer !== true;
+}
+
+function isContinuationTaskMessage(message: string): boolean {
+  const text = message.trim().toLowerCase();
+  return /^(继续|接着|上次|继续上次|接着上次|从这里|继续刚才|继续之前|resume|continue)/i.test(text)
+    || /继续上次|接着上次|上次暂停|上一轮|从 checkpoint|from checkpoint/i.test(text);
+}
+
+function isLikelyStandaloneTaskMessage(message: string): boolean {
+  return message.length >= 8
+    && /看一下|分析|修|改|写|创建|生成|搜索|联网|打开|抓取|读取|总结|检查|运行|测试|打包|提交|push|release|url|https?:\/\//i.test(message);
+}
+
+function normalizeTaskObjective(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function extractTaskAnchor(message: string): string | null {
+  const url = message.match(/https?:\/\/\S+/i)?.[0];
+  if (url) return url.replace(/[，。),\]>]+$/, "");
+  const windowsPath = message.match(/[A-Za-z]:\\[^\s，。]+/)?.[0];
+  if (windowsPath) return windowsPath;
+  const filePath = message.match(/(?:[\w.-]+\/)+[\w.-]+\.[A-Za-z0-9]+|[\w.-]+\.(?:ts|tsx|js|jsx|py|json|md|html|css|yaml|yml|dart|rs|go|java|cpp|c|h)/i)?.[0];
+  return filePath ?? null;
+}
+
+function createTaskLoopPlan(
+  mode: NonNullable<WorkingMemorySnapshot["taskLoop"]>["mode"],
+): NonNullable<WorkingMemorySnapshot["taskLoop"]>["plan"] {
+  if (mode === "web") {
+    return [
+      { id: "collect_evidence", title: "定位网页来源", status: "active" },
+      { id: "analyze_evidence", title: "提取正文证据", status: "pending" },
+      { id: "answer", title: "基于网页证据回答", status: "pending" },
+    ];
+  }
+
+  if (mode === "edit" || mode === "validation") {
+    return [
+      { id: "collect_evidence", title: "确认目标和诊断", status: "active" },
+      { id: "apply_change", title: "执行一次聚焦修改", status: "pending" },
+      { id: "verify", title: "验证修改结果", status: "pending" },
+      { id: "answer", title: "总结结果和风险", status: "pending" },
+    ];
+  }
+
+  if (mode === "workspace") {
+    return [
+      { id: "collect_evidence", title: "查看项目结构", status: "active" },
+      { id: "analyze_evidence", title: "读取关键文件", status: "pending" },
+      { id: "answer", title: "基于已检查内容说明", status: "pending" },
+    ];
+  }
+
+  return [
+    { id: "collect_evidence", title: "理解当前请求", status: "active" },
+    { id: "answer", title: "直接回复", status: "pending" },
+  ];
+}
+
+function createTaskLoopTasks(
+  mode: NonNullable<WorkingMemorySnapshot["taskLoop"]>["mode"],
+): NonNullable<WorkingMemorySnapshot["taskLoop"]>["tasks"] {
+  if (mode === "web") {
+    return [
+      taskLoopTask("collect_evidence", "定位网页来源", ["source_located"], ["web_fetch", "web_search"], "active"),
+      taskLoopTask("analyze_evidence", "提取可读正文或候选内容", ["body_evidence"], ["web_fetch"], "pending", ["collect_evidence"]),
+      taskLoopTask("answer", "基于搜索或抓取证据回答", ["final_feedback"], [], "pending", ["analyze_evidence"]),
+    ];
+  }
+
+  if (mode === "edit" || mode === "validation") {
+    return [
+      taskLoopTask("collect_evidence", "检查目标文件或失败诊断", ["target_evidence"], ["read_text_file", "search_workspace", "collect_diagnostics"], "active"),
+      taskLoopTask("apply_change", "执行一次聚焦的工作区修改", ["workspace_mutated"], ["patch_text_file", "write_text_file"], "pending", ["collect_evidence"]),
+      taskLoopTask("verify", "验证修改后的工作区", ["validation_passed"], ["run_validation"], "pending", ["apply_change"]),
+      taskLoopTask("answer", "汇报修改内容和验证结果", ["final_feedback"], [], "pending", ["verify"]),
+    ];
+  }
+
+  if (mode === "workspace") {
+    return [
+      taskLoopTask("collect_evidence", "检查项目结构和相关路径", ["structure_evidence"], ["inspect_project", "list_directory", "search_workspace"], "active"),
+      taskLoopTask("analyze_evidence", "读取关键文件或生成代码地图", ["key_file_evidence"], ["read_text_file", "code_map"], "pending", ["collect_evidence"]),
+      taskLoopTask("answer", "基于已检查证据说明结论", ["final_feedback"], [], "pending", ["analyze_evidence"]),
+    ];
+  }
+
+  return [
+    taskLoopTask("collect_evidence", "理解当前请求", ["request_understood"], [], "active"),
+    taskLoopTask("answer", "直接回复用户", ["final_feedback"], [], "pending", ["collect_evidence"]),
+  ];
+}
+
+function taskLoopTask(
+  id: string,
+  title: string,
+  criteriaIds: string[],
+  toolHints: string[],
+  status: TaskLoopPlanStatus = "pending",
+  dependsOn: string[] = [],
+): NonNullable<NonNullable<WorkingMemorySnapshot["taskLoop"]>["tasks"]>[number] {
+  return {
+    id,
+    title,
+    status,
+    ...(dependsOn.length > 0 ? { dependsOn } : {}),
+    criteria: criteriaIds.map((criterionId) => ({
+      id: criterionId,
+      description: describeTaskCriterion(criterionId),
+      status: "pending" as TaskLoopCriterionStatus,
+    })),
+    ...(toolHints.length > 0 ? { toolHints } : {}),
+    attempts: 0,
+  };
+}
+
+function describeTaskCriterion(id: string): string {
+  const descriptions: Record<string, string> = {
+    source_located: "已定位用户请求的 URL 或搜索结果。",
+    body_evidence: "已拿到可读正文、文章候选内容或有用的 HTML 预览。",
+    target_evidence: "编辑前已检查目标文件、诊断信息或附近代码。",
+    workspace_mutated: "工作区修改已成功执行。",
+    validation_passed: "相关验证或检查已成功通过。",
+    structure_evidence: "已观察项目结构或相关工作区路径。",
+    key_file_evidence: "已收集关键文件或代码地图证据。",
+    request_understood: "已理解用户当前请求。",
+    final_feedback: "已产出面向用户的最终反馈。",
+  };
+  return descriptions[id] ?? id;
 }
 
 function observationCategory(result: ActionResult): ActionResultCategory {
@@ -87,6 +276,461 @@ function observationSummary(result: ActionResult): string {
   return (JSON.stringify(result.output) ?? "").slice(0, 500);
 }
 
+function updateTaskLoop(
+  previous: WorkingMemorySnapshot,
+  result: ActionResult,
+  toolName: string | undefined,
+  step: number,
+): WorkingMemorySnapshot["taskLoop"] | undefined {
+  const current = previous.taskLoop;
+  if (!current) return undefined;
+
+  const evidence = inferTaskLoopEvidence(result, toolName);
+  const evidenceLogEntry = inferTaskLoopEvidenceLogEntry(result, toolName, step);
+  const isFinalAction = result.action.kind === "respond" || result.action.kind === "finish" || result.action.kind === "fail";
+  const evidenceCount = evidence && result.ok ? current.evidenceCount + 1 : current.evidenceCount;
+  const completionGateCount = toolName === "completion_check"
+    ? current.completionGateCount + 1
+    : current.completionGateCount;
+  const nextMode = inferTaskLoopModeFromResult(current.mode, result, toolName);
+  const basePlan = nextMode === current.mode
+    ? current.plan ?? createTaskLoopPlan(nextMode)
+    : createTaskLoopPlan(nextMode);
+  const nextPlan = updateTaskLoopPlan(basePlan, result, toolName);
+  const baseTasks = nextMode === current.mode
+    ? current.tasks ?? createTaskLoopTasks(nextMode)
+    : createTaskLoopTasks(nextMode);
+  const nextTasks = updateTaskLoopTasks(baseTasks, result, toolName);
+  const evidenceLog = appendTaskLoopEvidenceLog(current.evidenceLog, evidenceLogEntry);
+  const selfCheck = buildTaskLoopSelfCheck(nextMode, nextTasks, result, evidenceLog, step);
+
+  return {
+    ...current,
+    mode: nextMode,
+    evidenceCount,
+    completionGateCount,
+    plan: nextPlan,
+    currentStep: inferCurrentTaskLoopStep(nextPlan),
+    tasks: nextTasks,
+    currentTaskId: inferCurrentTaskLoopTask(nextTasks),
+    evidenceLog,
+    selfCheck,
+    ...(evidence?.kind ? { lastEvidenceKind: evidence.kind } : {}),
+    ...(evidence?.tool ? { lastEvidenceTool: evidence.tool } : {}),
+    ...(evidence?.target ? { lastEvidenceTarget: evidence.target } : {}),
+    ...(evidence?.summary ? { lastProgressSummary: evidence.summary } : {}),
+    needsFinalAnswer: isFinalAction ? false : selfCheck.status === "passed",
+  };
+}
+
+type TaskLoopTask = NonNullable<NonNullable<WorkingMemorySnapshot["taskLoop"]>["tasks"]>[number];
+
+function updateTaskLoopTasks(
+  tasks: TaskLoopTask[] | undefined,
+  result: ActionResult,
+  toolName: string | undefined,
+): TaskLoopTask[] | undefined {
+  if (!tasks) return tasks;
+  const activeTaskId = inferCurrentTaskLoopTask(tasks) ?? tasks.find((task) => task.status === "pending")?.id;
+  const activeTask = tasks.find((task) => task.id === activeTaskId);
+  const summary = observationSummary(result).slice(0, 420);
+
+  if (result.action.kind === "fail" || !result.ok || (toolName === "run_validation" && validationDidFail(result))) {
+    const blocked = tasks.map((task) => task.id === activeTaskId
+      ? markTaskBlocked(task, summary)
+      : task);
+    return activateNextTask(blocked);
+  }
+
+  const satisfiedCriteria = taskCriteriaSatisfiedByResult(result, toolName, activeTask);
+  if (satisfiedCriteria.length === 0) return activateNextTask(tasks);
+
+  const updated = tasks.map((task) => {
+    const criteria = task.criteria.map((criterion) => satisfiedCriteria.includes(criterion.id)
+      ? { ...criterion, status: "satisfied" as TaskLoopCriterionStatus, evidence: summary }
+      : criterion);
+    const touched = task.criteria.some((criterion) => satisfiedCriteria.includes(criterion.id));
+    if (!touched) return task;
+    const done = criteria.every((criterion) => criterion.status === "satisfied");
+    return {
+      ...task,
+      criteria,
+      attempts: task.attempts + 1,
+      lastSummary: summary,
+      status: done ? "done" as TaskLoopPlanStatus : task.status,
+    };
+  });
+  return activateNextTask(updated);
+}
+
+function markTaskBlocked(task: TaskLoopTask, summary: string): TaskLoopTask {
+  return {
+    ...task,
+    status: "blocked",
+    attempts: task.attempts + 1,
+    lastSummary: summary,
+    criteria: task.criteria.map((criterion) => criterion.status === "pending"
+      ? { ...criterion, status: "failed" as TaskLoopCriterionStatus, evidence: summary }
+      : criterion),
+  };
+}
+
+function taskCriteriaSatisfiedByResult(result: ActionResult, toolName: string | undefined, activeTask?: TaskLoopTask): string[] {
+  if (result.action.kind === "respond" || result.action.kind === "finish") return ["final_feedback"];
+  if (result.action.kind !== "tool_call" || !toolName) return [];
+  if (result.metadata?.workspaceMutation === true) return ["target_evidence", "workspace_mutated"];
+  if (toolName === "completion_check") return ["validation_passed"];
+  if (toolName === "run_validation" && !validationDidFail(result)) return ["validation_passed"];
+  if (toolName === "web_search") return ["source_located"];
+  if (toolName === "web_fetch") {
+    return hasTaskLoopWebBodyEvidence(result.output)
+      ? ["source_located", "body_evidence"]
+      : ["source_located"];
+  }
+  if (toolName === "read_text_file" || toolName === "code_map" || toolName === "dependency_graph" || toolName === "symbol_search") {
+    return ["structure_evidence", "target_evidence", "key_file_evidence"];
+  }
+  if (toolName === "list_directory" || toolName === "inspect_project" || toolName === "search_workspace") {
+    const satisfied = ["structure_evidence"];
+    if (activeTaskHasCriterion(activeTask, "target_evidence") && hasTaskLoopRecoveryTargetEvidence(result.output, toolName)) {
+      satisfied.push("target_evidence");
+    }
+    return satisfied;
+  }
+  return [];
+}
+
+function activeTaskHasCriterion(activeTask: TaskLoopTask | undefined, criterionId: string): boolean {
+  return activeTask?.criteria.some((criterion) => criterion.id === criterionId && criterion.status !== "satisfied") === true;
+}
+
+function hasTaskLoopRecoveryTargetEvidence(output: unknown, toolName: string): boolean {
+  if (!output || typeof output !== "object" || Array.isArray(output)) return false;
+  const record = output as Record<string, unknown>;
+  if (toolName === "search_workspace") {
+    return Array.isArray(record.results) && record.results.length > 0;
+  }
+  if (toolName === "list_directory" || toolName === "inspect_project") {
+    const entries = Array.isArray(record.entries)
+      ? record.entries
+      : Array.isArray(record.topLevelEntries)
+        ? record.topLevelEntries
+        : [];
+    return entries.length > 0;
+  }
+  return false;
+}
+
+function hasTaskLoopWebBodyEvidence(output: unknown): boolean {
+  if (isTaskLoopReadableArticleText(output, 160)) return true;
+  if (!output || typeof output !== "object") return false;
+  const record = output as Record<string, unknown>;
+  for (const key of ["text", "content", "markdown"]) {
+    const value = record[key];
+    if (isTaskLoopReadableArticleText(value, 160)) return true;
+  }
+  const candidates = record.articleCandidates;
+  if (Array.isArray(candidates)) {
+    return candidates.some((candidate) => {
+      if (!candidate || typeof candidate !== "object") return false;
+      const text = (candidate as Record<string, unknown>).text;
+      return isTaskLoopReadableArticleText(text, 160);
+    });
+  }
+  return false;
+}
+
+function isTaskLoopReadableArticleText(value: unknown, minLength: number): boolean {
+  if (typeof value !== "string") return false;
+  const text = value.trim();
+  if (text.length < minLength) return false;
+  const boilerplateHits = [
+    /下载.*客户端/,
+    /扫码|二维码|APP|广告|举报|评论|分享/,
+    /关注.*公众号/,
+    /copyright|版权所有|ICP备案/i,
+  ].filter((pattern) => pattern.test(text)).length;
+  const paragraphLike = text.split(/\n+/).filter((line) => line.trim().length >= 20).length;
+  return boilerplateHits < 2 || paragraphLike >= 2;
+}
+
+function activateNextTask(tasks: TaskLoopTask[]): TaskLoopTask[] {
+  const taskMap = new Map(tasks.map((task) => [task.id, task]));
+  if (tasks.some((task) => task.status === "active" || task.status === "blocked")) return tasks;
+  const next = tasks.find((task) => task.status === "pending" && taskDependenciesDone(task, taskMap));
+  if (!next) return tasks;
+  return tasks.map((task) => task.id === next.id ? { ...task, status: "active" as TaskLoopPlanStatus } : task);
+}
+
+function taskDependenciesDone(task: TaskLoopTask, taskMap: Map<string, TaskLoopTask>): boolean {
+  return (task.dependsOn ?? []).every((dependencyId) => taskMap.get(dependencyId)?.status === "done");
+}
+
+function inferCurrentTaskLoopTask(tasks: TaskLoopTask[] | undefined): string | undefined {
+  return tasks?.find((task) => task.status === "active" || task.status === "blocked")?.id
+    ?? tasks?.find((task) => task.id === "answer" && task.status === "done")?.id;
+}
+
+function updateTaskLoopPlan(
+  plan: NonNullable<WorkingMemorySnapshot["taskLoop"]>["plan"],
+  result: ActionResult,
+  toolName: string | undefined,
+): NonNullable<WorkingMemorySnapshot["taskLoop"]>["plan"] {
+  if (!plan) return plan;
+  if (result.action.kind === "fail") return setActivePlanStatus(plan, "blocked");
+  if (result.action.kind === "respond" || result.action.kind === "finish") return markPlanThrough(plan, "answer");
+  if (!result.ok) return setActivePlanStatus(plan, "blocked");
+
+  if (result.metadata?.workspaceMutation === true) return markPlanThrough(plan, "apply_change");
+  if (toolName === "run_validation" || toolName === "completion_check") return markPlanThrough(plan, "verify");
+  if (toolName === "web_fetch" || toolName === "read_text_file" || toolName === "code_map") return markPlanThrough(plan, "analyze_evidence");
+  if (toolName === "web_search" || toolName === "list_directory" || toolName === "inspect_project" || toolName === "search_workspace") {
+    return markPlanThrough(plan, "collect_evidence");
+  }
+
+  return plan;
+}
+
+function markPlanThrough(
+  plan: NonNullable<WorkingMemorySnapshot["taskLoop"]>["plan"],
+  completedId: string,
+): NonNullable<WorkingMemorySnapshot["taskLoop"]>["plan"] {
+  if (!plan) return plan;
+  const completedIndex = plan.findIndex((item) => item.id === completedId);
+  if (completedIndex < 0) return plan;
+  const nextIndex = plan.findIndex((item, index) => index > completedIndex && item.status !== "done");
+  return plan.map((item, index) => {
+    if (index <= completedIndex) return { ...item, status: "done" as TaskLoopPlanStatus };
+    if (index === nextIndex) return { ...item, status: "active" as TaskLoopPlanStatus };
+    return item.status === "done" ? item : { ...item, status: "pending" as TaskLoopPlanStatus };
+  });
+}
+
+function setActivePlanStatus(
+  plan: NonNullable<WorkingMemorySnapshot["taskLoop"]>["plan"],
+  status: TaskLoopPlanStatus,
+): NonNullable<WorkingMemorySnapshot["taskLoop"]>["plan"] {
+  return plan?.map((item) => item.status === "active" ? { ...item, status } : item);
+}
+
+function inferCurrentTaskLoopStep(plan: NonNullable<WorkingMemorySnapshot["taskLoop"]>["plan"]): string | undefined {
+  return plan?.find((item) => item.status === "active")?.id
+    ?? plan?.find((item) => item.id === "answer" && item.status === "done")?.id;
+}
+
+function inferTaskLoopMode(message: string): NonNullable<WorkingMemorySnapshot["taskLoop"]>["mode"] {
+  const text = message.toLowerCase();
+  if (/https?:\/\//.test(text) || /联网|搜索|网页|网址|url|github|release|最新|recent|latest|news/.test(text)) return "web";
+  if (/修|改|写|删|创建|生成|保存|提交|push|commit|build|打包|安装包|release/.test(text)) return "edit";
+  if (/验证|测试|运行|报错|error|fail|test|typecheck|lint/.test(text)) return "validation";
+  if (extractTaskAnchor(message)) return "workspace";
+  if (/项目|工程|目录|文件|代码|workspace|repo|仓库|path|路径/.test(text)) return "workspace";
+  return "chat";
+}
+
+function inferTaskLoopModeFromResult(
+  currentMode: NonNullable<WorkingMemorySnapshot["taskLoop"]>["mode"],
+  result: ActionResult,
+  toolName: string | undefined,
+): NonNullable<WorkingMemorySnapshot["taskLoop"]>["mode"] {
+  if (result.metadata?.workspaceMutation === true) return "edit";
+  if (toolName === "run_validation") return "validation";
+  if (toolName === "web_search" || toolName === "web_fetch") return "web";
+  if (toolName === "read_text_file" || toolName === "list_directory" || toolName === "inspect_project" || toolName === "search_workspace") {
+    if (currentMode === "edit" || currentMode === "validation") return currentMode;
+    return currentMode === "web" ? "web" : "workspace";
+  }
+  return currentMode;
+}
+
+function inferTaskLoopEvidence(
+  result: ActionResult,
+  toolName: string | undefined,
+): {
+  kind: NonNullable<WorkingMemorySnapshot["taskLoop"]>["lastEvidenceKind"];
+  tool: string;
+  target?: string;
+  summary?: string;
+} | null {
+  if (result.action.kind !== "tool_call" || !toolName) return null;
+  if (result.metadata?.category === "tool_error") return null;
+
+  const kind = inferTaskLoopEvidenceKind(toolName);
+  const target = inferTaskLoopTarget(result);
+  const summary = observationSummary(result).slice(0, 420);
+  return {
+    kind,
+    tool: toolName,
+    ...(target ? { target } : {}),
+    ...(summary ? { summary } : {}),
+  };
+}
+
+function inferTaskLoopEvidenceLogEntry(
+  result: ActionResult,
+  toolName: string | undefined,
+  step: number,
+): TaskLoopEvidenceLogEntry | null {
+  if (result.action.kind !== "tool_call" || !toolName) return null;
+  const kind = inferTaskLoopEvidenceKind(toolName);
+  const target = inferTaskLoopTarget(result);
+  const summary = observationSummary(result).replace(/\s+/g, " ").trim().slice(0, 520)
+    || (result.ok ? `${toolName} completed.` : `${toolName} failed.`);
+
+  return {
+    step,
+    toolName,
+    kind,
+    quality: inferTaskLoopEvidenceQuality(result, toolName),
+    ...(target ? { target } : {}),
+    summary,
+  };
+}
+
+function appendTaskLoopEvidenceLog(
+  current: TaskLoopEvidenceLogEntry[] | undefined,
+  entry: TaskLoopEvidenceLogEntry | null,
+): TaskLoopEvidenceLogEntry[] | undefined {
+  if (!entry) return current;
+  return [...(current ?? []), entry].slice(-MAX_TASK_LOOP_EVIDENCE_LOG);
+}
+
+function buildTaskLoopSelfCheck(
+  mode: NonNullable<WorkingMemorySnapshot["taskLoop"]>["mode"],
+  tasks: TaskLoopTask[] | undefined,
+  result: ActionResult,
+  evidenceLog: TaskLoopEvidenceLogEntry[] | undefined,
+  step: number,
+): TaskLoopSelfCheck {
+  const latestEvidence = evidenceLog?.[evidenceLog.length - 1];
+  const missingCriteria = collectMissingTaskLoopCriteria(tasks);
+  const failedCriteria = collectFailedTaskLoopCriteria(tasks);
+
+  if (!result.ok || result.action.kind === "fail" || (result.action.toolName === "run_validation" && validationDidFail(result))) {
+    return {
+      status: "needs_repair",
+      summary: `Latest action did not complete cleanly; recover before final feedback.`,
+      checkedAtStep: step,
+      ...(failedCriteria.length > 0 ? { missingCriteria: failedCriteria } : {}),
+      ...(latestEvidence?.quality ? { latestEvidenceQuality: latestEvidence.quality } : {}),
+    };
+  }
+
+  if (missingCriteria.length > 0) {
+    return {
+      status: "needs_evidence",
+      summary: `Task still needs evidence for: ${missingCriteria.join(", ")}.`,
+      checkedAtStep: step,
+      missingCriteria,
+      ...(latestEvidence?.quality ? { latestEvidenceQuality: latestEvidence.quality } : {}),
+    };
+  }
+
+  if (!hasStrongCompletionEvidenceForMode(mode, evidenceLog)) {
+    return {
+      status: "needs_evidence",
+      summary: `Checklist is complete, but the latest evidence is not strong enough for ${mode} final feedback.`,
+      checkedAtStep: step,
+      missingCriteria: ["strong_completion_evidence"],
+      ...(latestEvidence?.quality ? { latestEvidenceQuality: latestEvidence.quality } : {}),
+    };
+  }
+
+  return {
+    status: "passed",
+    summary: `Task checklist and evidence quality passed for ${mode} final feedback.`,
+    checkedAtStep: step,
+    ...(latestEvidence?.quality ? { latestEvidenceQuality: latestEvidence.quality } : {}),
+  };
+}
+
+function collectMissingTaskLoopCriteria(tasks: TaskLoopTask[] | undefined): string[] {
+  if (!tasks) return [];
+  return tasks
+    .filter((task) => task.id !== "answer")
+    .flatMap((task) => task.criteria)
+    .filter((criterion) => criterion.status !== "satisfied")
+    .map((criterion) => criterion.id);
+}
+
+function collectFailedTaskLoopCriteria(tasks: TaskLoopTask[] | undefined): string[] {
+  if (!tasks) return [];
+  return tasks
+    .flatMap((task) => task.criteria)
+    .filter((criterion) => criterion.status === "failed")
+    .map((criterion) => criterion.id);
+}
+
+function hasStrongCompletionEvidenceForMode(
+  mode: NonNullable<WorkingMemorySnapshot["taskLoop"]>["mode"],
+  evidenceLog: TaskLoopEvidenceLogEntry[] | undefined,
+): boolean {
+  const evidence = evidenceLog ?? [];
+  if (mode === "chat") return true;
+  if (mode === "web") return evidence.some((entry) => entry.kind === "web" && entry.toolName === "web_fetch" && entry.quality === "strong");
+  if (mode === "workspace") {
+    return evidence.some((entry) => (entry.kind === "file" || entry.kind === "code") && entry.quality === "strong");
+  }
+  if (mode === "edit" || mode === "validation") {
+    return evidence.some((entry) => (entry.toolName === "run_validation" || entry.toolName === "completion_check") && entry.quality === "strong");
+  }
+  return evidence.some((entry) => entry.quality === "strong");
+}
+
+function inferTaskLoopEvidenceQuality(
+  result: ActionResult,
+  toolName: string,
+): TaskLoopEvidenceLogEntry["quality"] {
+  if (!result.ok || result.metadata?.category === "tool_error") return "failed";
+  if (result.metadata?.workspaceMutation === true) return "strong";
+  if (toolName === "run_validation" || toolName === "completion_check") {
+    return validationDidFail(result) ? "failed" : "strong";
+  }
+  if (toolName === "web_fetch") return hasTaskLoopWebBodyEvidence(result.output) ? "strong" : "weak";
+  if (toolName === "web_search") return hasTaskLoopSearchResults(result.output) ? "strong" : "weak";
+  if (toolName === "read_text_file") return hasTaskLoopReadableFileContent(result.output) ? "strong" : "weak";
+  if (toolName === "code_map" || toolName === "dependency_graph" || toolName === "symbol_search") return "strong";
+  if (toolName === "list_directory" || toolName === "inspect_project" || toolName === "search_workspace") {
+    return hasTaskLoopRecoveryTargetEvidence(result.output, toolName) ? "strong" : "weak";
+  }
+  return "weak";
+}
+
+function hasTaskLoopSearchResults(output: unknown): boolean {
+  if (!output || typeof output !== "object" || Array.isArray(output)) return false;
+  const results = (output as { results?: unknown }).results;
+  return Array.isArray(results) && results.length > 0;
+}
+
+function hasTaskLoopReadableFileContent(output: unknown): boolean {
+  if (typeof output === "string") return output.trim().length > 0;
+  if (!output || typeof output !== "object" || Array.isArray(output)) return false;
+  const content = (output as { content?: unknown; text?: unknown }).content ?? (output as { text?: unknown }).text;
+  return typeof content === "string" && content.trim().length > 0;
+}
+
+function inferTaskLoopEvidenceKind(
+  toolName: string,
+): TaskLoopEvidenceLogEntry["kind"] {
+  if (toolName === "web_search" || toolName === "web_fetch") return "web";
+  if (toolName === "read_text_file") return "file";
+  if (toolName === "code_map" || toolName === "dependency_graph" || toolName === "symbol_search") return "code";
+  if (toolName === "run_validation" || toolName === "completion_check") return "validation";
+  if (toolName === "terminal_command") return "terminal";
+  if (toolName === "list_directory" || toolName === "inspect_project" || toolName === "search_workspace") return "workspace";
+  return "unknown";
+}
+
+function inferTaskLoopTarget(result: ActionResult): string | null {
+  const inputTarget = inferWorkspaceActionTarget(result.action);
+  if (inputTarget) return inputTarget;
+  const input = result.action.toolInput as Record<string, unknown> | null;
+  for (const key of ["url", "query", "cwd", "command"]) {
+    if (typeof input?.[key] === "string" && input[key].length > 0) return input[key] as string;
+  }
+  return inferOutputPath(result.output);
+}
+
 function updateWorkingMemory(
   previous: WorkingMemorySnapshot,
   step: number,
@@ -98,6 +742,7 @@ function updateWorkingMemory(
     && typeof toolName === "string";
   const validationFailure = inferValidationFailure(result);
   const repairAttempt = updateRepairAttempt(previous, result, validationFailure);
+  const taskLoop = updateTaskLoop(previous, result, toolName, step);
 
   return {
     step,
@@ -109,6 +754,7 @@ function updateWorkingMemory(
       category: observationCategory(result),
       summary: observationSummary(result),
     },
+    ...(taskLoop ? { taskLoop } : {}),
     ...(validationFailure
       ? { validationFailure }
       : result.metadata?.toolName === "run_validation"
@@ -1025,12 +1671,17 @@ export async function runLoop(
   maxSteps = 10,
   context?: LoopContext,
 ): Promise<LoopState> {
-  const seededHistory = [...input.history];
-  const seededSteps = input.workingMemory?.step ?? seededHistory.length;
+  const resetForNewTask = shouldStartFreshTaskLoop(input);
+  const seededHistory = resetForNewTask ? [] : [...input.history];
+  const workingMemory = createInitialWorkingMemory(
+    { ...input, history: seededHistory },
+    resetForNewTask,
+  );
+  const seededSteps = workingMemory.step ?? seededHistory.length;
   const state: LoopState = {
     steps: seededSteps,
     history: seededHistory,
-    workingMemory: createInitialWorkingMemory(input),
+    workingMemory,
     lastDecision: null,
     lastResult: seededHistory.length > 0 ? seededHistory[seededHistory.length - 1] ?? null : null,
     stopReason: null,
@@ -1038,6 +1689,7 @@ export async function runLoop(
     usage: context?.initialUsage ?? emptyRunTokenUsage(),
   };
   input = { ...input, history: state.history, workingMemory: state.workingMemory };
+  await emitTaskLoopProgress(context, state, "initialized", "Task loop initialized.");
 
   for (let i = seededSteps; i < maxSteps; i++) {
     throwIfAborted(context?.signal);
@@ -1045,6 +1697,7 @@ export async function runLoop(
 
     if (appendPendingSuccessfulValidationCompletionCheck(state, input.availableTools)) {
       input = { ...input, history: state.history, workingMemory: state.workingMemory };
+      await emitTaskLoopProgress(context, state, "advanced", "Inserted completion check after successful validation.");
       continue;
     }
 
@@ -1067,13 +1720,25 @@ export async function runLoop(
       state.history.push(duplicateResolution.result);
       state.workingMemory = updateWorkingMemory(state.workingMemory, state.steps, duplicateResolution.result);
       input = { ...input, history: state.history, workingMemory: state.workingMemory };
+      await emitTaskLoopProgress(context, state, "advanced", "Converted duplicate workspace mutation into a completion check.");
       continue;
     }
 
-    const decision = resolveRepeatedReadOnlyNoProgress(
+    const taskLoopGatedDecision = resolvePrematureTaskLoopFinalAnswer(
       duplicateResolution.decision,
+      input,
+      state.lastResult,
+    );
+    const readyGatedDecision = resolveUnnecessaryToolAfterTaskLoopReady(
+      taskLoopGatedDecision,
+      input,
+      state.lastResult,
+    );
+    const decision = resolveRepeatedReadOnlyNoProgress(
+      readyGatedDecision,
       state.history,
       input.availableTools,
+      latestUserMessage(input),
     );
     const approved = await deps.policy.check(decision);
     state.lastDecision = approved;
@@ -1084,24 +1749,88 @@ export async function runLoop(
     state.lastResult = result;
     state.history.push(result);
     state.workingMemory = updateWorkingMemory(state.workingMemory, state.steps, result);
+    await emitTaskLoopProgress(context, state, "advanced", summarizeTaskLoopProgress(state, result));
 
     const action = await deps.evaluator.evaluate(approved, result, state.history);
     if (action.kind === "stop") {
       state.stopReason = action.reason;
       state.stopSummary = action.summary ?? null;
+      await emitTaskLoopProgress(context, state, "finalized", state.stopSummary ?? `Run stopped with ${action.reason}.`);
       break;
     }
 
     input = { ...input, history: state.history, workingMemory: state.workingMemory };
   }
 
-  appendPendingSuccessfulValidationCompletionCheck(state, input.availableTools);
+  if (appendPendingSuccessfulValidationCompletionCheck(state, input.availableTools)) {
+    await emitTaskLoopProgress(context, state, "advanced", "Inserted final completion check after successful validation.");
+  }
   finalizeDanglingCompletionCheck(state);
+  if (state.stopSummary && state.lastResult?.metadata?.syntheticFinalFeedback === true) {
+    await emitTaskLoopProgress(context, state, "finalized", state.stopSummary);
+  }
   if (!state.stopReason && state.steps >= maxSteps) {
     state.stopReason = "step_limit";
-    state.stopSummary = `已到达本轮 ${maxSteps} 步安全预算，还没有形成最终反馈。为避免工具循环或长任务空转，运行已暂停；可以继续工作，Agent 会结合最近运行摘要、工具结果和当前工作区状态接着推进。`;
+    state.stopSummary = buildStepLimitStopSummary(state, maxSteps);
+    await emitTaskLoopProgress(context, state, "checkpoint", state.stopSummary);
   }
   return state;
+}
+
+function buildStepLimitStopSummary(state: LoopState, maxSteps: number): string {
+  const taskLoop = state.workingMemory.taskLoop;
+  const currentTask = taskLoop?.tasks?.find((task) => task.id === taskLoop.currentTaskId)
+    ?? taskLoop?.tasks?.find((task) => task.status === "active" || task.status === "blocked");
+  const currentCriterion = currentTask?.criteria.find((criterion) => criterion.status === "pending" || criterion.status === "failed");
+  const latestTool = state.lastResult?.metadata?.toolName ?? state.lastResult?.action.toolName;
+  const latestEvidence = taskLoop?.evidenceLog?.[taskLoop.evidenceLog.length - 1];
+  const parts = [
+    `已到达本轮 ${maxSteps} 步安全预算，还没有形成最终反馈。`,
+    currentTask?.title ? `当前正在：${currentTask.title}。` : null,
+    currentCriterion?.description ? `待完成条件：${currentCriterion.description}` : null,
+    latestTool ? `最近工具：${latestTool}。` : null,
+    latestEvidence ? `最近证据：${latestEvidence.quality}/${latestEvidence.kind}${latestEvidence.target ? `，目标 ${latestEvidence.target}` : ""}。` : null,
+    "为避免工具循环或长任务空转，运行已暂停；继续工作后会从当前检查点接着推进，不会从头开始。",
+  ];
+  return parts.filter(Boolean).join("");
+}
+
+async function emitTaskLoopProgress(
+  context: LoopContext | undefined,
+  state: LoopState,
+  phase: "initialized" | "advanced" | "checkpoint" | "finalized",
+  summary: string,
+): Promise<void> {
+  await context?.onTaskLoop?.(state.workingMemory, {
+    step: state.steps,
+    phase,
+    summary,
+    ...(state.lastResult ? { result: state.lastResult } : {}),
+  });
+}
+
+function summarizeTaskLoopProgress(state: LoopState, result: ActionResult): string {
+  const toolName = result.metadata?.toolName ?? result.action.toolName;
+  const taskLoop = state.workingMemory.taskLoop;
+  const currentTask = taskLoop?.tasks?.find((task) => task.id === taskLoop.currentTaskId);
+  const currentCriterion = currentTask?.criteria.find((criterion) => criterion.status === "pending" || criterion.status === "failed");
+  if (result.action.kind === "respond" || result.action.kind === "finish") {
+    return "已形成最终反馈。";
+  }
+  if (result.action.kind === "fail") {
+    return result.error ?? "Run failed.";
+  }
+  if (!toolName) return observationSummary(result);
+  const summary = observationSummary(result).replace(/\s+/g, " ").trim();
+  const latestEvidence = taskLoop?.evidenceLog?.[taskLoop.evidenceLog.length - 1];
+  return [
+    `已完成工具：${toolName}`,
+    latestEvidence ? `证据：${latestEvidence.quality}/${latestEvidence.kind}` : null,
+    latestEvidence?.target ? `目标：${latestEvidence.target}` : null,
+    currentTask?.title ? `当前任务：${currentTask.title}` : null,
+    currentCriterion?.description ? `待满足：${currentCriterion.description}` : null,
+    summary,
+  ].filter(Boolean).join("；").slice(0, 260);
 }
 
 function appendPendingSuccessfulValidationCompletionCheck(
@@ -1157,10 +1886,130 @@ type DuplicateWorkspaceMutationResolution =
   | { kind: "decision"; decision: BrainDecision }
   | { kind: "observation"; decision: BrainDecision; result: ActionResult };
 
+function resolvePrematureTaskLoopFinalAnswer(
+  decision: BrainDecision,
+  input: BrainInput,
+  lastResult: ActionResult | null,
+): BrainDecision {
+  if (decision.action.kind !== "respond" && decision.action.kind !== "finish" && decision.action.kind !== "fail") {
+    return decision;
+  }
+
+  const taskLoop = input.workingMemory?.taskLoop;
+  const tasks = taskLoop?.tasks;
+  if (!Array.isArray(tasks) || tasks.length === 0) return decision;
+
+  const activeTask = tasks.find((task) => task.id === taskLoop?.currentTaskId)
+    ?? tasks.find((task) => task.status === "active" || task.status === "blocked")
+    ?? null;
+  if (!activeTask || activeTask.id === "answer") return decision;
+  if (!activeTask.criteria.some((criterion) => criterion.status === "pending" || criterion.status === "failed")) {
+    return decision;
+  }
+
+  const judgment = judgeTaskCompletion(input, lastResult, latestUserMessage(input));
+  if (judgment.status === "ready" || !judgment.recommendedToolName) return decision;
+  if (!hasTool(input.availableTools, judgment.recommendedToolName)) return decision;
+
+  return {
+    action: {
+      kind: "tool_call",
+      toolName: judgment.recommendedToolName,
+      toolInput: judgment.recommendedToolInput,
+    },
+    reasoning: [
+      decision.reasoning,
+      `Task-loop final-answer gate: ${judgment.reason}`,
+    ].filter(Boolean).join(" "),
+  };
+}
+
+function resolveUnnecessaryToolAfterTaskLoopReady(
+  decision: BrainDecision,
+  input: BrainInput,
+  lastResult: ActionResult | null,
+): BrainDecision {
+  if (decision.action.kind !== "tool_call") return decision;
+  if (!isTaskLoopReadyForFinalFeedback(input.workingMemory, input.history, lastResult)) return decision;
+  if (!lastResult?.ok) return decision;
+
+  const feedback = buildTaskLoopReadyFeedback(input, lastResult, decision.action.toolName ?? "tool");
+  if (!feedback) return decision;
+
+  return {
+    action: { kind: "respond", content: feedback },
+    reasoning: [
+      decision.reasoning,
+      "Task-loop final-answer gate: evidence checklist is ready, so returning final feedback instead of spending another tool call.",
+    ].filter(Boolean).join(" "),
+  };
+}
+
+function isTaskLoopReadyForFinalFeedback(
+  workingMemory: WorkingMemorySnapshot | undefined,
+  history: ActionResult[],
+  lastResult: ActionResult | null,
+): boolean {
+  const taskLoop = workingMemory?.taskLoop;
+  if (!taskLoop) return false;
+  if (taskLoop.needsFinalAnswer === true) return true;
+  const currentTask = taskLoop.tasks?.find((task) => task.id === taskLoop.currentTaskId);
+  if (currentTask?.id !== "answer") return false;
+  return hasFinalFeedbackEvidenceForTaskLoop(taskLoop.mode, history, lastResult);
+}
+
+function hasFinalFeedbackEvidenceForTaskLoop(
+  mode: NonNullable<WorkingMemorySnapshot["taskLoop"]>["mode"],
+  history: ActionResult[],
+  lastResult: ActionResult | null,
+): boolean {
+  const recent = [...history.slice(-12), ...(lastResult ? [lastResult] : [])];
+  if (mode === "chat") return true;
+  if (mode === "web") {
+    return recent.some((result) => {
+      if (!result.ok || result.action.kind !== "tool_call") return false;
+      const toolName = result.metadata?.toolName ?? result.action.toolName;
+      return toolName === "web_fetch" && hasTaskLoopWebBodyEvidence(result.output);
+    });
+  }
+  if (mode === "edit" || mode === "validation") {
+    return recent.some((result) => {
+      if (!result.ok || result.action.kind !== "tool_call") return false;
+      const toolName = result.metadata?.toolName ?? result.action.toolName;
+      return toolName === "completion_check" || toolName === "run_validation";
+    });
+  }
+  return recent.some((result) => {
+    if (!result.ok || result.action.kind !== "tool_call") return false;
+    const toolName = result.metadata?.toolName ?? result.action.toolName;
+    return toolName === "read_text_file" || toolName === "completion_check";
+  });
+}
+
+function buildTaskLoopReadyFeedback(
+  input: BrainInput,
+  lastResult: ActionResult,
+  proposedToolName: string,
+): string | null {
+  const completionPayload = parseCompletionCheckPayload(lastResult);
+  if (completionPayload) return buildCompletionCheckFeedback(completionPayload);
+
+  const summary = summarizeReadOnlyObservation(lastResult, latestUserMessage(input));
+  if (summary) return summary;
+
+  const observation = observationSummary(lastResult).trim();
+  if (!observation) return null;
+  return [
+    `当前任务循环已经满足最终反馈条件，因此没有继续调用 ${proposedToolName}。`,
+    observation,
+  ].join("\n\n");
+}
+
 function resolveRepeatedReadOnlyNoProgress(
   decision: BrainDecision,
   history: ActionResult[],
   availableTools: BrainInput["availableTools"],
+  message: string,
 ): BrainDecision {
   if (decision.action.kind !== "tool_call" || !decision.action.toolName) return decision;
   if (!isRepeatProtectedReadOnlyAction(decision.action, availableTools)) return decision;
@@ -1172,8 +2021,18 @@ function resolveRepeatedReadOnlyNoProgress(
     .some((result) => result.ok === true && toolActionSignature(result.action) === signature);
   if (!priorSame) return decision;
 
-  const recovery = inferReadOnlyRecoveryDecision(history, availableTools);
-  if (!recovery) return decision;
+  const recovery = inferReadOnlyRecoveryDecision(history, availableTools, decision.action.toolName, message);
+  if (!recovery) {
+    const feedback = buildReadOnlyCompletionFeedback(history, message, decision.action.toolName);
+    if (!feedback) return decision;
+    return {
+      action: { kind: "respond", content: feedback },
+      reasoning: [
+        decision.reasoning,
+        `Repeated read-only tool call ${decision.action.toolName} would not add new evidence; summarizing collected evidence instead of looping.`,
+      ].filter(Boolean).join(" "),
+    };
+  }
 
   return {
     ...recovery,
@@ -1603,7 +2462,26 @@ function findDuplicateSuccessfulWorkspaceMutation(
 function inferReadOnlyRecoveryDecision(
   history: ActionResult[],
   availableTools: BrainInput["availableTools"],
+  repeatedToolName: string,
+  message: string,
 ): BrainDecision | null {
+  if (repeatedToolName === "web_search" && hasTool(availableTools, "web_fetch")) {
+    const url = inferLatestUnfetchedSearchResultUrl(history);
+    if (url) {
+      return {
+        action: { kind: "tool_call", toolName: "web_fetch", toolInput: { url } },
+        reasoning: `Recovery: web_search already produced candidates; fetching ${url} instead of repeating the same search.`,
+      };
+    }
+  }
+
+  if (repeatedToolName === "web_fetch" && hasTool(availableTools, "web_search")) {
+    return {
+      action: { kind: "tool_call", toolName: "web_search", toolInput: { query: buildRecoveryWebSearchQuery(message, history), limit: 5 } },
+      reasoning: "Recovery: repeated web_fetch did not add new article evidence; searching for an alternate accessible source.",
+    };
+  }
+
   if (hasTool(availableTools, "read_text_file")) {
     const keyPath = inferNextKeyReadPath(history);
     if (keyPath) {
@@ -1629,6 +2507,158 @@ function inferReadOnlyRecoveryDecision(
   }
 
   return null;
+}
+
+function inferLatestUnfetchedSearchResultUrl(history: ActionResult[]): string | null {
+  for (let index = history.length - 1; index >= 0; index--) {
+    const result = history[index];
+    if (!result?.ok || result.action.kind !== "tool_call") continue;
+    if ((result.metadata?.toolName ?? result.action.toolName) !== "web_search") continue;
+    const url = inferFirstWebSearchResultUrl(result.output);
+    if (url && !hasFetchedWebUrl(history, url)) return url;
+  }
+  return null;
+}
+
+function inferFirstWebSearchResultUrl(output: unknown): string | null {
+  if (!output || typeof output !== "object" || Array.isArray(output)) return null;
+  const results = (output as { results?: unknown }).results;
+  if (!Array.isArray(results)) return null;
+  for (const item of results) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const url = (item as { url?: unknown }).url;
+    if (typeof url === "string" && /^https?:\/\//i.test(url)) return url;
+  }
+  return null;
+}
+
+function hasFetchedWebUrl(history: ActionResult[], url: string): boolean {
+  return history.some((result) => {
+    if (result.action.kind !== "tool_call") return false;
+    if ((result.metadata?.toolName ?? result.action.toolName) !== "web_fetch") return false;
+    const input = result.action.toolInput as { url?: unknown } | null;
+    const output = result.output as { url?: unknown; finalUrl?: unknown } | null;
+    return input?.url === url || output?.url === url || output?.finalUrl === url;
+  });
+}
+
+function buildRecoveryWebSearchQuery(message: string, history: ActionResult[]): string {
+  const latestSearch = [...history].reverse().find((result) => {
+    return result.action.kind === "tool_call" && (result.metadata?.toolName ?? result.action.toolName) === "web_search";
+  });
+  const outputQuery = latestSearch?.output && typeof latestSearch.output === "object" && !Array.isArray(latestSearch.output)
+    ? (latestSearch.output as { query?: unknown }).query
+    : undefined;
+  const inputQuery = latestSearch?.action.kind === "tool_call" && latestSearch.action.toolInput && typeof latestSearch.action.toolInput === "object"
+    ? (latestSearch.action.toolInput as { query?: unknown }).query
+    : undefined;
+  const query = typeof outputQuery === "string" && outputQuery.trim()
+    ? outputQuery
+    : typeof inputQuery === "string" && inputQuery.trim()
+      ? inputQuery
+      : message;
+  return query
+    .replace(/https?:\/\/[^\s"'<>，。！？、]+/gi, " ")
+    .replace(/联网搜索|网页搜索|搜索|搜一下|查一下|看一下|帮我|能不能|可以|吗/g, " ")
+    .replace(/\s+/g, " ")
+    .trim() || "网页正文 候选来源";
+}
+
+function buildReadOnlyCompletionFeedback(
+  history: ActionResult[],
+  message: string,
+  repeatedToolName: string,
+): string | null {
+  const latest = findLatestSuccessfulReadOnlyObservation(history);
+  if (!latest) return null;
+
+  const latestToolName = latest.metadata?.toolName ?? latest.action.toolName ?? repeatedToolName;
+  const summary = summarizeReadOnlyObservation(latest, message);
+  if (!summary) return null;
+
+  return [
+    `已停止重复调用 ${repeatedToolName}，因为继续执行同一个只读动作不会增加新信息。`,
+    `我先根据目前拿到的 ${latestToolName} 结果给你反馈：`,
+    summary,
+  ].join("\n\n");
+}
+
+function findLatestSuccessfulReadOnlyObservation(history: ActionResult[]): ActionResult | null {
+  for (let index = history.length - 1; index >= 0; index--) {
+    const result = history[index];
+    if (!result?.ok || result.action.kind !== "tool_call") continue;
+    if (result.metadata?.workspaceMutation === true) continue;
+    const toolName = result.metadata?.toolName ?? result.action.toolName;
+    if (!toolName || toolName === "run_validation" || toolName === "completion_check") continue;
+    return result;
+  }
+  return null;
+}
+
+function summarizeReadOnlyObservation(result: ActionResult, message: string): string | null {
+  const toolName = result.metadata?.toolName ?? result.action.toolName;
+  if (toolName === "read_text_file") {
+    const output = result.output as { path?: unknown; content?: unknown; truncated?: unknown } | null;
+    const path = typeof output?.path === "string" ? output.path : "目标文件";
+    const content = typeof output?.content === "string" ? output.content.trim() : "";
+    const preview = content ? content.slice(0, 900) : result.metadata?.summary ?? "";
+    const truncated = output?.truncated === true || content.length > 900 ? "\n\n内容较长，这里先给出已读取内容的前半部分。" : "";
+    return `已读取 ${path}。${truncated}\n\n${preview}`;
+  }
+
+  if (toolName === "web_fetch") {
+    const output = result.output as {
+      url?: unknown;
+      title?: unknown;
+      text?: unknown;
+      content?: unknown;
+      htmlPreview?: unknown;
+      articleCandidates?: Array<{ text?: unknown; source?: unknown; score?: unknown }>;
+      truncated?: unknown;
+      htmlPreviewTruncated?: unknown;
+    } | null;
+    const title = typeof output?.title === "string" && output.title.trim() ? output.title.trim() : "网页";
+    const url = typeof output?.url === "string" ? output.url : "";
+    const bestCandidate = Array.isArray(output?.articleCandidates)
+      ? output.articleCandidates
+        .map((candidate) => typeof candidate.text === "string" ? candidate.text.trim() : "")
+        .find((text) => text.length > 0)
+      : "";
+    const content = [
+      bestCandidate ?? "",
+      typeof output?.text === "string" ? output.text.trim() : "",
+      typeof output?.content === "string" ? output.content.trim() : "",
+      typeof output?.htmlPreview === "string" ? output.htmlPreview.trim() : "",
+    ].find((value) => value.length > 0) ?? "";
+    const preview = content.slice(0, 1200);
+    const truncated = output?.truncated === true || output?.htmlPreviewTruncated === true || content.length > 1200
+      ? "\n\n网页内容较长，我先整理前半部分；如果你要完整正文，可以继续让我拉取/归纳剩余部分。"
+      : "";
+    return `已抓取 ${title}${url ? `：${url}` : ""}。\n\n${preview || "页面返回了内容，但没有提取到稳定正文。可以换一个链接，或让我继续尝试从 HTML 候选块里筛正文。"}${truncated}`;
+  }
+
+  if (toolName === "web_search") {
+    const output = result.output as { query?: unknown; provider?: unknown; results?: Array<{ title?: unknown; url?: unknown; snippet?: unknown }> } | null;
+    const query = typeof output?.query === "string" ? output.query : message.trim();
+    const provider = typeof output?.provider === "string" ? `（${output.provider}）` : "";
+    const results = Array.isArray(output?.results) ? output.results : [];
+    if (results.length === 0) return `已联网搜索${provider}「${query}」，但没有拿到可用结果。`;
+    const lines = results.slice(0, 5).map((item, index) => {
+      const title = typeof item.title === "string" && item.title.trim() ? item.title.trim() : "未命名结果";
+      const url = typeof item.url === "string" && item.url.trim() ? item.url.trim() : "";
+      const snippet = typeof item.snippet === "string" && item.snippet.trim() ? `\n   ${item.snippet.trim()}` : "";
+      return `${index + 1}. ${title}${url ? `\n   ${url}` : ""}${snippet}`;
+    });
+    return `已联网搜索${provider}「${query}」，结果如下：\n${lines.join("\n")}`;
+  }
+
+  if (toolName === "inspect_project" || toolName === "code_map" || toolName === "list_directory" || toolName === "search_workspace") {
+    return result.metadata?.summary
+      ? `已完成 ${toolName}：${result.metadata.summary}`
+      : `已完成 ${toolName}，但结果较结构化，请补充你要看的具体文件或目标，我会接着分析。`;
+  }
+
+  return result.metadata?.summary ?? null;
 }
 
 function toolActionSignature(action: BrainDecision["action"]): string | null {
@@ -1679,6 +2709,12 @@ function isRepeatProtectedWorkspaceAction(
 
 function hasTool(availableTools: BrainInput["availableTools"], name: string): boolean {
   return availableTools.some((tool) => tool.name === name);
+}
+
+function latestUserMessage(input: BrainInput): string {
+  return [...input.context.volatile].reverse().find((item) => item.kind === "user_turn")?.content
+    ?? input.context.volatile.find((item) => item.kind === "user_turn")?.content
+    ?? "";
 }
 
 function hasRecentTool(history: ActionResult[], toolName: string): boolean {

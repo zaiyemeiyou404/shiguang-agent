@@ -18,6 +18,8 @@ test("provider messages include grounding policy from the shared system prompt",
   const systemMessage = messages.find((message) => message.role === "system")?.content ?? "";
 
   assert.match(systemMessage, /Conversation grounding policy/);
+  assert.match(systemMessage, /Task loop policy/);
+  assert.match(systemMessage, /Observe -> Decide -> Act -> Verify -> Answer/);
   assert.match(systemMessage, /The latest user message is authoritative/);
   assert.match(systemMessage, /Do not claim the user explicitly requested a file\/path/);
   assert.equal(messages.at(-1)?.content, "分析这个文件");

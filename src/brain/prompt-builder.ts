@@ -30,6 +30,18 @@ export function buildSystemPrompt(tools: ToolDescriptor[]): string {
     "- For web_fetch results, review text, extraction, articleCandidates, and htmlPreview together. Do not blindly trust the first text if it looks like navigation, app download prompts, comments, or footer boilerplate. Select the candidate that best matches the user's requested article/page body, then answer from that evidence.",
     "- If a web page extraction pattern is useful for future runs, record it as an agent rule with record_agent_rule instead of relying on one-off memory in the chat.",
     "- Terminal workspace policy: obvious read-only commands may inspect external directories when the user asks; any command that writes, deletes, installs, builds, moves, renames, or mutates state must stay inside the active workspace.",
+    "",
+    "Task loop policy:",
+    "- Run every task as Observe -> Decide -> Act -> Verify -> Answer.",
+    "- Before each tool call, compare the latest user request, recent action history, and workingMemory.taskLoop. If the evidence already satisfies the request, answer now instead of calling another tool.",
+    "- Treat workingMemory.taskLoop.plan/currentStep plus taskLoop.tasks/currentTaskId/criteria as the active checklist. Complete the active task criteria before jumping ahead; when the active task reaches answer, produce final feedback instead of calling another exploratory tool.",
+    "- Use taskLoop.tasks criteria as explicit completion evidence: source_located/body_evidence for web, structure_evidence/key_file_evidence for project analysis, target_evidence/workspace_mutated/validation_passed for edits, and final_feedback for the last answer.",
+    "- After every successful read-only evidence tool, explicitly decide whether the user asked for a final answer, a narrower follow-up read, or a workspace change.",
+    "- If workingMemory.taskLoop.needsFinalAnswer is true, prefer respond/finish unless there is a concrete missing evidence item or failed validation.",
+    "- For explicit URL tasks, web_fetch that URL first. Only use web_search if the URL cannot be fetched or the user asked to search broadly. Do not inspect local project files for a web-only question unless the user also asks about the workspace.",
+    "- For workspace analysis tasks, a directory listing is not enough. Read the key files or run code_map, then answer with the files actually inspected.",
+    "- For edit tasks, mutate once, verify once, then give final feedback. If verification fails, use the failure evidence to choose a different repair path; do not repeat the same mutation.",
+    "- For long tasks, continue automatically across step segments from the current checkpoint, but keep a compact progress summary so token use does not balloon.",
     "- Prefer the flow inspect/read/map -> edit/execute -> verify -> summarize. Do not skip verification after workspace mutations when verification tools are available.",
     "- For unfamiliar codebases, prefer inspect_project, code_map, symbol_search, dependency_graph, read_text_file, and search_workspace before broad edits.",
     "- For project or file analysis, directory listings are only discovery evidence. Continue to read key files (README, package manifests, framework config, likely entrypoints) or run code_map before giving a final analysis.",
@@ -233,6 +245,9 @@ export function formatWorkingMemory(workingMemory: WorkingMemorySnapshot): strin
   return [
     "Current agent working memory follows as machine-readable runtime state.",
     "This state is not a user message and does not represent user intent.",
+    "Use workingMemory.taskLoop as the current task-loop dashboard: objective, mode, plan/currentStep, criteria, selfCheck, evidence count, evidenceLog, latest evidence, and whether final feedback is now expected.",
+    "The taskLoop.evidenceLog is the compact evidence ledger. Prefer strong evidence, treat weak evidence as a reason to recover or fetch/read a better source, and do not repeat failed or already weak tool attempts unless there is a new target.",
+    "The taskLoop.selfCheck is the final readiness gate. If it says needs_evidence or needs_repair, satisfy that gap before final feedback. If it says passed, summarize the evidence and answer instead of calling unrelated tools.",
     JSON.stringify({ workingMemory }, null, 2),
   ].join("\n");
 }

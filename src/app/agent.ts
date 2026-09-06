@@ -6,7 +6,7 @@ import type { Turn } from "../core/types.js";
 import { RulePlanner, type Planner } from "../brain/planner.js";
 import { ToolMetadataPolicy, type Policy } from "../brain/policy.js";
 import { BasicEvaluator } from "../brain/evaluator.js";
-import type { ActionResult, BrainDecision, BrainInput } from "../brain/types.js";
+import type { ActionResult, BrainDecision, BrainInput, WorkingMemorySnapshot } from "../brain/types.js";
 import { applyActionResultToWorkingMemory, runLoop, type LoopState } from "../brain/loop.js";
 import { emptyRunTokenUsage, type LlmTokenUsage, type RunTokenUsage } from "../brain/usage.js";
 import {
@@ -29,7 +29,7 @@ import { randomUUID } from "node:crypto";
 
 const DEFAULT_RUN_STEP_BUDGET = 72;
 const APPROVAL_RESUME_STEP_BUDGET = 72;
-const MAX_AUTO_STEP_CONTINUATIONS = 1;
+const MAX_AUTO_STEP_CONTINUATIONS = 4;
 
 export interface AgentOptions {
   eventSink: EventSink;
@@ -262,6 +262,9 @@ export class Agent {
             runUsage = total;
             await this.emitModelUsageEvent(input.runId, usage, total);
           },
+          onTaskLoop: async (workingMemory, event) => {
+            await this.emitTaskLoopEvent(input.runId, workingMemory, event);
+          },
         },
       );
 
@@ -361,6 +364,55 @@ export class Agent {
       cumulativeTotalTokens: total.totalTokens,
       cumulativePromptEstimateTokens: total.promptEstimateTokens,
       message: formatUsageMessage(usage, total),
+    });
+  }
+
+  private async emitTaskLoopEvent(
+    runId: string,
+    workingMemory: WorkingMemorySnapshot,
+    event: {
+      step: number;
+      phase: "initialized" | "advanced" | "checkpoint" | "finalized";
+      summary: string;
+      result?: ActionResult;
+    },
+  ): Promise<void> {
+    if (!this.options.eventSink || !workingMemory.taskLoop) return;
+    const taskLoop = workingMemory.taskLoop;
+    const currentTask = taskLoop.tasks?.find((item) => item.id === taskLoop.currentTaskId);
+    const currentCriterion = currentTask?.criteria.find((item) => item.status === "pending" || item.status === "failed");
+    await this.options.eventSink.record(runId, "tool_pipeline", {
+      phase: "task_loop",
+      step: event.step,
+      status: event.phase,
+      objective: taskLoop.objective,
+      mode: taskLoop.mode,
+      currentStep: taskLoop.currentStep ?? null,
+      currentStepTitle: taskLoop.plan?.find((item) => item.id === taskLoop.currentStep)?.title ?? null,
+      plan: taskLoop.plan ?? [],
+      currentTaskId: taskLoop.currentTaskId ?? null,
+      currentTaskTitle: currentTask?.title ?? null,
+      currentCriterion: currentCriterion
+        ? {
+            id: currentCriterion.id,
+            description: currentCriterion.description,
+            status: currentCriterion.status,
+            evidence: currentCriterion.evidence ?? null,
+          }
+        : null,
+      tasks: taskLoop.tasks ?? [],
+      evidenceCount: taskLoop.evidenceCount,
+      completionGateCount: taskLoop.completionGateCount,
+      needsFinalAnswer: taskLoop.needsFinalAnswer === true,
+      latestEvidence: {
+        kind: taskLoop.lastEvidenceKind ?? null,
+        tool: taskLoop.lastEvidenceTool ?? null,
+        target: taskLoop.lastEvidenceTarget ?? null,
+        summary: taskLoop.lastProgressSummary ?? null,
+      },
+      summary: event.summary,
+      tool: event.result?.metadata?.toolName ?? event.result?.action.toolName ?? null,
+      ok: event.result?.ok ?? null,
     });
   }
 

@@ -521,6 +521,224 @@ test("LlmPlanner summarizes completed web search when the user only clicks conti
   assert.match(decision.action.content ?? "", /红色经典书籍推荐/);
 });
 
+test("LlmPlanner summarizes fetched article candidates before the model can drift to workspace tools", async () => {
+  const model = new RecordingModel({ kind: "tool_call", toolName: "read_text_file", toolInput: { path: "pubspec.yaml" } });
+  const planner = new LlmPlanner(model);
+  const availableTools: ToolDescriptor[] = [
+    {
+      name: "web_fetch",
+      description: "Fetches a public web page",
+      inputSchema: { type: "object" },
+      capability: "web.fetch",
+    },
+    {
+      name: "read_text_file",
+      description: "Reads a file",
+      inputSchema: { type: "object" },
+    },
+  ];
+
+  const decision = await planner.decide(makeInput([
+    {
+      action: { kind: "tool_call", toolName: "web_fetch", toolInput: { url: "https://example.test/story.html" } },
+      ok: true,
+      output: {
+        url: "https://example.test/story.html",
+        title: "Example Story",
+        text: "Primary article body from the requested URL.",
+        articleCandidates: [
+          { source: "article", score: 90, text: "Primary article body from the requested URL.", truncated: false },
+        ],
+        extraction: {
+          strategy: "article_candidate",
+          candidateCount: 1,
+          needsModelReview: true,
+        },
+      },
+      metadata: {
+        category: "tool_observation",
+        summary: "fetched web page",
+        retryable: false,
+        toolName: "web_fetch",
+      },
+    },
+  ], availableTools, "read https://example.test/story.html", {
+    step: 1,
+    phase: "summarize",
+    lastActionKind: "tool_call",
+    lastToolName: "web_fetch",
+  }));
+
+  assert.equal(model.calls, 0);
+  assert.equal(decision.action.kind, "respond");
+  assert.match(decision.action.content ?? "", /Primary article body/);
+  assert.notEqual(decision.action.kind, "tool_call");
+});
+
+test("LlmPlanner honors task-loop final-answer readiness before consulting the model", async () => {
+  const model = new RecordingModel({ kind: "tool_call", toolName: "list_directory", toolInput: { path: "." } });
+  const planner = new LlmPlanner(model);
+  const availableTools: ToolDescriptor[] = [
+    {
+      name: "read_text_file",
+      description: "Reads a file",
+      inputSchema: { type: "object" },
+    },
+    {
+      name: "list_directory",
+      description: "Lists a directory",
+      inputSchema: { type: "object" },
+    },
+  ];
+
+  const decision = await planner.decide(makeInput([
+    {
+      action: { kind: "tool_call", toolName: "read_text_file", toolInput: { path: "README.md" } },
+      ok: true,
+      output: {
+        path: "README.md",
+        content: "# Shiguang\nA desktop agent.",
+      },
+      metadata: {
+        category: "tool_observation",
+        summary: "read README",
+        retryable: false,
+        toolName: "read_text_file",
+      },
+    },
+  ], availableTools, "analyze README.md", {
+    step: 1,
+    phase: "investigate",
+    lastActionKind: "tool_call",
+    lastToolName: "read_text_file",
+    taskLoop: {
+      objective: "analyze README.md",
+      mode: "workspace",
+      evidenceCount: 1,
+      completionGateCount: 0,
+      lastEvidenceKind: "file",
+      lastEvidenceTool: "read_text_file",
+      lastEvidenceTarget: "README.md",
+      needsFinalAnswer: true,
+    },
+  }));
+
+  assert.equal(model.calls, 0);
+  assert.equal(decision.action.kind, "respond");
+  assert.match(decision.action.content ?? "", /README\.md/);
+  assert.match(decision.reasoning ?? "", /Completion evaluator/);
+});
+
+test("LlmPlanner summarizes web_fetch article candidates when plain text is empty", async () => {
+  const model = new RecordingModel({ kind: "tool_call", toolName: "read_text_file", toolInput: { path: "package.json" } });
+  const planner = new LlmPlanner(model);
+  const availableTools: ToolDescriptor[] = [
+    {
+      name: "web_fetch",
+      description: "Fetches a public web page",
+      inputSchema: { type: "object" },
+      capability: "web.fetch",
+    },
+  ];
+
+  const decision = await planner.decide(makeInput([
+    {
+      action: { kind: "tool_call", toolName: "web_fetch", toolInput: { url: "https://example.test/news.html" } },
+      ok: true,
+      output: {
+        url: "https://example.test/news.html",
+        title: "News",
+        text: "",
+        htmlPreview: "<nav>menu</nav>",
+        articleCandidates: [
+          { source: "dense-paragraph", score: 82, text: "This is the extracted article body.", truncated: false },
+        ],
+      },
+      metadata: {
+        category: "tool_observation",
+        summary: "fetched web page",
+        retryable: false,
+        toolName: "web_fetch",
+      },
+    },
+  ], availableTools, "read https://example.test/news.html", {
+    step: 1,
+    phase: "investigate",
+    lastActionKind: "tool_call",
+    lastToolName: "web_fetch",
+    taskLoop: {
+      objective: "read https://example.test/news.html",
+      mode: "web",
+      evidenceCount: 1,
+      completionGateCount: 0,
+      lastEvidenceKind: "web",
+      lastEvidenceTool: "web_fetch",
+      lastEvidenceTarget: "https://example.test/news.html",
+      needsFinalAnswer: true,
+    },
+  }));
+
+  assert.equal(model.calls, 0);
+  assert.equal(decision.action.kind, "respond");
+  assert.match(decision.action.content ?? "", /extracted article body/);
+  assert.doesNotMatch(decision.action.content ?? "", /<nav>menu<\/nav>/);
+});
+
+test("LlmPlanner prefers article candidates over noisy fetched page text", async () => {
+  const model = new RecordingModel({ kind: "tool_call", toolName: "read_text_file", toolInput: { path: "README.md" } });
+  const planner = new LlmPlanner(model);
+  const availableTools: ToolDescriptor[] = [
+    {
+      name: "web_fetch",
+      description: "Fetches a public web page",
+      inputSchema: { type: "object" },
+      capability: "web.fetch",
+    },
+  ];
+
+  const decision = await planner.decide(makeInput([
+    {
+      action: { kind: "tool_call", toolName: "web_fetch", toolInput: { url: "https://example.test/news.html" } },
+      ok: true,
+      output: {
+        url: "https://example.test/news.html",
+        title: "红色文化研究",
+        text: "APP 下载客户端 微信 关注公众号 举报 评论 分享".repeat(20),
+        htmlPreview: "<nav>APP 下载客户端 微信 关注公众号</nav>",
+        articleCandidates: [
+          { source: "article", score: 91, text: "红色文化研究正文：这是一段真正的文章主体内容，介绍研究进程、成就与未来展望。", truncated: false },
+        ],
+      },
+      metadata: {
+        category: "tool_observation",
+        summary: "fetched noisy web page",
+        retryable: false,
+        toolName: "web_fetch",
+      },
+    },
+  ], availableTools, "看一下 https://example.test/news.html 的正文", {
+    step: 1,
+    phase: "summarize",
+    lastActionKind: "tool_call",
+    lastToolName: "web_fetch",
+    taskLoop: {
+      objective: "看一下 https://example.test/news.html 的正文",
+      mode: "web",
+      evidenceCount: 1,
+      completionGateCount: 0,
+      lastEvidenceKind: "web",
+      lastEvidenceTool: "web_fetch",
+      lastEvidenceTarget: "https://example.test/news.html",
+      needsFinalAnswer: true,
+    },
+  }));
+
+  assert.equal(model.calls, 0);
+  assert.equal(decision.action.kind, "respond");
+  assert.match(decision.action.content ?? "", /真正的文章主体内容/);
+  assert.doesNotMatch(decision.action.content ?? "", /APP 下载客户端 微信/);
+});
+
 test("RulePlanner runs validation for Chinese runnable-project requests", async () => {
   const planner = new RulePlanner();
   const availableTools: ToolDescriptor[] = [
@@ -607,6 +825,76 @@ test("LlmPlanner sends a cost-aware subset of tool schemas to the model", async 
   const selectedNames = new Set(model.lastRequest?.availableTools.map((tool) => tool.name) ?? []);
   assert.ok(selectedNames.has("patch_text_file"), `selected tools: ${[...selectedNames].join(", ")}`);
   assert.ok(selectedNames.has("run_validation"), `selected tools: ${[...selectedNames].join(", ")}`);
+});
+
+test("LlmPlanner records a reusable reflection rule before repeating a bad pattern", async () => {
+  const model = new RecordingModel({ kind: "respond", content: "fallback" });
+  const planner = new LlmPlanner(model);
+  const availableTools: ToolDescriptor[] = [
+    {
+      name: "record_agent_rule",
+      description: "Record reusable agent rule",
+      inputSchema: { type: "object" },
+      requiresApproval: true,
+    },
+    {
+      name: "list_directory",
+      description: "List directory",
+      inputSchema: { type: "object" },
+      requiresApproval: false,
+    },
+  ];
+  const history: ActionResult[] = [
+    {
+      action: { kind: "tool_call", toolName: "list_directory", toolInput: { path: "." } },
+      ok: true,
+      output: { entries: [] },
+      metadata: { category: "tool_observation", summary: "listed root", retryable: false, toolName: "list_directory" },
+    },
+    {
+      action: { kind: "tool_call", toolName: "list_directory", toolInput: { path: "." } },
+      ok: true,
+      output: { entries: [] },
+      metadata: { category: "tool_observation", summary: "listed root again", retryable: false, toolName: "list_directory" },
+    },
+  ];
+
+  const decision = await planner.decide(makeInput(history, availableTools, "这个重复了，反思并记住规则"));
+
+  assert.equal(model.calls, 0);
+  assert.equal(decision.action.kind, "tool_call");
+  assert.equal(decision.action.toolName, "record_agent_rule");
+  assert.match(JSON.stringify(decision.action.toolInput), /same tool/i);
+});
+
+test("RulePlanner reports saved reflection rule after record_agent_rule completes", async () => {
+  const planner = new RulePlanner();
+  const result: ActionResult = {
+    action: {
+      kind: "tool_call",
+      toolName: "record_agent_rule",
+      toolInput: {
+        scope: "task-loop/repetition",
+        rule: "Stop repeated tools.",
+        evidence: ["list_directory repeated"],
+      },
+    },
+    ok: true,
+    output: { ok: true },
+    metadata: {
+      category: "tool_observation",
+      summary: "rule recorded",
+      retryable: false,
+      toolName: "record_agent_rule",
+    },
+  };
+
+  const decision = await planner.decide(makeInput([result], [
+    { name: "record_agent_rule", description: "Record reusable agent rule", inputSchema: { type: "object" } },
+  ], "继续"));
+
+  assert.equal(decision.action.kind, "respond");
+  assert.match(decision.action.content ?? "", /保存为规则/);
 });
 
 test("RulePlanner falls back to list_directory after an empty search result", async () => {

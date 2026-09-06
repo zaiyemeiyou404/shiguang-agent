@@ -1,8 +1,16 @@
-import type { BrainInput, ActionResult } from "./types.js";
+import type { BrainInput, ActionResult, TaskLoopEvidenceKind, TaskLoopEvidenceQuality } from "./types.js";
 import type { ToolDescriptor } from "../tools/types.js";
 import { inferToolContract } from "../tools/contract.js";
 
 const DEFAULT_MAX_SELECTED_TOOLS = 14;
+interface EvidenceLogEntry {
+  step: number;
+  toolName: string;
+  kind: TaskLoopEvidenceKind;
+  quality: TaskLoopEvidenceQuality;
+  target?: string;
+  summary: string;
+}
 
 const CORE_INSPECTION_TOOLS = new Set([
   "inspect_project",
@@ -54,11 +62,31 @@ export function selectToolsForPlanner(
       .map((result) => result.metadata?.toolName ?? result.action.toolName)
       .filter((name): name is string => typeof name === "string" && name.length > 0),
   );
+  const recentSignatures = new Set(
+    input.history
+      .slice(-8)
+      .map((result) => toolActionSignature(result.action))
+      .filter((signature): signature is string => Boolean(signature)),
+  );
+  const recentFailedToolNames = new Set(
+    input.history
+      .slice(-6)
+      .filter((result) => result.ok === false)
+      .map((result) => result.metadata?.toolName ?? result.action.toolName)
+      .filter((name): name is string => typeof name === "string" && name.length > 0),
+  );
+  const recommendedNextTools = inferRecommendedNextTools(input.history);
+  const taskLoopRecommendedTools = inferTaskLoopRecommendedTools(input);
+  const recentEvidenceLog = input.workingMemory?.taskLoop?.evidenceLog?.slice(-6) ?? [];
+  for (const toolName of taskLoopRecommendedTools) {
+    recommendedNextTools.add(toolName);
+  }
+  const taskLoopCostPressure = inferTaskLoopCostPressure(input);
 
   const scored = tools.map((tool, index) => ({
     tool,
     index,
-    score: scoreTool(tool, intent, recentToolNames, input.history, text),
+    score: scoreTool(tool, intent, recentToolNames, recentSignatures, recentFailedToolNames, recommendedNextTools, taskLoopRecommendedTools, recentEvidenceLog, taskLoopCostPressure, input.history, text),
   }));
 
   const selected = ensurePinnedTools(
@@ -68,7 +96,7 @@ export function selectToolsForPlanner(
       .slice(0, Math.max(1, maxSelected))
       .sort((left, right) => left.index - right.index)
       .map((item) => item.tool),
-    pinnedToolsForIntent(intent, text),
+    [...pinnedToolsForIntent(intent, text), ...taskLoopRecommendedTools],
     maxSelected,
   );
 
@@ -83,7 +111,11 @@ function buildIntentText(input: BrainInput): string {
   const userTurn = [...input.context.volatile].reverse().find((item) => item.kind === "user_turn")?.content ?? "";
   const lastSummary = input.workingMemory?.lastObservation?.summary ?? "";
   const lastTool = input.workingMemory?.lastToolName ?? "";
-  return `${userTurn}\n${lastSummary}\n${lastTool}`.toLowerCase();
+  const evidence = (input.workingMemory?.taskLoop?.evidenceLog ?? [])
+    .slice(-4)
+    .map((entry) => `${entry.toolName} ${entry.quality} ${entry.kind} ${entry.target ?? ""} ${entry.summary}`)
+    .join("\n");
+  return `${userTurn}\n${lastSummary}\n${lastTool}\n${evidence}`.toLowerCase();
 }
 
 interface IntentFlags {
@@ -178,7 +210,11 @@ function ensurePinnedTools(
     if (!pinned) continue;
     if (next.length >= maxSelected) {
       const removableIndex = findLowestPriorityNonPinnedIndex(next, scored, pinnedToolNames);
-      if (removableIndex >= 0) next.splice(removableIndex, 1);
+      if (removableIndex >= 0) {
+        next.splice(removableIndex, 1);
+      } else {
+        continue;
+      }
     }
     next.push(pinned);
   }
@@ -212,6 +248,12 @@ function scoreTool(
   tool: ToolDescriptor,
   intent: IntentFlags,
   recentToolNames: Set<string>,
+  recentSignatures: Set<string>,
+  recentFailedToolNames: Set<string>,
+  recommendedNextTools: Set<string>,
+  taskLoopRecommendedTools: Set<string>,
+  recentEvidenceLog: EvidenceLogEntry[],
+  taskLoopCostPressure: "normal" | "high",
   history: ActionResult[],
   text: string,
 ): number {
@@ -228,12 +270,18 @@ function scoreTool(
   if (contract.phase === "verify") score += intent.validate ? 10 : 3;
   if (contract.phase === "execute") score += intent.execute || intent.validate ? 8 : -4;
   if (name === "run_validation" && history.some((result) => result.metadata?.workspaceMutation === true)) score += 20;
-  if (recentToolNames.has(name)) score += 14;
+  if (recommendedNextTools.has(name)) score += 18;
+  if (taskLoopRecommendedTools.has(name)) score += 28;
+  score += scoreEvidenceLedgerFit(name, recentEvidenceLog, taskLoopRecommendedTools);
+  if (recentToolNames.has(name)) score += 4;
+  if (recentFailedToolNames.has(name)) score -= 18;
   if (tool.requiresApproval === true && !intent.edit && !intent.execute) score -= 8;
 
   if (intent.web && (contract.category === "web" || contract.category === "github" || haystack.includes("fetch"))) score += 24;
   if (intent.web && name === "web_search") score += 36;
   if (intent.web && name === "web_fetch" && /url|http|https|网页|链接|抓取|fetch/.test(text)) score += 30;
+  if (intent.web && isLocalWorkspaceToolName(name)) score -= 26;
+  if (!intent.web && (name === "web_search" || name === "web_fetch") && history.some((result) => isRecentWorkspaceEvidence(result))) score -= 18;
   if (intent.memory && contract.category === "memory") score += 24;
   if ((intent.adaptive || intent.memory || inferAdaptiveLearningIntent(text)) && name === "record_agent_rule") score += 42;
   if ((intent.adaptive || intent.memory || inferAdaptiveLearningIntent(text)) && name === "list_custom_extensions") score += 16;
@@ -254,6 +302,162 @@ function scoreTool(
   if (name === "echo") score -= 20;
   if (contract.cost === "medium" && !recentToolNames.has(name)) score -= 2;
   if (contract.cost === "high" && !recentToolNames.has(name)) score -= intent.edit || intent.execute || intent.web || intent.git || intent.mcp ? 3 : 8;
+  if (taskLoopCostPressure === "high" && contract.cost === "high" && !taskLoopRecommendedTools.has(name)) score -= 18;
+  if (taskLoopCostPressure === "high" && contract.cost === "medium" && !taskLoopRecommendedTools.has(name)) score -= 6;
   if (contract.risk !== "read" && !intent.edit && !intent.execute && !intent.validate) score -= 8;
+  if (isRepeatProneToolName(name) && recentToolNames.has(name) && recentSignatures.size > 0) score -= 6;
   return score;
+}
+
+function scoreEvidenceLedgerFit(
+  toolName: string,
+  recentEvidenceLog: EvidenceLogEntry[],
+  taskLoopRecommendedTools: Set<string>,
+): number {
+  const matching = recentEvidenceLog.filter((entry) => entry.toolName === toolName);
+  if (matching.length === 0) return 0;
+
+  const weakOrFailed = matching.filter((entry) => entry.quality === "weak" || entry.quality === "failed").length;
+  const strong = matching.filter((entry) => entry.quality === "strong").length;
+  let score = strong > 0 ? 4 : 0;
+
+  if (weakOrFailed > 0) {
+    score -= taskLoopRecommendedTools.has(toolName) ? Math.min(8, weakOrFailed * 4) : Math.min(24, weakOrFailed * 10);
+  }
+  if (hasRepeatedWeakEvidenceForSameTarget(matching)) {
+    score -= taskLoopRecommendedTools.has(toolName) ? 6 : 18;
+  }
+
+  return score;
+}
+
+function hasRepeatedWeakEvidenceForSameTarget(entries: EvidenceLogEntry[]): boolean {
+  const counts = new Map<string, number>();
+  for (const entry of entries) {
+    if (entry.quality === "strong") continue;
+    const key = `${entry.toolName}:${entry.target ?? ""}`;
+    const next = (counts.get(key) ?? 0) + 1;
+    if (next >= 2) return true;
+    counts.set(key, next);
+  }
+  return false;
+}
+
+function inferTaskLoopRecommendedTools(input: BrainInput): Set<string> {
+  const recommended = new Set<string>();
+  const taskLoop = input.workingMemory?.taskLoop;
+  const tasks = taskLoop?.tasks;
+  if (!Array.isArray(tasks) || tasks.length === 0) return recommended;
+
+  const activeTask = tasks.find((task) => task.id === taskLoop?.currentTaskId)
+    ?? tasks.find((task) => task.status === "active" || task.status === "blocked");
+  if (!activeTask || activeTask.id === "answer") return recommended;
+
+  for (const hint of activeTask.toolHints ?? []) {
+    recommended.add(hint);
+  }
+
+  const criterion = activeTask.criteria.find((item) => item.status === "pending" || item.status === "failed");
+  if (!criterion) return recommended;
+
+  for (const toolName of toolNamesForTaskLoopCriterion(criterion.id, latestUserText(input))) {
+    recommended.add(toolName);
+  }
+  return recommended;
+}
+
+function toolNamesForTaskLoopCriterion(criterionId: string, text: string): string[] {
+  const hasExplicitUrl = /https?:\/\//i.test(text);
+  switch (criterionId) {
+    case "source_located":
+      return hasExplicitUrl ? ["web_fetch", "web_search"] : ["web_search", "web_fetch"];
+    case "body_evidence":
+      return ["web_fetch", "web_search"];
+    case "structure_evidence":
+      return ["inspect_project", "list_directory", "search_workspace"];
+    case "target_evidence":
+      return ["read_text_file", "search_workspace", "list_directory"];
+    case "key_file_evidence":
+      return ["read_text_file", "code_map", "symbol_search"];
+    case "workspace_mutated":
+      return ["patch_text_file", "write_text_file"];
+    case "validation_passed":
+      return ["run_validation", "collect_diagnostics"];
+    default:
+      return [];
+  }
+}
+
+function inferTaskLoopCostPressure(input: BrainInput): "normal" | "high" {
+  const taskLoop = input.workingMemory?.taskLoop;
+  if (!taskLoop) return "normal";
+  const currentTask = taskLoop.tasks?.find((task) => task.id === taskLoop.currentTaskId);
+  if (currentTask?.id === "answer" || taskLoop.needsFinalAnswer === true) return "high";
+  if (taskLoop.evidenceCount >= 4 || taskLoop.completionGateCount >= 1) return "high";
+  return "normal";
+}
+
+function latestUserText(input: BrainInput): string {
+  return [...input.context.volatile].reverse().find((item) => item.kind === "user_turn")?.content ?? "";
+}
+
+function inferRecommendedNextTools(history: ActionResult[]): Set<string> {
+  const recommended = new Set<string>();
+  for (const result of history.slice(-4)) {
+    if (result.metadata?.workspaceMutation === true) recommended.add("run_validation");
+    if (result.action.kind !== "tool_call") continue;
+    const toolName = result.metadata?.toolName ?? result.action.toolName;
+    if (toolName === "web_search") recommended.add("web_fetch");
+    if (toolName === "inspect_project" || toolName === "list_directory" || toolName === "search_workspace") {
+      recommended.add("read_text_file");
+      recommended.add("code_map");
+    }
+    const after = (result.metadata as { recommendedAfterTools?: unknown } | undefined)?.recommendedAfterTools;
+    if (Array.isArray(after)) {
+      for (const item of after) {
+        if (typeof item === "string" && item.trim()) recommended.add(item.trim());
+      }
+    }
+  }
+  return recommended;
+}
+
+function isRecentWorkspaceEvidence(result: ActionResult): boolean {
+  const toolName = result.metadata?.toolName ?? result.action.toolName;
+  return result.ok === true && (
+    toolName === "inspect_project"
+    || toolName === "list_directory"
+    || toolName === "read_text_file"
+    || toolName === "search_workspace"
+    || toolName === "code_map"
+  );
+}
+
+function isLocalWorkspaceToolName(name: string): boolean {
+  return CORE_INSPECTION_TOOLS.has(name)
+    || CORE_EDIT_TOOLS.has(name)
+    || name === "run_validation"
+    || name === "collect_diagnostics";
+}
+
+function isRepeatProneToolName(name: string): boolean {
+  return name === "list_directory"
+    || name === "inspect_project"
+    || name === "search_workspace"
+    || name === "web_search"
+    || name === "web_fetch";
+}
+
+function toolActionSignature(action: ActionResult["action"]): string | null {
+  if (action.kind !== "tool_call" || !action.toolName) return null;
+  return `${action.toolName}:${stableJson(action.toolInput ?? null)}`;
+}
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`);
+  return `{${entries.join(",")}}`;
 }

@@ -3,6 +3,7 @@ import type { ToolDescriptor, ValidationModeHint } from "../tools/types.js";
 import type { LlmPlannerModel, LlmPlannerModelRequest, PlannerContext } from "./model-types.js";
 import { renderPrompt, type RenderedPrompt } from "../context/render.js";
 import { selectToolsForPlanner } from "./tool-selection.js";
+import { judgeTaskCompletion, judgeToolCallValue } from "./completion.js";
 
 export interface Planner {
   decide(input: BrainInput, context?: PlannerContext): Promise<BrainDecision>;
@@ -13,6 +14,7 @@ export class LlmPlanner implements Planner {
 
   async decide(input: BrainInput, context?: PlannerContext): Promise<BrainDecision> {
     const lastResult = input.history.length > 0 ? input.history[input.history.length - 1] ?? null : null;
+    const message = latestUserMessage(input);
     const latestUrlFetch = inferLatestUserUrlFetch(input);
     if (latestUrlFetch) return latestUrlFetch;
     // 一旦确认发生了 workspace mutation，优先自动跑验证，再把结果交回模型处理。
@@ -27,13 +29,25 @@ export class LlmPlanner implements Planner {
     const webSearchFollowupFetch = inferWebSearchFollowupFetch(input, lastResult);
     if (webSearchFollowupFetch) return webSearchFollowupFetch;
 
+    const adaptiveLearning = inferAdaptiveLearningDecision(input, message);
+    if (adaptiveLearning) return adaptiveLearning;
+
+    const completionDecision = inferCompletionJudgmentDecision(input, lastResult, message);
+    if (completionDecision) return completionDecision;
+
+    const taskLoopReadyResponse = inferTaskLoopReadyResponse(input, lastResult, message);
+    if (taskLoopReadyResponse) return taskLoopReadyResponse;
+
     const completedWebLookup = shouldLetModelReviewWebFetch(lastResult)
       ? null
       : inferCompletedWebLookupResponse(input, lastResult);
     if (completedWebLookup) return completedWebLookup;
 
+    const taskLoopGate = inferTaskLoopGateDecision(input, lastResult, message);
+    if (taskLoopGate) return taskLoopGate;
+
     const initialWebFetch = input.history.length === 0
-      ? inferInitialWebFetchUrl(latestUserMessage(input), input.availableTools)
+      ? inferInitialWebFetchUrl(message, input.availableTools)
       : null;
     if (initialWebFetch) {
       return {
@@ -45,6 +59,8 @@ export class LlmPlanner implements Planner {
     const request = this.buildRequest(input);
     const response = await this.model.generateDecision(request, context);
     const decision = { action: response.action, reasoning: response.reasoning };
+    const preflight = inferToolPreflightDecision(input, decision, lastResult, message);
+    if (preflight) return preflight;
     const fallback = await inferDeterministicToolFallback(input, decision, context);
     return fallback ?? decision;
   }
@@ -61,6 +77,265 @@ export class LlmPlanner implements Planner {
       history: input.history,
       workingMemory: input.workingMemory,
     };
+  }
+}
+
+function inferTaskLoopGateDecision(
+  input: BrainInput,
+  lastResult: ActionResult | null,
+  message: string,
+): BrainDecision | null {
+  const phase = inferPlannerPhase(input, lastResult, message);
+  if (phase !== "summarize") return null;
+
+  const deterministic = decideByPhase("summarize", input, message, lastResult);
+  if (!deterministic) return null;
+  if (deterministic.action.kind === "respond" || deterministic.action.kind === "finish" || deterministic.action.kind === "fail") {
+    return {
+      ...deterministic,
+      reasoning: [
+        deterministic.reasoning,
+        "Task loop gate: read-only evidence is ready; producing feedback before the model can drift into unrelated tools.",
+      ].filter(Boolean).join(" "),
+    };
+  }
+
+  if (deterministic.action.kind !== "tool_call") return null;
+  if (!isTaskLoopProgressTool(deterministic.action.toolName)) return null;
+  return {
+    ...deterministic,
+    reasoning: [
+      deterministic.reasoning,
+      "Task loop gate: choosing the next deterministic evidence step before consulting the model.",
+    ].filter(Boolean).join(" "),
+  };
+}
+
+function isTaskLoopProgressTool(toolName?: string): boolean {
+  return toolName === "read_text_file"
+    || toolName === "code_map"
+    || toolName === "web_fetch"
+    || toolName === "inspect_project";
+}
+
+function inferCompletionJudgmentDecision(
+  input: BrainInput,
+  lastResult: ActionResult | null,
+  message: string,
+): BrainDecision | null {
+  const judgment = judgeTaskCompletion(input, lastResult, message);
+  if (judgment.status === "needs_verification" && judgment.recommendedToolName) {
+    return {
+      action: {
+        kind: "tool_call",
+        toolName: judgment.recommendedToolName,
+        toolInput: judgment.recommendedToolInput,
+      },
+      reasoning: `Completion evaluator: ${judgment.reason}`,
+    };
+  }
+
+  if ((judgment.status === "needs_more_evidence" || judgment.status === "needs_recovery" || judgment.status === "needs_repair") && judgment.recommendedToolName) {
+    return {
+      action: {
+        kind: "tool_call",
+        toolName: judgment.recommendedToolName,
+        toolInput: judgment.recommendedToolInput,
+      },
+      reasoning: `Completion evaluator: ${judgment.reason}`,
+    };
+  }
+
+  if (judgment.status !== "ready") return null;
+  const content = summarizeObservation(lastResult, message);
+  if (!content) return null;
+
+  return {
+    action: { kind: "respond", content },
+    reasoning: `Completion evaluator: ${judgment.reason}`,
+  };
+}
+
+function inferToolPreflightDecision(
+  input: BrainInput,
+  decision: BrainDecision,
+  lastResult: ActionResult | null,
+  message: string,
+): BrainDecision | null {
+  if (decision.action.kind !== "tool_call") return null;
+
+  const explicitUrl = inferInitialWebFetchUrl(message, input.availableTools);
+  if (explicitUrl && !hasFetchedUrl(input.history, explicitUrl)) {
+    const proposedTool = decision.action.toolName;
+    if (proposedTool !== "web_fetch") {
+      return {
+        action: { kind: "tool_call", toolName: "web_fetch", toolInput: { url: explicitUrl } },
+        reasoning: [
+          decision.reasoning,
+          `Tool preflight: latest user message has an explicit URL, so web_fetch must run before ${proposedTool ?? "another tool"}.`,
+        ].filter(Boolean).join(" "),
+      };
+    }
+  }
+
+  const toolValue = judgeToolCallValue(input, decision, lastResult, message);
+  if (toolValue.status === "redirect" && toolValue.recommendedToolName) {
+    return {
+      action: {
+        kind: "tool_call",
+        toolName: toolValue.recommendedToolName,
+        toolInput: toolValue.recommendedToolInput,
+      },
+      reasoning: [
+        decision.reasoning,
+        `Tool preflight: ${toolValue.reason}`,
+      ].filter(Boolean).join(" "),
+    };
+  }
+
+  if (toolValue.status === "avoid") {
+    const content = summarizeObservation(lastResult, message);
+    if (content) {
+      return {
+        action: { kind: "respond", content },
+        reasoning: [
+          decision.reasoning,
+          `Tool preflight: ${toolValue.reason}; returning existing evidence instead.`,
+        ].filter(Boolean).join(" "),
+      };
+    }
+  }
+
+  const judgment = judgeTaskCompletion(input, lastResult, message);
+  if (judgment.status !== "ready") return null;
+  const content = summarizeObservation(lastResult, message);
+  if (!content) return null;
+
+  return {
+    action: { kind: "respond", content },
+    reasoning: [
+      decision.reasoning,
+      `Tool preflight: completion evaluator says the task is ready (${judgment.reason}); refusing an unnecessary ${decision.action.toolName ?? "tool"} call.`,
+    ].filter(Boolean).join(" "),
+  };
+}
+
+function inferTaskLoopReadyResponse(
+  input: BrainInput,
+  lastResult: ActionResult | null,
+  message: string,
+): BrainDecision | null {
+  if (input.workingMemory?.taskLoop?.needsFinalAnswer !== true) return null;
+  if (!lastResult || !lastResult.ok || lastResult.action.kind !== "tool_call") return null;
+
+  const toolName = lastResult.metadata?.toolName ?? lastResult.action.toolName;
+  if (toolName === "web_search" && hasTool(input.availableTools, "web_fetch")) return null;
+
+  const content = summarizeObservation(lastResult, message);
+  if (!content) return null;
+
+  return {
+    action: { kind: "respond", content },
+    reasoning: [
+      "Task loop gate: workingMemory.taskLoop.needsFinalAnswer is true.",
+      `Latest evidence came from ${toolName ?? "a tool"}; returning feedback instead of consulting the model for another tool.`,
+    ].join(" "),
+  };
+}
+
+function inferAdaptiveLearningDecision(input: BrainInput, message: string): BrainDecision | null {
+  if (!hasTool(input.availableTools, "record_agent_rule")) return null;
+  if (!isAdaptiveLearningRequest(message)) return null;
+  if (hasRecentTool(input.history, "record_agent_rule")) return null;
+  const reflection = buildAdaptiveReflection(input.history, message);
+  if (!reflection) return null;
+
+  return {
+    action: {
+      kind: "tool_call",
+      toolName: "record_agent_rule",
+      toolInput: {
+        scope: reflection.scope,
+        rule: reflection.rule,
+        evidence: reflection.evidence,
+        enabled: true,
+      },
+    },
+    reasoning: "Hermes-style reflection: persisting a reusable operating rule from the user's correction and recent tool evidence before continuing.",
+  };
+}
+
+function isAdaptiveLearningRequest(message: string): boolean {
+  return /错|不对|不是|为什么|反思|总结|保存|记住|规则|学一下|学习|降智|混乱|重复|没用|hermes|wrong|incorrect|reflect|learn|rule|remember/i.test(message);
+}
+
+function buildAdaptiveReflection(history: ActionResult[], message: string): { scope: string; rule: string; evidence: string[] } | null {
+  const recent = history.slice(-8);
+  if (recent.length === 0) return null;
+  const evidence = recent
+    .map((result) => {
+      const toolName = result.metadata?.toolName ?? result.action.toolName ?? result.action.kind;
+      const summary = result.metadata?.summary ?? result.error ?? summarizeOutputBriefly(result.output);
+      return `${toolName}: ${result.ok ? "ok" : "failed"}${summary ? ` - ${summary}` : ""}`;
+    })
+    .filter((item) => item.trim().length > 0)
+    .slice(-5);
+  if (evidence.length === 0) return null;
+
+  if (hasRepeatedToolSignature(recent)) {
+    return {
+      scope: "task-loop/repetition",
+      rule: "If the same tool with the same input repeats without new evidence, stop the loop: summarize the collected evidence or switch to a different higher-signal tool before continuing.",
+      evidence,
+    };
+  }
+
+  if (recent.some((result) => (result.metadata?.toolName ?? result.action.toolName) === "web_fetch")) {
+    return {
+      scope: "web/article-reading",
+      rule: "For explicit URL or article-reading requests, use web_fetch on the URL first, inspect text/articleCandidates/htmlPreview, and only fall back to web_search when extraction is weak or the fetch fails; do not inspect local workspace files for web-only intent.",
+      evidence,
+    };
+  }
+
+  if (recent.some((result) => result.action.kind === "needs_approval" || (result.action.kind === "tool_call" && result.action.toolName === "completion_check"))) {
+    return {
+      scope: "approval/completion",
+      rule: "After an approval is granted or a completion_check is inserted, do not request the same mutation again; verify once when needed, then produce final feedback or choose a genuinely different repair.",
+      evidence,
+    };
+  }
+
+  if (/为什么|啥意思|错|不对|不是|wrong|incorrect/i.test(message)) {
+    return {
+      scope: "conversation/grounding",
+      rule: "When the user challenges an answer, first state what was actually observed versus inferred, then choose the next tool or correction from that evidence instead of repeating the previous answer.",
+      evidence,
+    };
+  }
+
+  return null;
+}
+
+function hasRepeatedToolSignature(history: ActionResult[]): boolean {
+  const counts = new Map<string, number>();
+  for (const result of history) {
+    const signature = toolActionSignature(result.action);
+    if (!signature) continue;
+    const next = (counts.get(signature) ?? 0) + 1;
+    if (next >= 2) return true;
+    counts.set(signature, next);
+  }
+  return false;
+}
+
+function summarizeOutputBriefly(output: unknown): string {
+  if (typeof output === "string") return output.slice(0, 160);
+  if (!output || typeof output !== "object") return "";
+  try {
+    return JSON.stringify(output).slice(0, 160);
+  } catch {
+    return "";
   }
 }
 
@@ -206,6 +481,9 @@ export class RulePlanner implements Planner {
         reasoning: `Successful workspace mutation detected; running validation mode: ${automaticValidationMode}`,
       };
     }
+
+    const adaptiveLearning = inferAdaptiveLearningDecision(input, msg);
+    if (adaptiveLearning) return adaptiveLearning;
 
     const phaseDecision = decideByPhase(phase, input, msg, lastResult ?? null);
     if (phaseDecision) return phaseDecision;
@@ -832,6 +1110,20 @@ function hasProjectShapeEvidence(history: ActionResult[]): boolean {
 
 function hasRecentTool(history: ActionResult[], toolName: string): boolean {
   return history.slice(-8).some((result) => result.action.kind === "tool_call" && result.action.toolName === toolName);
+}
+
+function toolActionSignature(action: ActionResult["action"]): string | null {
+  if (action.kind !== "tool_call" || !action.toolName) return null;
+  return `${action.toolName}:${stableJson(action.toolInput ?? null)}`;
+}
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`);
+  return `{${entries.join(",")}}`;
 }
 
 function countReadTextFileCalls(history: ActionResult[]): number {
@@ -1519,6 +1811,13 @@ function summarizeObservation(lastResult: ActionResult | null, message: string):
     return summarizeCompletionCheck(lastResult.output);
   }
 
+  if (lastResult.action.toolName === "record_agent_rule") {
+    const input = lastResult.action.toolInput as { scope?: unknown; rule?: unknown } | null;
+    const scope = typeof input?.scope === "string" ? input.scope : "agent rule";
+    const rule = typeof input?.rule === "string" ? input.rule : lastResult.metadata?.summary;
+    return `我已经把这次可复用的经验保存为规则「${scope}」。后面遇到类似情况会按这个做法执行：${rule ?? "先基于证据反思，再选择下一步。"}`;
+  }
+
   if (lastResult.action.toolName === "read_text_file") {
     const output = lastResult.output as { path?: unknown; content?: unknown; truncated?: unknown } | null;
     const requestedAnswer = inferRequestedFileValueAnswer(lastResult, message, output);
@@ -1571,19 +1870,24 @@ function summarizeObservation(lastResult: ActionResult | null, message: string):
       text?: unknown;
       content?: unknown;
       htmlPreview?: unknown;
+      articleCandidates?: Array<{ text?: unknown; source?: unknown; score?: unknown }>;
       truncated?: unknown;
       htmlPreviewTruncated?: unknown;
     } | null;
     const url = typeof output?.url === "string" ? output.url : "该网页";
     const title = typeof output?.title === "string" && output.title.trim() ? `「${output.title.trim()}」` : "";
-    const content = typeof output?.text === "string"
-      ? output.text
-      : typeof output?.content === "string"
-        ? output.content
-        : typeof output?.htmlPreview === "string"
-          ? output.htmlPreview
-          : "";
-    const preview = content.trim().slice(0, 700);
+    const bestCandidate = Array.isArray(output?.articleCandidates)
+      ? output.articleCandidates
+        .map((candidate) => typeof candidate.text === "string" ? candidate.text.trim() : "")
+        .find((text) => text.length > 0)
+      : "";
+    const content = [
+      bestCandidate ?? "",
+      typeof output?.text === "string" ? output.text.trim() : "",
+      typeof output?.content === "string" ? output.content.trim() : "",
+      typeof output?.htmlPreview === "string" ? output.htmlPreview.trim() : "",
+    ].find((value) => value.length > 0) ?? "";
+    const preview = content.slice(0, 700);
     const truncatedNote = output?.truncated === true || output?.htmlPreviewTruncated === true || content.length > 700
       ? "\n\n内容较长，我先截取了前半部分；需要的话我可以继续抓取/整理。"
       : "";

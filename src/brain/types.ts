@@ -17,6 +17,12 @@ export interface BrainInput {
 export type BrainActionKind = "respond" | "tool_call" | "finish" | "fail" | "needs_approval";
 
 export type PlannerPhase = "investigate" | "edit" | "validate" | "summarize";
+export type TaskLoopMode = "chat" | "web" | "workspace" | "edit" | "validation";
+export type TaskLoopEvidenceKind = "web" | "workspace" | "file" | "code" | "validation" | "terminal" | "unknown";
+export type TaskLoopEvidenceQuality = "strong" | "weak" | "failed";
+export type TaskLoopPlanStatus = "pending" | "active" | "done" | "blocked";
+export type TaskLoopCriterionStatus = "pending" | "satisfied" | "failed";
+export type TaskLoopSelfCheckStatus = "pending" | "passed" | "needs_evidence" | "needs_repair";
 
 export interface BrainAction {
   kind: BrainActionKind;
@@ -37,6 +43,54 @@ export interface BrainDecision {
 export interface WorkingMemorySnapshot {
   step: number;
   phase?: PlannerPhase;
+  taskLoop?: {
+    objective: string;
+    mode: TaskLoopMode;
+    evidenceCount: number;
+    completionGateCount: number;
+    currentStep?: string;
+    plan?: Array<{
+      id: string;
+      title: string;
+      status: TaskLoopPlanStatus;
+    }>;
+    currentTaskId?: string;
+    tasks?: Array<{
+      id: string;
+      title: string;
+      status: TaskLoopPlanStatus;
+      dependsOn?: string[];
+      criteria: Array<{
+        id: string;
+        description: string;
+        status: TaskLoopCriterionStatus;
+        evidence?: string;
+      }>;
+      toolHints?: string[];
+      attempts: number;
+      lastSummary?: string;
+    }>;
+    lastEvidenceKind?: TaskLoopEvidenceKind;
+    lastEvidenceTool?: string;
+    lastEvidenceTarget?: string;
+    lastProgressSummary?: string;
+    evidenceLog?: Array<{
+      step: number;
+      toolName: string;
+      kind: TaskLoopEvidenceKind;
+      quality: TaskLoopEvidenceQuality;
+      target?: string;
+      summary: string;
+    }>;
+    selfCheck?: {
+      status: TaskLoopSelfCheckStatus;
+      summary: string;
+      checkedAtStep: number;
+      missingCriteria?: string[];
+      latestEvidenceQuality?: TaskLoopEvidenceQuality;
+    };
+    needsFinalAnswer?: boolean;
+  };
   lastActionKind: BrainActionKind | null;
   lastToolName?: string;
   lastObservation?: {

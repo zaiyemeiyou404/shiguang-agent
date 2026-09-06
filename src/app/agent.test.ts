@@ -98,7 +98,7 @@ test("Agent caps automatic continuations to avoid runaway model spend", async ()
   });
 
   assert.equal(output.state.stopReason, "step_limit");
-  assert.equal(output.state.steps, 144);
+  assert.equal(output.state.steps, 360);
   assert.match(output.state.stopSummary ?? "", /避免继续消耗模型 token/);
 
   const events = await sink.list("run_auto_continue_guard");
@@ -106,7 +106,7 @@ test("Agent caps automatic continuations to avoid runaway model spend", async ()
     const payload = event.payload as { autoContinuation?: boolean };
     return event.kind === "system" && payload.autoContinuation === true;
   });
-  assert.equal(continuations.length, 1);
+  assert.equal(continuations.length, 4);
 });
 
 test("Agent profile allowlist limits the planner-visible tool registry", async () => {
@@ -157,6 +157,55 @@ test("Agent profile allowlist limits the planner-visible tool registry", async (
 
   assert.equal(output.state.stopReason, "respond");
   assert.deepEqual(seenToolNames[0], ["allowed_tool"]);
+});
+
+test("Agent emits task-loop progress events for the desktop run readout", async () => {
+  const planner: Planner = {
+    async decide(): Promise<BrainDecision> {
+      return {
+        action: { kind: "tool_call", toolName: "read_text_file", toolInput: { path: "README.md" } },
+        reasoning: "Read the requested file before answering.",
+      };
+    },
+  };
+
+  const sink = new InMemoryEventSink();
+  const agent = new Agent({
+    eventSink: sink,
+    planner,
+    tools: [testTool("read_text_file")],
+  });
+  const now = new Date("2026-01-01T00:00:00.000Z");
+  const output = await agent.run({
+    runId: "run_task_loop_events",
+    userMessage: "analyze README.md",
+    contextInput: {
+      task: {
+        id: "task_task_loop_events",
+        sessionId: "sess_task_loop_events",
+        parentTaskId: null,
+        title: "Task loop events",
+        description: null,
+        status: "in_progress",
+        priority: 0,
+        createdAt: now,
+        updatedAt: now,
+      },
+      recentRuns: [],
+      linkedArtifacts: [],
+      memories: [],
+    },
+  });
+
+  assert.equal(output.state.workingMemory.taskLoop?.currentStep, "answer");
+  const events = await sink.list("run_task_loop_events");
+  const taskLoopEvents = events.filter((event) => {
+    const payload = event.payload as { phase?: unknown };
+    return event.kind === "tool_pipeline" && payload.phase === "task_loop";
+  });
+  assert.equal(taskLoopEvents.length >= 2, true);
+  assert.equal((taskLoopEvents[0]?.payload as { status?: unknown }).status, "initialized");
+  assert.equal((taskLoopEvents.at(-1)?.payload as { currentStep?: unknown }).currentStep, "answer");
 });
 
 function testTool(name: string): Tool {

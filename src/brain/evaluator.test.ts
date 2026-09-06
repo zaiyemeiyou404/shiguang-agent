@@ -50,3 +50,30 @@ test("BasicEvaluator pauses after repeated identical read-only tool calls", asyn
   assert.equal(action.reason, "no_progress");
   assert.match(action.summary ?? "", /连续 3 次执行了相同/);
 });
+
+test("BasicEvaluator includes actionable recovery advice for repeated directory discovery", async () => {
+  const evaluator = new BasicEvaluator();
+  const decision: BrainDecision = {
+    action: { kind: "tool_call", toolName: "list_directory", toolInput: { path: "." } },
+    reasoning: "List again.",
+  };
+  const history: ActionResult[] = [0, 1, 2].map(() => ({
+    action: decision.action,
+    ok: true,
+    output: { entries: [{ name: "README.md", kind: "file" }] },
+    metadata: {
+      category: "tool_observation",
+      summary: "listed workspace root",
+      retryable: false,
+      toolName: "list_directory",
+    },
+  }));
+
+  const action = await evaluator.evaluate(decision, history[2]!, history);
+
+  assert.equal(action.kind, "stop");
+  assert.equal(action.reason, "no_progress");
+  assert.match(action.summary ?? "", /没有新增证据/);
+  assert.match(action.summary ?? "", /read_text_file/);
+  assert.match(action.summary ?? "", /search_workspace/);
+});

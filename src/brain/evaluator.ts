@@ -93,10 +93,29 @@ function detectRepeatedNoProgress(history: ActionResult[]): string | null {
 
   return [
     `连续 3 次执行了相同的无写入工具动作：${latestToolName}。`,
-    "为避免重复工具循环和继续消耗模型 token，运行已暂停。",
+    "判断为没有新增证据；为避免重复工具循环和继续消耗模型 token，运行已暂停。",
     latest.metadata?.summary ? `最近结果：${latest.metadata.summary}` : null,
-    "请补充更具体的目标，或让 Agent 换一种检查路径继续。",
+    inferNoProgressAdvice(latestToolName),
   ].filter(Boolean).join(" ");
+}
+
+function inferNoProgressAdvice(toolName: string): string {
+  if (toolName === "web_search") {
+    return "建议下一步：如果已有候选链接，改用 web_fetch 抓取正文；如果没有候选链接，再换关键词搜索。";
+  }
+  if (toolName === "web_fetch") {
+    return "建议下一步：改用 web_search 寻找可访问的镜像/转载来源，或让用户补充页面正文。";
+  }
+  if (toolName === "list_directory") {
+    return "建议下一步：改用 read_text_file 读取关键文件，或用 search_workspace 精确定位目标文件。";
+  }
+  if (toolName === "read_text_file" || toolName === "stat_path") {
+    return "建议下一步：改用 search_workspace 按文件名/符号定位真实路径，避免重复读取错误路径。";
+  }
+  if (toolName === "inspect_project" || toolName === "code_map") {
+    return "建议下一步：读取入口文件、配置文件或用户点名文件，再形成结论。";
+  }
+  return "建议下一步：换一种工具或检查路径继续，而不是重复同一动作。";
 }
 
 function noProgressSignature(result: ActionResult): string {

@@ -48,7 +48,7 @@ type RunActivitySummary = {
 };
 
 type RunPhaseStep = {
-  key: "boot" | "plan" | "tool" | "reply";
+  key: string;
   label: string;
   status: "done" | "active" | "idle" | "warn";
 };
@@ -61,6 +61,7 @@ type RunPhaseSummary = {
   elapsedLabel: string | null;
   silenceLabel: string | null;
   latestEventLabel: string | null;
+  progressPercent?: number;
 };
 
 type RunActivityTranscript = {
@@ -1291,6 +1292,7 @@ function buildRunActivityTranscript(events: DesktopEvent[]): RunActivityTranscri
 
   for (const event of events) {
     if (event.kind !== "tool_pipeline") continue;
+    if (isTaskLoopPipelineEvent(event)) continue;
     const payload = eventPayloadRecord(event);
     const phase = typeof payload.phase === "string" ? payload.phase : null;
     if (!phase) continue;
@@ -1875,12 +1877,123 @@ function toolPipelinePhase(event: DesktopEvent | null): string | null {
   return typeof phase === "string" ? phase : null;
 }
 
+function isTaskLoopPipelineEvent(event: DesktopEvent): boolean {
+  return event.kind === "tool_pipeline" && toolPipelinePhase(event) === "task_loop";
+}
+
+function latestTaskLoopPipelineEvent(events: DesktopEvent[]): DesktopEvent | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (isTaskLoopPipelineEvent(event)) return event;
+  }
+  return null;
+}
+
 function latestToolPipelineEvent(events: DesktopEvent[]): DesktopEvent | null {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index];
-    if (event.kind === "tool_pipeline") return event;
+    if (event.kind === "tool_pipeline" && !isTaskLoopPipelineEvent(event)) return event;
   }
   return null;
+}
+
+function summarizeTaskLoopPipelineEvent(event: DesktopEvent | null): {
+  label: string;
+  detail: string;
+  tone: SignalTone;
+  steps: RunPhaseStep[];
+  progressPercent: number;
+} | null {
+  if (!event || !isTaskLoopPipelineEvent(event)) return null;
+  const payload = eventPayloadRecord(event);
+  const taskSteps = Array.isArray(payload.tasks)
+    ? payload.tasks
+      .map((rawTask): RunPhaseStep | null => {
+        if (!rawTask || typeof rawTask !== "object") return null;
+        const task = rawTask as Record<string, unknown>;
+        const key = typeof task.id === "string" && task.id.trim() ? task.id.trim() : null;
+        const label = typeof task.title === "string" && task.title.trim() ? task.title.trim() : key;
+        const rawStatus = typeof task.status === "string" ? task.status : "pending";
+        const status: RunPhaseStep["status"] = rawStatus === "done"
+          ? "done"
+          : rawStatus === "active"
+            ? "active"
+            : rawStatus === "blocked"
+              ? "warn"
+              : "idle";
+        return key && label ? { key, label, status } : null;
+      })
+      .filter((step): step is RunPhaseStep => Boolean(step))
+    : [];
+  const planSteps = Array.isArray(payload.plan)
+    ? payload.plan
+      .map((rawStep): RunPhaseStep | null => {
+        if (!rawStep || typeof rawStep !== "object") return null;
+        const step = rawStep as Record<string, unknown>;
+        const key = typeof step.id === "string" && step.id.trim() ? step.id.trim() : null;
+        const label = typeof step.title === "string" && step.title.trim() ? step.title.trim() : key;
+        const rawStatus = typeof step.status === "string" ? step.status : "pending";
+        const status: RunPhaseStep["status"] = rawStatus === "done"
+          ? "done"
+          : rawStatus === "active"
+            ? "active"
+            : rawStatus === "blocked"
+              ? "warn"
+              : "idle";
+        return key && label ? { key, label, status } : null;
+      })
+      .filter((step): step is RunPhaseStep => Boolean(step))
+    : [];
+  const plan = taskSteps.length > 0 ? taskSteps : planSteps;
+  const status = typeof payload.status === "string" ? payload.status : null;
+  const currentStepTitle = typeof payload.currentTaskTitle === "string" && payload.currentTaskTitle.trim()
+    ? payload.currentTaskTitle.trim()
+    : typeof payload.currentStepTitle === "string" && payload.currentStepTitle.trim()
+      ? payload.currentStepTitle.trim()
+    : null;
+  const summary = typeof payload.summary === "string" && payload.summary.trim()
+    ? payload.summary.trim()
+    : null;
+  const latestEvidence = payload.latestEvidence && typeof payload.latestEvidence === "object"
+    ? payload.latestEvidence as Record<string, unknown>
+    : null;
+  const currentCriterion = payload.currentCriterion && typeof payload.currentCriterion === "object"
+    ? payload.currentCriterion as Record<string, unknown>
+    : null;
+  const latestEvidenceSummary = typeof latestEvidence?.summary === "string" && latestEvidence.summary.trim()
+    ? latestEvidence.summary.trim()
+    : null;
+  const currentCriterionDetail = typeof currentCriterion?.description === "string" && currentCriterion.description.trim()
+    ? `待满足：${currentCriterion.description.trim()}`
+    : null;
+  const currentLabel = currentStepTitle
+    ?? plan.find((step) => step.status === "active" || step.status === "warn")?.label
+    ?? "任务循环";
+  const baseDetail = summary ?? latestEvidenceSummary ?? "正在根据目标、证据和工具结果决定下一步。";
+  const detail = currentCriterionDetail && !baseDetail.includes(currentCriterionDetail)
+    ? `${baseDetail} · ${currentCriterionDetail}`
+    : baseDetail;
+  const tone: SignalTone = status === "blocked"
+    ? "warn"
+    : status === "finalized"
+      ? "success"
+      : "accent";
+  const doneCount = plan.filter((step) => step.status === "done").length;
+  const activeIndex = plan.findIndex((step) => step.status === "active" || step.status === "warn");
+  const progressPercent = plan.length > 0
+    ? Math.max(8, Math.min(96, Math.round(((doneCount + (activeIndex >= 0 ? 0.55 : 0.2)) / plan.length) * 100)))
+    : 35;
+
+  return {
+    label: status === "finalized" ? "任务已收束" : currentLabel,
+    detail,
+    tone,
+    steps: plan.length > 0 ? plan : [
+      { key: "collect_evidence", label: "收集证据", status: "active" },
+      { key: "answer", label: "形成反馈", status: "idle" },
+    ],
+    progressPercent,
+  };
 }
 
 function summarizeToolPipelineEvent(event: DesktopEvent | null): {
@@ -2453,6 +2566,7 @@ function describeRunActivity(
   const latestAssistantMessage = [...events].reverse().find((event) => event.kind === "message" && eventPayloadRecord(event).role !== "user") ?? null;
   const latestErrorEvent = [...events].reverse().find((event) => event.kind === "error") ?? null;
   const pendingApproval = pendingApprovals.find((approval) => approval.runId === run.id) ?? null;
+  const latestTaskLoopSummary = summarizeTaskLoopPipelineEvent(latestTaskLoopPipelineEvent(events));
   const latestPipelineSummary = summarizeToolPipelineEvent(latestToolPipelineEvent(events));
   const latestPendingToolCall = findLatestToolCallWithoutResult(events);
   const latestToolResult = [...events].reverse().find((event) => event.kind === "tool_result") ?? null;
@@ -2482,6 +2596,10 @@ function describeRunActivity(
       ? payload.message
       : (run.reason ?? "时间线记录了一次错误事件。") ;
     tone = "danger";
+  } else if (latestTaskLoopSummary && (run.status === "running" || run.status === "pending")) {
+    label = latestTaskLoopSummary.label;
+    detail = latestTaskLoopSummary.detail;
+    tone = latestTaskLoopSummary.tone;
   } else if (latestPipelineSummary && (run.status === "running" || run.status === "pending")) {
     label = latestPipelineSummary.label;
     detail = latestPipelineSummary.detail;
@@ -2561,6 +2679,7 @@ function describeRunPhase(
   const latestEvent = events[events.length - 1] ?? null;
   const latestThinkingEvent = [...events].reverse().find((event) => event.kind === "thinking") ?? null;
   const latestAssistantMessage = [...events].reverse().find((event) => event.kind === "message" && eventPayloadRecord(event).role !== "user") ?? null;
+  const latestTaskLoopSummary = summarizeTaskLoopPipelineEvent(latestTaskLoopPipelineEvent(events));
   const latestPipelineSummary = summarizeToolPipelineEvent(latestToolPipelineEvent(events));
   const latestPendingToolCall = findLatestToolCallWithoutResult(events);
   const latestToolResult = findLatestToolResult(events);
@@ -2589,6 +2708,12 @@ function describeRunPhase(
     label = "运行受阻";
     detail = run.reason ?? "最近一次运行在处理中遇到错误。";
     tone = "danger";
+  } else if (latestTaskLoopSummary && (run.status === "running" || run.status === "pending")) {
+    const activeTaskStep = latestTaskLoopSummary.steps.find((step) => step.status === "active" || step.status === "warn");
+    currentStep = activeTaskStep?.key ?? latestTaskLoopSummary.steps[0]?.key ?? "plan";
+    label = latestTaskLoopSummary.label;
+    detail = latestTaskLoopSummary.detail;
+    tone = latestTaskLoopSummary.tone;
   } else if (latestPipelineSummary && (run.status === "running" || run.status === "pending")) {
     currentStep = "tool";
     label = latestPipelineSummary.label;
@@ -2613,11 +2738,14 @@ function describeRunPhase(
     tone = run.status === "completed" ? "success" : "accent";
   }
 
-  const stepOrder: RunPhaseStep["key"][] = ["boot", "plan", "tool", "reply"];
+  const phaseSteps = latestTaskLoopSummary && (run.status === "running" || run.status === "pending")
+    ? latestTaskLoopSummary.steps
+    : baseSteps;
+  const stepOrder = phaseSteps.map((step) => step.key);
   const currentIndex = stepOrder.indexOf(currentStep);
-  const steps: RunPhaseStep[] = baseSteps.map((step, index) => ({
+  const steps: RunPhaseStep[] = phaseSteps.map((step, index) => ({
     ...step,
-    status: index < currentIndex ? "done" : index === currentIndex ? (tone === "warn" || tone === "danger" ? "warn" : "active") : "idle",
+    status: index < currentIndex ? "done" : index === currentIndex ? (tone === "warn" || tone === "danger" ? "warn" : "active") : step.status,
   }));
   if (run.status === "completed") {
     steps.forEach((step) => { step.status = "done"; });
@@ -2634,7 +2762,8 @@ function describeRunPhase(
     steps,
     elapsedLabel: Number.isFinite(startedMs) ? formatDurationFromMs(Date.now() - startedMs) : null,
     silenceLabel: Number.isFinite(latestMs) ? formatAgeFromTimestamp(latestTimestamp) : null,
-    latestEventLabel: latestEvent ? formatEventKindLabel(latestEvent.kind) : null,
+    latestEventLabel: latestEvent ? (isTaskLoopPipelineEvent(latestEvent) ? "任务循环" : formatEventKindLabel(latestEvent.kind)) : null,
+    progressPercent: latestTaskLoopSummary?.progressPercent,
   };
 }
 
@@ -2644,6 +2773,7 @@ function computeRunProgressPercent(run: DesktopRun | null, phase: RunPhaseSummar
   if (run.status === "failed" || run.status === "cancelled") return 100;
   if (run.status === "paused") return 76;
   if (run.status === "needs_approval") return 68;
+  if (typeof phase.progressPercent === "number") return phase.progressPercent;
 
   const activeIndex = phase.steps.findIndex((step) => step.status === "active" || step.status === "warn");
   const total = Math.max(phase.steps.length, 1);
@@ -3523,11 +3653,15 @@ function ApprovalReviewCard({
   approval,
   decisionState,
   executionState,
+  queuePosition,
+  queueTotal,
   onDecision,
 }: {
   approval: DesktopApproval;
   decisionState?: "approving" | "approved" | "denied";
   executionState?: ApprovalViewState;
+  queuePosition?: number;
+  queueTotal?: number;
   onDecision: (approvalId: string, decision: "granted" | "denied") => void;
 }) {
   const requestSummary = summarizeApprovalRequest(approval.request);
@@ -3556,7 +3690,9 @@ function ApprovalReviewCard({
       <div className="approval-review-head">
         <div className="approval-review-icon">!</div>
         <div className="approval-review-title">
-          <span className="tiny">权限审查 · 单次授权</span>
+          <span className="tiny">
+            权限审查 · 单次授权{queuePosition && queueTotal ? ` · 队列 ${queuePosition}/${queueTotal}` : ""}
+          </span>
           <h3>{approvalActionLabel(approval, requestSummary)}</h3>
           <p className="muted">{requestSummary.reason ?? risk.detail}</p>
         </div>
@@ -4872,6 +5008,19 @@ export default function App() {
       && (sessionTurns.length === 0 || (latestSessionRun?.id ?? null) === (activeRunId ?? null)),
   );
   const pendingApprovals = workspaceSnapshot?.pendingApprovals ?? [];
+  const approvalQueue = useMemo(() => {
+    return [...pendingApprovals].sort((a, b) => {
+      const aPending = a.status === "pending" ? 1 : 0;
+      const bPending = b.status === "pending" ? 1 : 0;
+      if (aPending !== bPending) return bPending - aPending;
+      const aTime = a.decidedAt ? Date.parse(a.decidedAt) : Number.NaN;
+      const bTime = b.decidedAt ? Date.parse(b.decidedAt) : Number.NaN;
+      if (Number.isFinite(aTime) && Number.isFinite(bTime) && aTime !== bTime) return aTime - bTime;
+      if (Number.isFinite(aTime) && !Number.isFinite(bTime)) return -1;
+      if (!Number.isFinite(aTime) && Number.isFinite(bTime)) return 1;
+      return a.id.localeCompare(b.id);
+    });
+  }, [pendingApprovals]);
   const artifacts = workspaceSnapshot?.artifacts ?? [];
   const sortedEvents = useMemo(() => [...deferredEvents].sort((a, b) => a.seq - b.seq), [deferredEvents]);
   const liveRunUsageSummary = useMemo(() => summarizeModelUsage(sortedEvents), [sortedEvents]);
@@ -6536,18 +6685,20 @@ export default function App() {
           {surface === "approval" ? (
             <>
               <section className="approval-main">
-                <div className="section-title"><h3>待审批中心</h3><span className="tiny">{pendingApprovals.length} 个待处理</span></div>
-                {pendingApprovals.length === 0 ? (
+                <div className="section-title"><h3>待审批中心</h3><span className="tiny">{approvalQueue.length} 个待处理</span></div>
+                {approvalQueue.length === 0 ? (
                   <div className="detail-block home-summary-block">
                     <p className="muted">当前没有待审批动作。后续涉及终端、写文件或发布等高风险动作时，会统一出现在这里。</p>
                   </div>
                 ) : (
                   <div className="approval-main-list">
-                    {pendingApprovals.map((approval) => (
+                    {approvalQueue.map((approval, index) => (
                       <ApprovalReviewCard
                         key={approval.id}
                         approval={approval}
                         decisionState={decisionState[approval.id]}
+                        queuePosition={index + 1}
+                        queueTotal={approvalQueue.length}
                         onDecision={handleApprovalDecision}
                       />
                     ))}
@@ -6775,13 +6926,15 @@ export default function App() {
                 <h4>待审批</h4>
                 <span className="tiny">{pendingApprovals.length}</span>
               </div>
-              {pendingApprovals.length === 0 ? <p className="muted">当前没有待审批动作。</p> : (
+              {approvalQueue.length === 0 ? <p className="muted">当前没有待审批动作。</p> : (
                 <div className="inspector-stack">
-                  {pendingApprovals.map((approval) => (
+                  {approvalQueue.map((approval, index) => (
                     <ApprovalReviewCard
                       key={approval.id}
                       approval={approval}
                       decisionState={decisionState[approval.id]}
+                      queuePosition={index + 1}
+                      queueTotal={approvalQueue.length}
                       onDecision={handleApprovalDecision}
                     />
                   ))}
