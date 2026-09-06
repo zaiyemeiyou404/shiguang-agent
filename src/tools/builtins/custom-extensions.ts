@@ -451,10 +451,8 @@ function normalizeAvailableToolNames(tools: CustomSkillSelectionContext["availab
 
 function scoreCustomSkill(skill: CustomSkill, context?: CustomSkillSelectionContext): number {
   if (!skill.enabled || !skill.instructions.trim()) return Number.NEGATIVE_INFINITY;
-  const text = [
-    context?.userMessage ?? "",
-    context?.workspaceRoot ?? "",
-  ].join("\n").toLowerCase();
+  const messageText = (context?.userMessage ?? "").toLowerCase();
+  const workspaceText = (context?.workspaceRoot ?? "").toLowerCase();
   const availableTools = normalizeAvailableToolNames(context?.availableTools);
   let score = skill.priority;
 
@@ -464,17 +462,36 @@ function scoreCustomSkill(skill: CustomSkill, context?: CustomSkillSelectionCont
   if (skill.layer === "session") score += 12;
   if (skill.layer === "task") score += 20;
 
-  const haystack = `${text}\n${Array.from(availableTools).join("\n").toLowerCase()}`;
+  const toolText = Array.from(availableTools).join("\n").toLowerCase();
   const triggers = skill.triggers.map((trigger) => trigger.toLowerCase()).filter(Boolean);
   if (triggers.length > 0) {
-    const matches = triggers.filter((trigger) => haystack.includes(trigger));
-    if (matches.length === 0 && skill.layer !== "global") return Number.NEGATIVE_INFINITY;
-    score += matches.length * 28;
+    const messageMatches = triggers.filter((trigger) => messageText.includes(trigger));
+    const workspaceMatches = triggers.filter((trigger) => workspaceText.includes(trigger));
+    const toolMatches = triggers.filter((trigger) => toolText.includes(trigger));
+    const allowWorkspaceTrigger = skill.layer === "project" && !isStandaloneWebRequest(context?.userMessage ?? "");
+    const effectiveMatches = [
+      ...messageMatches,
+      ...(allowWorkspaceTrigger ? workspaceMatches : []),
+      ...toolMatches,
+    ];
+    if (effectiveMatches.length === 0 && skill.layer !== "global") return Number.NEGATIVE_INFINITY;
+    score += new Set(effectiveMatches).size * 28;
   }
 
   if (skill.scope && availableTools.has(skill.scope)) score += 35;
-  if (skill.scope && haystack.includes(skill.scope.toLowerCase())) score += 24;
+  if (skill.scope && `${messageText}\n${allowScopeWorkspaceBoost(skill, context?.userMessage ?? "") ? workspaceText : ""}`.includes(skill.scope.toLowerCase())) score += 24;
   return score;
+}
+
+function isStandaloneWebRequest(message: string): boolean {
+  const text = message.toLowerCase();
+  const hasWebSignal = /https?:\/\/|联网|网页|网址|链接|搜索|搜一下|查一下|正文|文章|新闻|博客|web|url|link|article|news|search/.test(text);
+  if (!hasWebSignal) return false;
+  return !/项目|工程|仓库|代码|文件|目录|工作区|修改|修复|运行|测试|构建|project|repo|code|file|workspace|fix|edit|build|test/.test(text);
+}
+
+function allowScopeWorkspaceBoost(skill: CustomSkill, message: string): boolean {
+  return skill.layer === "project" && !isStandaloneWebRequest(message);
 }
 
 export function selectCustomSkills(skills: CustomSkill[], context?: CustomSkillSelectionContext): CustomSkill[] {

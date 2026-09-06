@@ -114,6 +114,41 @@ test("custom skills support layered trigger-based selection", async () => {
   assert.doesNotMatch(prompt, /Focus on Python code quality/);
 });
 
+test("custom skill selection does not leak project skills into standalone web requests", async () => {
+  const {
+    createCustomExtensionTools,
+    loadCustomSkills,
+    selectCustomSkills,
+  } = await loadModule();
+  const extensionRoot = await makeExtensionRoot();
+  const createSkill = createCustomExtensionTools(extensionRoot).find((tool) => tool.descriptor.name === "create_custom_skill");
+  assert.ok(createSkill);
+
+  await createSkill.execute({
+    name: "xdyou maintainer",
+    description: "Maintain XDYou Flutter project",
+    layer: "project",
+    triggers: ["traintime_pda-main", "watermeter", "xdyou"],
+    priority: 90,
+    instructions: "Use XDYou project maintenance workflow.",
+  });
+
+  const skills = loadCustomSkills(extensionRoot);
+  const selectedForProject = selectCustomSkills(skills, {
+    userMessage: "继续分析这个项目",
+    workspaceRoot: "G:/projects/worktest/traintime_pda-main",
+    availableTools: ["read_text_file", "code_map"],
+  });
+  assert.deepEqual(selectedForProject.map((skill) => skill.name), ["xdyou_maintainer"]);
+
+  const selectedForWeb = selectCustomSkills(skills, {
+    userMessage: "看一下这个 https://www.sohu.com/a/899892876_121968518",
+    workspaceRoot: "G:/projects/worktest/traintime_pda-main",
+    availableTools: ["web_fetch", "web_search"],
+  });
+  assert.deepEqual(selectedForWeb.map((skill) => skill.name), []);
+});
+
 test("default web article reader skill is seeded and selected for URLs", async () => {
   const {
     ensureDefaultCustomSkills,
