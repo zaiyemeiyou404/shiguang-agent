@@ -1722,6 +1722,7 @@ export async function runLoop(
     usage: context?.initialUsage ?? emptyRunTokenUsage(),
   };
   input = { ...input, history: state.history, workingMemory: state.workingMemory };
+  const initialHistoryLength = state.history.length;
   await emitTaskLoopProgress(context, state, "initialized", "Task loop initialized.");
 
   for (let i = seededSteps; i < maxSteps; i++) {
@@ -1803,11 +1804,65 @@ export async function runLoop(
     await emitTaskLoopProgress(context, state, "finalized", state.stopSummary);
   }
   if (!state.stopReason && state.steps >= maxSteps) {
+    if (finalizeReadyTaskLoopAtStepLimit(state, input, maxSteps, initialHistoryLength)) {
+      await emitTaskLoopProgress(context, state, "finalized", state.stopSummary ?? "Run completed at the step boundary.");
+      return state;
+    }
     state.stopReason = "step_limit";
     state.stopSummary = buildStepLimitStopSummary(state, maxSteps);
     await emitTaskLoopProgress(context, state, "checkpoint", state.stopSummary);
   }
   return state;
+}
+
+function finalizeReadyTaskLoopAtStepLimit(state: LoopState, input: BrainInput, maxSteps: number, initialHistoryLength: number): boolean {
+  if (state.stopReason) return false;
+  if (!state.lastResult?.ok) return false;
+  const taskLoop = state.workingMemory.taskLoop;
+  if (!taskLoop) return false;
+  const previousHistory = state.history.length > initialHistoryLength
+    ? state.history.slice(0, -1)
+    : state.history;
+  const wasReadyBeforeLatestStep = hasFinalFeedbackEvidenceForTaskLoop(taskLoop.mode, previousHistory, null);
+  if (!wasReadyBeforeLatestStep || !isTaskLoopReadyForFinalFeedback(state.workingMemory, state.history, state.lastResult)) return false;
+
+  const content = buildStepLimitReadyFeedback(input, state.lastResult, maxSteps);
+  if (!content) return false;
+
+  const action: BrainDecision["action"] = { kind: "respond", content };
+  const result: ActionResult = {
+    action,
+    ok: true,
+    output: content,
+    metadata: {
+      category: "assistant_response",
+      summary: content,
+      retryable: false,
+      syntheticFinalFeedback: true,
+    },
+  };
+
+  state.lastDecision = {
+    action,
+    reasoning: "Runtime reached the step boundary but the task-loop evidence gate was ready, so it returned final feedback instead of pausing.",
+  };
+  state.lastResult = result;
+  state.history.push(result);
+  state.workingMemory = updateWorkingMemory(state.workingMemory, state.steps, result);
+  state.stopReason = "respond";
+  state.stopSummary = content;
+  return true;
+}
+
+function buildStepLimitReadyFeedback(input: BrainInput, lastResult: ActionResult, maxSteps: number): string | null {
+  const summary = summarizeReadOnlyObservation(lastResult, latestUserMessage(input))
+    ?? observationSummary(lastResult).trim();
+  if (!summary) return null;
+
+  return [
+    `本轮 ${maxSteps} 步预算刚好用完，但已经拿到足够证据，我直接给出当前结论，不再停在“继续工作”。`,
+    summary,
+  ].join("\n\n");
 }
 
 function buildStepLimitStopSummary(state: LoopState, maxSteps: number): string {
@@ -2002,7 +2057,8 @@ function hasFinalFeedbackEvidenceForTaskLoop(
     return recent.some((result) => {
       if (!result.ok || result.action.kind !== "tool_call") return false;
       const toolName = result.metadata?.toolName ?? result.action.toolName;
-      return toolName === "web_fetch" && hasTaskLoopWebBodyEvidence(result.output);
+      return (toolName === "web_fetch" && hasTaskLoopWebBodyEvidence(result.output))
+        || (toolName === "web_extract_links" && hasTaskLoopExtractedLinks(result.output));
     });
   }
   if (mode === "edit" || mode === "validation") {
@@ -2015,7 +2071,9 @@ function hasFinalFeedbackEvidenceForTaskLoop(
   return recent.some((result) => {
     if (!result.ok || result.action.kind !== "tool_call") return false;
     const toolName = result.metadata?.toolName ?? result.action.toolName;
-    return toolName === "read_text_file" || toolName === "completion_check";
+    return toolName === "read_text_file"
+      || toolName === "read_many_files"
+      || toolName === "completion_check";
   });
 }
 
@@ -2639,6 +2697,23 @@ function summarizeReadOnlyObservation(result: ActionResult, message: string): st
     return `已读取 ${path}。${truncated}\n\n${preview}`;
   }
 
+  if (toolName === "read_many_files") {
+    const output = result.output as { files?: Array<{ path?: unknown; ok?: unknown; content?: unknown; error?: unknown }>; truncated?: unknown } | null;
+    const files = Array.isArray(output?.files) ? output.files : [];
+    const readable = files
+      .filter((file) => file?.ok === true && typeof file.content === "string" && file.content.trim().length > 0)
+      .slice(0, 4);
+    if (readable.length === 0) return result.metadata?.summary ?? "已批量读取文件，但没有拿到可读文本内容。";
+    const previews = readable.map((file) => {
+      const path = typeof file.path === "string" ? file.path : "目标文件";
+      const content = typeof file.content === "string" ? file.content.trim().slice(0, 420) : "";
+      return `- ${path}\n${content}`;
+    });
+    const failedCount = files.filter((file) => file?.ok === false).length;
+    const suffix = failedCount > 0 ? `\n\n另有 ${failedCount} 个文件读取失败，我会优先基于已读成功的文件继续。` : "";
+    return `已批量读取 ${readable.length} 个关键文件：\n\n${previews.join("\n\n")}${suffix}`;
+  }
+
   if (toolName === "web_fetch") {
     const output = result.output as {
       url?: unknown;
@@ -2670,6 +2745,27 @@ function summarizeReadOnlyObservation(result: ActionResult, message: string): st
     return `已抓取 ${title}${url ? `：${url}` : ""}。\n\n${preview || "页面返回了内容，但没有提取到稳定正文。可以换一个链接，或让我继续尝试从 HTML 候选块里筛正文。"}${truncated}`;
   }
 
+  if (toolName === "web_extract_links") {
+    const output = result.output as { sourceUrl?: unknown; baseUrl?: unknown; links?: Array<{ title?: unknown; url?: unknown; text?: unknown; score?: unknown }> } | null;
+    const sourceUrl = typeof output?.sourceUrl === "string"
+      ? output.sourceUrl
+      : typeof output?.baseUrl === "string"
+        ? output.baseUrl
+        : "当前页面";
+    const links = Array.isArray(output?.links) ? output.links : [];
+    if (links.length === 0) return `已检查 ${sourceUrl} 的链接候选，但没有找到明显的正文/全文入口。`;
+    const lines = links.slice(0, 6).map((link, index) => {
+      const label = typeof link.title === "string" && link.title.trim()
+        ? link.title.trim()
+        : typeof link.text === "string" && link.text.trim()
+          ? link.text.trim()
+          : "候选链接";
+      const url = typeof link.url === "string" ? link.url : "";
+      return `${index + 1}. ${label}${url ? `\n   ${url}` : ""}`;
+    });
+    return `已从 ${sourceUrl} 提取候选链接，下一步应优先抓取最像正文/全文的链接：\n${lines.join("\n")}`;
+  }
+
   if (toolName === "web_search") {
     const output = result.output as { query?: unknown; provider?: unknown; results?: Array<{ title?: unknown; url?: unknown; snippet?: unknown }> } | null;
     const query = typeof output?.query === "string" ? output.query : message.trim();
@@ -2689,6 +2785,19 @@ function summarizeReadOnlyObservation(result: ActionResult, message: string): st
     return result.metadata?.summary
       ? `已完成 ${toolName}：${result.metadata.summary}`
       : `已完成 ${toolName}，但结果较结构化，请补充你要看的具体文件或目标，我会接着分析。`;
+  }
+
+  if (toolName === "find_files") {
+    const output = result.output as { query?: unknown; results?: Array<{ path?: unknown; kind?: unknown; score?: unknown }> } | null;
+    const query = typeof output?.query === "string" ? output.query : message.trim();
+    const results = Array.isArray(output?.results) ? output.results : [];
+    if (results.length === 0) return `已查找「${query}」，但没有定位到匹配文件。`;
+    const lines = results.slice(0, 6).map((item, index) => {
+      const path = typeof item.path === "string" ? item.path : "未知路径";
+      const kind = typeof item.kind === "string" ? ` (${item.kind})` : "";
+      return `${index + 1}. ${path}${kind}`;
+    });
+    return `已定位到这些候选文件：\n${lines.join("\n")}`;
   }
 
   return result.metadata?.summary ?? null;

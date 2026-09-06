@@ -113,9 +113,19 @@ function inferTaskLoopGateDecision(
 
 function isTaskLoopProgressTool(toolName?: string): boolean {
   return toolName === "read_text_file"
+    || toolName === "read_many_files"
+    || toolName === "find_files"
     || toolName === "code_map"
+    || toolName === "dependency_graph"
+    || toolName === "symbol_search"
+    || toolName === "web_search"
     || toolName === "web_fetch"
-    || toolName === "inspect_project";
+    || toolName === "web_extract_links"
+    || toolName === "inspect_project"
+    || toolName === "list_directory"
+    || toolName === "search_workspace"
+    || toolName === "run_validation"
+    || toolName === "completion_check";
 }
 
 function inferCompletionJudgmentDecision(
@@ -695,6 +705,14 @@ function decideByPhase(
       const webLookupResponse = inferCompletedWebLookupResponse(input, lastResult);
       if (webLookupResponse) return webLookupResponse;
 
+      const projectBatchRead = inferProjectAnalysisBatchRead(input, message);
+      if (projectBatchRead) {
+        return {
+          action: { kind: "tool_call", toolName: "read_many_files", toolInput: { paths: projectBatchRead.paths } },
+          reasoning: `Phase summarize: project analysis has multiple key files; batch reading ${projectBatchRead.paths.join(", ")} to reduce tool rounds.`,
+        };
+      }
+
       const projectFollowupRead = inferProjectAnalysisFollowupRead(input, message);
       if (projectFollowupRead) {
         return {
@@ -984,6 +1002,23 @@ function inferFollowupRead(
 
 const MAX_PROJECT_ANALYSIS_KEY_READS = 3;
 
+function inferProjectAnalysisBatchRead(
+  input: BrainInput,
+  message: string,
+): { paths: string[] } | null {
+  if (!hasTool(input.availableTools, "read_many_files")) return null;
+  if (isSpecificLookupIntent(message)) return null;
+  if (!isProjectAnalysisIntent(message) && !hasProjectShapeEvidence(input.history)) return null;
+  if (hasRecentTool(input.history, "read_many_files")) return null;
+  if (countKeyFileReadCalls(input.history) >= MAX_PROJECT_ANALYSIS_KEY_READS) return null;
+
+  const readPaths = collectReadPaths(input.history);
+  const candidates = collectKeyReadCandidates(input.history)
+    .filter((path) => !readPaths.has(path))
+    .slice(0, MAX_PROJECT_ANALYSIS_KEY_READS);
+  return candidates.length >= 2 ? { paths: candidates } : null;
+}
+
 function inferProjectAnalysisFollowupRead(
   input: BrainInput,
   message: string,
@@ -991,7 +1026,7 @@ function inferProjectAnalysisFollowupRead(
   if (!hasTool(input.availableTools, "read_text_file")) return null;
   if (isSpecificLookupIntent(message)) return null;
   if (!isProjectAnalysisIntent(message) && !hasProjectShapeEvidence(input.history)) return null;
-  if (countReadTextFileCalls(input.history) >= MAX_PROJECT_ANALYSIS_KEY_READS) return null;
+  if (countKeyFileReadCalls(input.history) >= MAX_PROJECT_ANALYSIS_KEY_READS) return null;
 
   const keyPath = inferNextKeyReadPath(input.history);
   return keyPath ? { path: keyPath } : null;
@@ -1002,7 +1037,7 @@ function inferProjectAnalysisCodeMap(input: BrainInput, message: string): BrainD
   if (isSpecificLookupIntent(message)) return null;
   if (!isProjectAnalysisIntent(message) && !hasProjectShapeEvidence(input.history)) return null;
   if (hasRecentTool(input.history, "code_map")) return null;
-  if (!hasProjectShapeEvidence(input.history) && countReadTextFileCalls(input.history) === 0) return null;
+  if (!hasProjectShapeEvidence(input.history) && countKeyFileReadCalls(input.history) === 0) return null;
 
   return {
     action: { kind: "tool_call", toolName: "code_map", toolInput: { maxFiles: 1200, includeTests: false } },
@@ -1011,13 +1046,7 @@ function inferProjectAnalysisCodeMap(input: BrainInput, message: string): BrainD
 }
 
 function inferNextKeyReadPath(history: ActionResult[]): string | null {
-  const readPaths = new Set(
-    history
-      .map((result) => result.action.kind === "tool_call" && result.action.toolName === "read_text_file"
-        ? inferReadPath(result)
-        : null)
-      .filter((path): path is string => typeof path === "string" && path.length > 0),
-  );
+  const readPaths = collectReadPaths(history);
   return collectKeyReadCandidates(history).find((path) => !readPaths.has(path)) ?? null;
 }
 
@@ -1126,18 +1155,58 @@ function stableJson(value: unknown): string {
   return `{${entries.join(",")}}`;
 }
 
-function countReadTextFileCalls(history: ActionResult[]): number {
-  return history.filter((result) => result.ok && result.action.kind === "tool_call" && result.action.toolName === "read_text_file").length;
+function countKeyFileReadCalls(history: ActionResult[]): number {
+  let total = 0;
+  for (const result of history) {
+    if (!result.ok || result.action.kind !== "tool_call") continue;
+    if (result.action.toolName === "read_text_file") total += 1;
+    if (result.action.toolName === "read_many_files") total += inferReadManyPaths(result).length;
+  }
+  return total;
+}
+
+function collectReadPaths(history: ActionResult[]): Set<string> {
+  const paths = new Set<string>();
+  for (const result of history) {
+    if (!result.ok || result.action.kind !== "tool_call") continue;
+    if (result.action.toolName === "read_text_file") {
+      const path = inferReadPath(result);
+      if (path) paths.add(path);
+    }
+    if (result.action.toolName === "read_many_files") {
+      for (const path of inferReadManyPaths(result)) paths.add(path);
+    }
+  }
+  return paths;
+}
+
+function inferReadManyPaths(result: ActionResult): string[] {
+  const paths: string[] = [];
+  const input = result.action.kind === "tool_call" && result.action.toolInput && typeof result.action.toolInput === "object"
+    ? (result.action.toolInput as { paths?: unknown }).paths
+    : null;
+  if (Array.isArray(input)) {
+    for (const path of input) {
+      if (typeof path === "string" && path.trim()) paths.push(toPlannerPortablePath(path.trim()));
+    }
+  }
+  const output = result.output && typeof result.output === "object" && !Array.isArray(result.output)
+    ? (result.output as { files?: Array<{ path?: unknown; ok?: unknown }> }).files
+    : null;
+  if (Array.isArray(output)) {
+    for (const file of output) {
+      if (file?.ok === true && typeof file.path === "string" && file.path.trim()) {
+        paths.push(toPlannerPortablePath(file.path.trim()));
+      }
+    }
+  }
+  return uniqueCompact(paths);
 }
 
 function summarizeProjectAnalysis(history: ActionResult[], message: string): string | null {
   if (isSpecificLookupIntent(message)) return null;
   if (!isProjectAnalysisIntent(message) && !hasProjectShapeEvidence(history)) return null;
-  const readPaths = uniqueCompact(
-    history
-      .map((result) => result.action.kind === "tool_call" && result.action.toolName === "read_text_file" ? inferReadPath(result) : null)
-      .filter((path): path is string => typeof path === "string" && path.length > 0),
-  );
+  const readPaths = Array.from(collectReadPaths(history));
   const hasStrongProjectEvidence = hasProjectShapeEvidence(history)
     || readPaths.some((path) => scoreKeyReadPath(path) >= 100)
     || Boolean(findLatestToolOutput(history, "code_map"))

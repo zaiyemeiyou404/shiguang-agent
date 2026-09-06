@@ -88,6 +88,93 @@ test("runLoop pauses with step_limit when the step budget is exhausted", async (
   assert.equal(state.history.length, 2);
 });
 
+test("runLoop finalizes at the step boundary when task-loop evidence is ready", async () => {
+  const seededReadMany: ActionResult = {
+    action: { kind: "tool_call", toolName: "read_many_files", toolInput: { paths: ["package.json", "README.md"] } },
+    ok: true,
+    output: {
+      files: [
+        { path: "package.json", ok: true, content: "{\"name\":\"demo\"}", truncated: false, bytes: 15 },
+        { path: "README.md", ok: true, content: "# Demo\nA test project.", truncated: false, bytes: 22 },
+      ],
+      totalFiles: 2,
+      failed: 0,
+    },
+    metadata: {
+      category: "tool_observation",
+      summary: "Read 2 file(s).",
+      retryable: false,
+      toolName: "read_many_files",
+    },
+  };
+  const decision: BrainDecision = {
+    action: { kind: "tool_call", toolName: "list_directory", toolInput: { path: "." } },
+    reasoning: "This should not be needed.",
+  };
+
+  const state = await runLoop(
+    {
+      context: makeContext("分析这个项目"),
+      runId: "run_step_limit_ready_feedback",
+      priorTurns: [],
+      history: [seededReadMany],
+      workingMemory: {
+        step: 1,
+        phase: "summarize",
+        lastActionKind: "tool_call",
+        lastToolName: "read_many_files",
+        taskLoop: {
+          objective: "分析这个项目",
+          mode: "workspace",
+          evidenceCount: 1,
+          completionGateCount: 0,
+          currentTaskId: "answer",
+          needsFinalAnswer: true,
+        },
+      },
+      availableTools: [],
+    },
+    {
+      planner: {
+        async decide(): Promise<BrainDecision> {
+          return decision;
+        },
+      },
+      policy: {
+        async check(next): Promise<BrainDecision> {
+          return next;
+        },
+      },
+      dispatcher: {
+        async dispatch(next): Promise<ActionResult> {
+          return {
+            action: next.action,
+            ok: true,
+            output: { entries: [] },
+            metadata: {
+              category: "tool_observation",
+              summary: "Listed directory.",
+              retryable: false,
+              toolName: next.action.toolName,
+            },
+          };
+        },
+      },
+      evaluator: {
+        async evaluate() {
+          return { kind: "continue" } as const;
+        },
+      },
+    },
+    1,
+  );
+
+  assert.equal(state.steps, 1);
+  assert.equal(state.stopReason, "respond");
+  assert.match(state.stopSummary ?? "", /已经拿到足够证据/);
+  assert.match(state.stopSummary ?? "", /已批量读取 2 个关键文件/);
+});
+
 test("runLoop starts a fresh task-loop for a standalone new task", async () => {
   const staleResult: ActionResult = {
     action: { kind: "tool_call", toolName: "web_fetch", toolInput: { url: "https://old.example.test" } },

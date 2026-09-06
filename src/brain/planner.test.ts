@@ -1931,6 +1931,53 @@ test("RulePlanner reads key project files after a directory listing instead of s
   assert.deepEqual(decision.action.toolInput, { path: "pubspec.yaml" });
 });
 
+test("RulePlanner batch reads key project files when read_many_files is available", async () => {
+  const planner = new RulePlanner();
+  const availableTools: ToolDescriptor[] = [
+    {
+      name: "read_text_file",
+      description: "Reads a file",
+      inputSchema: { type: "object" },
+      risk: "read",
+    },
+    {
+      name: "read_many_files",
+      description: "Reads several files",
+      inputSchema: { type: "object" },
+      risk: "read",
+    },
+  ];
+
+  const decision = await planner.decide(makeInput([
+    {
+      action: { kind: "tool_call", toolName: "inspect_project", toolInput: {} },
+      ok: true,
+      output: {
+        topLevelEntries: [
+          { name: "package.json", path: "package.json", kind: "file", size: 1200 },
+          { name: "README.md", path: "README.md", kind: "file", size: 800 },
+          { name: "src", path: "src", kind: "directory", size: 0 },
+        ],
+      },
+      metadata: {
+        category: "tool_observation",
+        summary: "inspected project",
+        retryable: false,
+        toolName: "inspect_project",
+      },
+    },
+  ], availableTools, "看一下这个项目", {
+    step: 1,
+    phase: "summarize",
+    lastActionKind: "tool_call",
+    lastToolName: "inspect_project",
+  }));
+
+  assert.equal(decision.action.kind, "tool_call");
+  assert.equal(decision.action.toolName, "read_many_files");
+  assert.deepEqual(decision.action.toolInput, { paths: ["package.json", "README.md"] });
+});
+
 test("RulePlanner runs code_map before final project summary when key config was read", async () => {
   const planner = new RulePlanner();
   const availableTools: ToolDescriptor[] = [
