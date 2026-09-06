@@ -340,3 +340,67 @@ test("selectToolsForPlanner pivots from weak directory discovery to key file evi
   assert.ok(selected.includes("read_text_file") || selected.includes("code_map"), `selected tools: ${selected.join(", ")}`);
   assert.ok(!selected.includes("list_directory"), `selected tools: ${selected.join(", ")}`);
 });
+
+test("selectToolsForPlanner keeps explicit URL intent ahead of stale workspace evidence", () => {
+  const tools = [
+    makeTool("inspect_project"),
+    makeTool("list_directory"),
+    makeTool("read_text_file"),
+    makeTool("search_workspace"),
+    makeTool("web_search", "Search web pages"),
+    makeTool("web_fetch", "Fetch a web page"),
+  ];
+  const history: BrainInput["history"] = [{
+    action: { kind: "tool_call", toolName: "list_directory", toolInput: { path: "." } },
+    ok: true,
+    output: { entries: [{ name: "pubspec.yaml", kind: "file" }] },
+    metadata: {
+      category: "tool_observation",
+      summary: "listed workspace files",
+      retryable: false,
+      toolName: "list_directory",
+    },
+  }];
+
+  const selected = selectToolsForPlanner(
+    makeInput("看一下 https://example.test/article 的正文", tools, history),
+    3,
+  ).selected.map((tool) => tool.name);
+
+  assert.ok(selected.includes("web_fetch"), `selected tools: ${selected.join(", ")}`);
+  assert.ok(selected.includes("web_search"), `selected tools: ${selected.join(", ")}`);
+  assert.ok(!selected.includes("read_text_file"), `selected tools: ${selected.join(", ")}`);
+  assert.ok(!selected.includes("list_directory"), `selected tools: ${selected.join(", ")}`);
+});
+
+test("selectToolsForPlanner exposes link extraction after weak fetched HTML", () => {
+  const tools = [
+    makeTool("read_text_file"),
+    makeTool("web_search", "Search web pages"),
+    makeTool("web_fetch", "Fetch a web page"),
+    makeTool("web_extract_links", "Extract links from HTML"),
+  ];
+  const history: BrainInput["history"] = [{
+    action: { kind: "tool_call", toolName: "web_fetch", toolInput: { url: "https://example.test/home" } },
+    ok: true,
+    output: {
+      url: "https://example.test/home",
+      text: "下载客户端",
+      htmlPreview: "<html><body><a href='/article.html'>阅读全文</a></body></html>".repeat(3),
+    },
+    metadata: {
+      category: "tool_observation",
+      summary: "fetched shell page",
+      retryable: false,
+      toolName: "web_fetch",
+    },
+  }];
+
+  const selected = selectToolsForPlanner(
+    makeInput("继续看这个网页正文", tools, history),
+    2,
+  ).selected.map((tool) => tool.name);
+
+  assert.ok(selected.includes("web_extract_links"), `selected tools: ${selected.join(", ")}`);
+  assert.ok(!selected.includes("read_text_file"), `selected tools: ${selected.join(", ")}`);
+});

@@ -6,6 +6,7 @@ export * from "./mcp-adapter.js";
 export * from "./mcp-stdio-runtime.js";
 export * from "./builtins/echo.js";
 export { createReadTextFileTool } from "./builtins/read-text-file.js";
+export { createReadManyFilesTool } from "./builtins/read-many-files.js";
 export { createWriteTextFileTool } from "./builtins/write-text-file.js";
 export { createPatchTextFileTool } from "./builtins/patch-text-file.js";
 export { createRunTerminalCommandTool } from "./builtins/run-terminal-command.js";
@@ -22,6 +23,7 @@ export { createInspectProjectTool } from "./builtins/inspect-project.js";
 export { createGitHubRepoTool } from "./builtins/github-repo.js";
 export { createWebFetchTool } from "./builtins/web-fetch.js";
 export { createWebSearchTool } from "./builtins/web-search.js";
+export { createWebExtractLinksTool } from "./builtins/web-extract-links.js";
 export {
   createCustomExtensionTools,
   ensureDefaultCustomSkills,

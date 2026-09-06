@@ -39,7 +39,9 @@ export function buildSystemPrompt(tools: ToolDescriptor[]): string {
     "- After every successful read-only evidence tool, explicitly decide whether the user asked for a final answer, a narrower follow-up read, or a workspace change.",
     "- If workingMemory.taskLoop.needsFinalAnswer is true, prefer respond/finish unless there is a concrete missing evidence item or failed validation.",
     "- For explicit URL tasks, web_fetch that URL first. Only use web_search if the URL cannot be fetched or the user asked to search broadly. Do not inspect local project files for a web-only question unless the user also asks about the workspace.",
+    "- If web_fetch returns only navigation, downloads, comments, or partial htmlPreview, use web_extract_links to find article/full-text/detail links before falling back to another search.",
     "- For workspace analysis tasks, a directory listing is not enough. Read the key files or run code_map, then answer with the files actually inspected.",
+    "- When several concrete key files are already known, prefer read_many_files over repeated read_text_file calls to reduce steps and token waste.",
     "- For edit tasks, mutate once, verify once, then give final feedback. If verification fails, use the failure evidence to choose a different repair path; do not repeat the same mutation.",
     "- For long tasks, continue automatically across step segments from the current checkpoint, but keep a compact progress summary so token use does not balloon.",
     "- Prefer the flow inspect/read/map -> edit/execute -> verify -> summarize. Do not skip verification after workspace mutations when verification tools are available.",
@@ -113,6 +115,9 @@ function compactHistoryOutput(result: ActionResult): unknown {
   if (toolName === "read_text_file" && isRecord(output)) {
     return compactReadTextOutput(output);
   }
+  if (toolName === "read_many_files" && isRecord(output)) {
+    return compactReadManyFilesOutput(output);
+  }
   if (toolName === "search_workspace" && isRecord(output)) {
     return compactSearchOutput(output);
   }
@@ -124,6 +129,9 @@ function compactHistoryOutput(result: ActionResult): unknown {
   }
   if (toolName === "web_fetch" && isRecord(output)) {
     return compactWebFetchOutput(output);
+  }
+  if (toolName === "web_extract_links" && isRecord(output)) {
+    return compactWebExtractLinksOutput(output);
   }
   if (toolName === "code_map" || toolName === "dependency_graph" || toolName === "symbol_search") {
     return compactGenericOutput(output, HISTORY_GENERIC_CHAR_LIMIT);
@@ -143,6 +151,25 @@ function compactReadTextOutput(output: Record<string, unknown>): Record<string, 
     compact.contentTruncatedForPrompt = content.length > HISTORY_OUTPUT_CHAR_LIMIT;
   }
   return compact;
+}
+
+function compactReadManyFilesOutput(output: Record<string, unknown>): Record<string, unknown> {
+  const files = Array.isArray(output.files)
+    ? output.files.slice(0, HISTORY_ARRAY_ITEM_LIMIT).map((item) => {
+        if (!isRecord(item)) return compactGenericOutput(item, 400);
+        const content = typeof item.content === "string" ? item.content : "";
+        return {
+          ...pick(item, ["path", "ok", "truncated", "bytes", "error"]),
+          content: content ? truncateForHistory(content, 800) : undefined,
+          contentChars: content.length || undefined,
+        };
+      })
+    : [];
+  return {
+    ...pick(output, ["totalFiles", "failed", "hint"]),
+    files,
+    filesShownForPrompt: files.length,
+  };
 }
 
 function compactSearchOutput(output: Record<string, unknown>): Record<string, unknown> {
@@ -202,6 +229,20 @@ function compactWebFetchOutput(output: Record<string, unknown>): Record<string, 
     articleCandidatesShownForPrompt: candidates.length,
     htmlPreview: typeof output.htmlPreview === "string" ? truncateForHistory(output.htmlPreview, 800) : undefined,
     htmlPreviewTruncated: output.htmlPreviewTruncated,
+  };
+}
+
+function compactWebExtractLinksOutput(output: Record<string, unknown>): Record<string, unknown> {
+  const links = Array.isArray(output.links)
+    ? output.links.slice(0, HISTORY_ARRAY_ITEM_LIMIT).map((item) => {
+        if (!isRecord(item)) return compactGenericOutput(item, 300);
+        return pick(item, ["url", "text", "score", "sameHost"]);
+      })
+    : [];
+  return {
+    ...pick(output, ["sourceUrl", "totalLinks", "hint"]),
+    links,
+    linksShownForPrompt: links.length,
   };
 }
 

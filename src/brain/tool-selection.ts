@@ -17,6 +17,7 @@ const CORE_INSPECTION_TOOLS = new Set([
   "list_directory",
   "stat_path",
   "read_text_file",
+  "read_many_files",
   "search_workspace",
   "code_map",
   "symbol_search",
@@ -54,8 +55,10 @@ export function selectToolsForPlanner(
     return { selected: tools, total: tools.length, omitted: 0 };
   }
 
+  const latestText = latestUserText(input).toLowerCase();
   const text = buildIntentText(input);
-  const intent = classifyIntent(text, input.history);
+  const intentText = latestText || text;
+  const intent = classifyIntent(intentText, input.history);
   const recentToolNames = new Set(
     input.history
       .slice(-6)
@@ -86,10 +89,10 @@ export function selectToolsForPlanner(
   const scored = tools.map((tool, index) => ({
     tool,
     index,
-    score: scoreTool(tool, intent, recentToolNames, recentSignatures, recentFailedToolNames, recommendedNextTools, taskLoopRecommendedTools, recentEvidenceLog, taskLoopCostPressure, input.history, text),
+    score: scoreTool(tool, intent, recentToolNames, recentSignatures, recentFailedToolNames, recommendedNextTools, taskLoopRecommendedTools, recentEvidenceLog, taskLoopCostPressure, input.history, intentText),
   }));
 
-  const selected = ensurePinnedTools(
+  const selected = narrowToolsForDominantIntent(ensurePinnedTools(
     scored,
     scored
       .sort((left, right) => right.score - left.score || left.index - right.index)
@@ -98,13 +101,29 @@ export function selectToolsForPlanner(
       .map((item) => item.tool),
     [...pinnedToolsForIntent(intent, text), ...taskLoopRecommendedTools],
     maxSelected,
-  );
+  ), intent, intentText);
 
   return {
     selected,
     total: tools.length,
     omitted: Math.max(0, tools.length - selected.length),
   };
+}
+
+function narrowToolsForDominantIntent(
+  selected: ToolDescriptor[],
+  intent: IntentFlags,
+  text: string,
+): ToolDescriptor[] {
+  if (!intent.web || !isExplicitUrlText(text)) return selected;
+  const webTools = selected.filter((tool) => {
+    const contract = tool.contract ?? inferToolContract(tool);
+    return tool.name === "web_fetch"
+      || tool.name === "web_search"
+      || contract.category === "web"
+      || contract.category === "github";
+  });
+  return webTools.length > 0 ? webTools : selected;
 }
 
 function buildIntentText(input: BrainInput): string {
@@ -162,7 +181,7 @@ function classifyReadableChineseIntent(text: string, hadMutation: boolean): Inte
   if (!/[\u4e00-\u9fff]/.test(text)) return null;
   const searchIntent = /搜索|搜一下|搜搜|查一下|查询|查找|检索|找一下|找找/.test(text);
   const localWorkspaceIntent = /工作区|本地|目录|文件|项目|代码|仓库|工程/.test(text);
-  const explicitWebIntent = /网页|联网|上网|网上|网络搜索|网页搜索|搜索网页|搜索网络|联网查|官网|新闻|资料|文档|最新|最近|今天|当前|现在|价格|版本|发布/.test(text);
+  const explicitWebIntent = /https?:\/\/|网页|网址|链接|文章|正文|抓取|联网|上网|网上|网络搜索|网页搜索|搜索网页|搜索网络|联网查|官网|新闻|资料|文档|最新|最近|今天|当前|现在|价格|版本|发布|url|web|online/.test(text);
   const inspectIntent = /看|查看|分析|理解|梳理|检查/.test(text);
   const validateIntent = /运行|测试|验证|打包|构建|报错|杩愯|娴嬭瘯|楠岃瘉|鎵撳寘|鏋勫缓/.test(text);
   const pathIntent = /(?:^|[\s"'(])[\w.-]+[\\/][\w./\\-]+|\b[\w.-]+\.(?:ts|tsx|js|jsx|json|py|md|css|html|dart|yaml|yml)\b/.test(text);
@@ -190,6 +209,7 @@ function classifyReadableChineseIntent(text: string, hadMutation: boolean): Inte
 function pinnedToolsForIntent(intent: IntentFlags, text: string): string[] {
   const pinned: string[] = [];
   if (intent.web) pinned.push("web_search", "web_fetch");
+  if (intent.web && /正文|文章|全文|链接|网页|抓取|article|body|link|html/i.test(text)) pinned.push("web_extract_links");
   if (intent.adaptive || intent.memory || inferAdaptiveLearningIntent(text)) {
     pinned.push("record_agent_rule", "list_custom_extensions");
   }
@@ -279,8 +299,12 @@ function scoreTool(
 
   if (intent.web && (contract.category === "web" || contract.category === "github" || haystack.includes("fetch"))) score += 24;
   if (intent.web && name === "web_search") score += 36;
-  if (intent.web && name === "web_fetch" && /url|http|https|网页|链接|抓取|fetch/.test(text)) score += 30;
-  if (intent.web && isLocalWorkspaceToolName(name)) score -= 26;
+  if (intent.web && name === "web_fetch" && /url|http|https|网页|网址|链接|文章|正文|抓取|fetch/.test(text)) score += 54;
+  if (intent.web && isExplicitUrlText(text) && name === "web_fetch") score += 42;
+  if (intent.web && name === "web_extract_links" && hasWeakWebFetchWithHtmlPreview(history)) score += 64;
+  if (intent.web && name === "web_extract_links" && /正文|文章|全文|链接|网页|抓取|article|body|link|html/i.test(text)) score += 18;
+  if (!intent.web && name === "read_many_files" && /多个|几个|这些|整体|项目|工程|结构|分析|readme|package|config|入口|multi|several|project|codebase/i.test(text)) score += 22;
+  if (intent.web && isLocalWorkspaceToolName(name)) score -= isExplicitUrlText(text) ? 90 : 48;
   if (!intent.web && (name === "web_search" || name === "web_fetch") && history.some((result) => isRecentWorkspaceEvidence(result))) score -= 18;
   if (intent.memory && contract.category === "memory") score += 24;
   if ((intent.adaptive || intent.memory || inferAdaptiveLearningIntent(text)) && name === "record_agent_rule") score += 42;
@@ -325,6 +349,7 @@ function scoreEvidenceLedgerFit(
     score -= taskLoopRecommendedTools.has(toolName) ? Math.min(8, weakOrFailed * 4) : Math.min(24, weakOrFailed * 10);
   }
   if (hasRepeatedWeakEvidenceForSameTarget(matching)) {
+    if (toolName === "web_fetch") return score - 80;
     score -= taskLoopRecommendedTools.has(toolName) ? 6 : 18;
   }
 
@@ -360,25 +385,32 @@ function inferTaskLoopRecommendedTools(input: BrainInput): Set<string> {
   const criterion = activeTask.criteria.find((item) => item.status === "pending" || item.status === "failed");
   if (!criterion) return recommended;
 
-  for (const toolName of toolNamesForTaskLoopCriterion(criterion.id, latestUserText(input))) {
+  for (const toolName of toolNamesForTaskLoopCriterion(criterion.id, latestUserText(input), taskLoop?.evidenceLog ?? [])) {
     recommended.add(toolName);
   }
   return recommended;
 }
 
-function toolNamesForTaskLoopCriterion(criterionId: string, text: string): string[] {
-  const hasExplicitUrl = /https?:\/\//i.test(text);
+function toolNamesForTaskLoopCriterion(
+  criterionId: string,
+  text: string,
+  evidenceLog: EvidenceLogEntry[] = [],
+): string[] {
+  const hasExplicitUrl = isExplicitUrlText(text);
   switch (criterionId) {
     case "source_located":
       return hasExplicitUrl ? ["web_fetch", "web_search"] : ["web_search", "web_fetch"];
     case "body_evidence":
+      if (hasRepeatedWeakEvidenceForSameTarget(evidenceLog.filter((entry) => entry.toolName === "web_fetch"))) {
+        return ["web_extract_links", "web_search", "web_fetch"];
+      }
       return ["web_fetch", "web_search"];
     case "structure_evidence":
       return ["inspect_project", "list_directory", "search_workspace"];
     case "target_evidence":
-      return ["read_text_file", "search_workspace", "list_directory"];
+      return ["read_many_files", "read_text_file", "search_workspace", "list_directory"];
     case "key_file_evidence":
-      return ["read_text_file", "code_map", "symbol_search"];
+      return ["read_many_files", "read_text_file", "code_map", "symbol_search"];
     case "workspace_mutated":
       return ["patch_text_file", "write_text_file"];
     case "validation_passed":
@@ -386,6 +418,10 @@ function toolNamesForTaskLoopCriterion(criterionId: string, text: string): strin
     default:
       return [];
   }
+}
+
+function isExplicitUrlText(text: string): boolean {
+  return /https?:\/\//i.test(text);
 }
 
 function inferTaskLoopCostPressure(input: BrainInput): "normal" | "high" {
@@ -408,8 +444,11 @@ function inferRecommendedNextTools(history: ActionResult[]): Set<string> {
     if (result.action.kind !== "tool_call") continue;
     const toolName = result.metadata?.toolName ?? result.action.toolName;
     if (toolName === "web_search") recommended.add("web_fetch");
+    if (toolName === "web_fetch" && result.ok && hasHtmlPreview(result.output)) recommended.add("web_extract_links");
+    if (toolName === "web_extract_links") recommended.add("web_fetch");
     if (toolName === "inspect_project" || toolName === "list_directory" || toolName === "search_workspace") {
       recommended.add("read_text_file");
+      recommended.add("read_many_files");
       recommended.add("code_map");
     }
     const after = (result.metadata as { recommendedAfterTools?: unknown } | undefined)?.recommendedAfterTools;
@@ -428,6 +467,7 @@ function isRecentWorkspaceEvidence(result: ActionResult): boolean {
     toolName === "inspect_project"
     || toolName === "list_directory"
     || toolName === "read_text_file"
+    || toolName === "read_many_files"
     || toolName === "search_workspace"
     || toolName === "code_map"
   );
@@ -445,7 +485,21 @@ function isRepeatProneToolName(name: string): boolean {
     || name === "inspect_project"
     || name === "search_workspace"
     || name === "web_search"
-    || name === "web_fetch";
+    || name === "web_fetch"
+    || name === "web_extract_links";
+}
+
+function hasWeakWebFetchWithHtmlPreview(history: ActionResult[]): boolean {
+  return history.slice(-4).some((result) => {
+    const toolName = result.metadata?.toolName ?? result.action.toolName;
+    return toolName === "web_fetch" && result.ok === true && hasHtmlPreview(result.output);
+  });
+}
+
+function hasHtmlPreview(output: unknown): boolean {
+  if (!output || typeof output !== "object" || Array.isArray(output)) return false;
+  const html = (output as { htmlPreview?: unknown }).htmlPreview;
+  return typeof html === "string" && html.trim().length > 80;
 }
 
 function toolActionSignature(action: ActionResult["action"]): string | null {

@@ -189,15 +189,15 @@ function createTaskLoopTasks(
 ): NonNullable<WorkingMemorySnapshot["taskLoop"]>["tasks"] {
   if (mode === "web") {
     return [
-      taskLoopTask("collect_evidence", "定位网页来源", ["source_located"], ["web_fetch", "web_search"], "active"),
-      taskLoopTask("analyze_evidence", "提取可读正文或候选内容", ["body_evidence"], ["web_fetch"], "pending", ["collect_evidence"]),
+      taskLoopTask("collect_evidence", "定位网页来源", ["source_located"], ["web_fetch", "web_search", "web_extract_links"], "active"),
+      taskLoopTask("analyze_evidence", "提取可读正文或候选内容", ["body_evidence"], ["web_fetch", "web_extract_links"], "pending", ["collect_evidence"]),
       taskLoopTask("answer", "基于搜索或抓取证据回答", ["final_feedback"], [], "pending", ["analyze_evidence"]),
     ];
   }
 
   if (mode === "edit" || mode === "validation") {
     return [
-      taskLoopTask("collect_evidence", "检查目标文件或失败诊断", ["target_evidence"], ["read_text_file", "search_workspace", "collect_diagnostics"], "active"),
+      taskLoopTask("collect_evidence", "检查目标文件或失败诊断", ["target_evidence"], ["read_text_file", "read_many_files", "search_workspace", "collect_diagnostics"], "active"),
       taskLoopTask("apply_change", "执行一次聚焦的工作区修改", ["workspace_mutated"], ["patch_text_file", "write_text_file"], "pending", ["collect_evidence"]),
       taskLoopTask("verify", "验证修改后的工作区", ["validation_passed"], ["run_validation"], "pending", ["apply_change"]),
       taskLoopTask("answer", "汇报修改内容和验证结果", ["final_feedback"], [], "pending", ["verify"]),
@@ -207,7 +207,7 @@ function createTaskLoopTasks(
   if (mode === "workspace") {
     return [
       taskLoopTask("collect_evidence", "检查项目结构和相关路径", ["structure_evidence"], ["inspect_project", "list_directory", "search_workspace"], "active"),
-      taskLoopTask("analyze_evidence", "读取关键文件或生成代码地图", ["key_file_evidence"], ["read_text_file", "code_map"], "pending", ["collect_evidence"]),
+      taskLoopTask("analyze_evidence", "读取关键文件或生成代码地图", ["key_file_evidence"], ["read_many_files", "read_text_file", "code_map"], "pending", ["collect_evidence"]),
       taskLoopTask("answer", "基于已检查证据说明结论", ["final_feedback"], [], "pending", ["analyze_evidence"]),
     ];
   }
@@ -382,12 +382,13 @@ function taskCriteriaSatisfiedByResult(result: ActionResult, toolName: string | 
   if (toolName === "completion_check") return ["validation_passed"];
   if (toolName === "run_validation" && !validationDidFail(result)) return ["validation_passed"];
   if (toolName === "web_search") return ["source_located"];
+  if (toolName === "web_extract_links") return hasTaskLoopExtractedLinks(result.output) ? ["source_located"] : [];
   if (toolName === "web_fetch") {
     return hasTaskLoopWebBodyEvidence(result.output)
       ? ["source_located", "body_evidence"]
       : ["source_located"];
   }
-  if (toolName === "read_text_file" || toolName === "code_map" || toolName === "dependency_graph" || toolName === "symbol_search") {
+  if (toolName === "read_text_file" || toolName === "read_many_files" || toolName === "code_map" || toolName === "dependency_graph" || toolName === "symbol_search") {
     return ["structure_evidence", "target_evidence", "key_file_evidence"];
   }
   if (toolName === "list_directory" || toolName === "inspect_project" || toolName === "search_workspace") {
@@ -419,6 +420,12 @@ function hasTaskLoopRecoveryTargetEvidence(output: unknown, toolName: string): b
     return entries.length > 0;
   }
   return false;
+}
+
+function hasTaskLoopExtractedLinks(output: unknown): boolean {
+  if (!output || typeof output !== "object" || Array.isArray(output)) return false;
+  const links = (output as { links?: unknown }).links;
+  return Array.isArray(links) && links.length > 0;
 }
 
 function hasTaskLoopWebBodyEvidence(output: unknown): boolean {
@@ -483,8 +490,8 @@ function updateTaskLoopPlan(
 
   if (result.metadata?.workspaceMutation === true) return markPlanThrough(plan, "apply_change");
   if (toolName === "run_validation" || toolName === "completion_check") return markPlanThrough(plan, "verify");
-  if (toolName === "web_fetch" || toolName === "read_text_file" || toolName === "code_map") return markPlanThrough(plan, "analyze_evidence");
-  if (toolName === "web_search" || toolName === "list_directory" || toolName === "inspect_project" || toolName === "search_workspace") {
+  if (toolName === "web_fetch" || toolName === "read_text_file" || toolName === "read_many_files" || toolName === "code_map") return markPlanThrough(plan, "analyze_evidence");
+  if (toolName === "web_search" || toolName === "web_extract_links" || toolName === "list_directory" || toolName === "inspect_project" || toolName === "search_workspace") {
     return markPlanThrough(plan, "collect_evidence");
   }
 
@@ -520,7 +527,13 @@ function inferCurrentTaskLoopStep(plan: NonNullable<WorkingMemorySnapshot["taskL
 
 function inferTaskLoopMode(message: string): NonNullable<WorkingMemorySnapshot["taskLoop"]>["mode"] {
   const text = message.toLowerCase();
-  if (/https?:\/\//.test(text) || /联网|搜索|网页|网址|url|github|release|最新|recent|latest|news/.test(text)) return "web";
+  const searchIntent = /搜|搜索|查一下|查询|查找|检索|look up|search|find/.test(text);
+  const localIntent = /工作区|本地|目录|文件|项目|代码|工程|仓库|workspace|local|repo|codebase|file|directory/.test(text);
+  if (
+    /https?:\/\//.test(text)
+    || /联网|上网|网上|网页|网址|链接|文章|正文|抓取|官网|新闻|资料|文档|url|github|release|最新|最近|当前|recent|latest|news|online|web/.test(text)
+    || (searchIntent && !localIntent)
+  ) return "web";
   if (/修|改|写|删|创建|生成|保存|提交|push|commit|build|打包|安装包|release/.test(text)) return "edit";
   if (/验证|测试|运行|报错|error|fail|test|typecheck|lint/.test(text)) return "validation";
   if (extractTaskAnchor(message)) return "workspace";
@@ -535,8 +548,8 @@ function inferTaskLoopModeFromResult(
 ): NonNullable<WorkingMemorySnapshot["taskLoop"]>["mode"] {
   if (result.metadata?.workspaceMutation === true) return "edit";
   if (toolName === "run_validation") return "validation";
-  if (toolName === "web_search" || toolName === "web_fetch") return "web";
-  if (toolName === "read_text_file" || toolName === "list_directory" || toolName === "inspect_project" || toolName === "search_workspace") {
+  if (toolName === "web_search" || toolName === "web_fetch" || toolName === "web_extract_links") return "web";
+  if (toolName === "read_text_file" || toolName === "read_many_files" || toolName === "list_directory" || toolName === "inspect_project" || toolName === "search_workspace") {
     if (currentMode === "edit" || currentMode === "validation") return currentMode;
     return currentMode === "web" ? "web" : "workspace";
   }
@@ -688,7 +701,9 @@ function inferTaskLoopEvidenceQuality(
   }
   if (toolName === "web_fetch") return hasTaskLoopWebBodyEvidence(result.output) ? "strong" : "weak";
   if (toolName === "web_search") return hasTaskLoopSearchResults(result.output) ? "strong" : "weak";
+  if (toolName === "web_extract_links") return hasTaskLoopExtractedLinks(result.output) ? "strong" : "weak";
   if (toolName === "read_text_file") return hasTaskLoopReadableFileContent(result.output) ? "strong" : "weak";
+  if (toolName === "read_many_files") return hasTaskLoopReadableManyFileContent(result.output) ? "strong" : "weak";
   if (toolName === "code_map" || toolName === "dependency_graph" || toolName === "symbol_search") return "strong";
   if (toolName === "list_directory" || toolName === "inspect_project" || toolName === "search_workspace") {
     return hasTaskLoopRecoveryTargetEvidence(result.output, toolName) ? "strong" : "weak";
@@ -709,11 +724,22 @@ function hasTaskLoopReadableFileContent(output: unknown): boolean {
   return typeof content === "string" && content.trim().length > 0;
 }
 
+function hasTaskLoopReadableManyFileContent(output: unknown): boolean {
+  if (!output || typeof output !== "object" || Array.isArray(output)) return false;
+  const files = (output as { files?: unknown }).files;
+  if (!Array.isArray(files)) return false;
+  return files.some((file) => {
+    if (!file || typeof file !== "object" || Array.isArray(file)) return false;
+    const record = file as { ok?: unknown; content?: unknown };
+    return record.ok === true && typeof record.content === "string" && record.content.trim().length > 0;
+  });
+}
+
 function inferTaskLoopEvidenceKind(
   toolName: string,
 ): TaskLoopEvidenceLogEntry["kind"] {
-  if (toolName === "web_search" || toolName === "web_fetch") return "web";
-  if (toolName === "read_text_file") return "file";
+  if (toolName === "web_search" || toolName === "web_fetch" || toolName === "web_extract_links") return "web";
+  if (toolName === "read_text_file" || toolName === "read_many_files") return "file";
   if (toolName === "code_map" || toolName === "dependency_graph" || toolName === "symbol_search") return "code";
   if (toolName === "run_validation" || toolName === "completion_check") return "validation";
   if (toolName === "terminal_command") return "terminal";

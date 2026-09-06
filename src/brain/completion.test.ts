@@ -796,3 +796,130 @@ test("judgeToolCallValue redirects to validation when validation criteria is act
   assert.equal(judgment.recommendedToolName, "run_validation");
   assert.deepEqual(judgment.recommendedToolInput, { mode: "all" });
 });
+
+test("judgeTaskCompletion requires fetching search results for broad web search requests", () => {
+  const message = "能搜一下红色书籍吗";
+  const searchResult: ActionResult = {
+    action: { kind: "tool_call", toolName: "web_search", toolInput: { query: "红色书籍" } },
+    ok: true,
+    output: { results: [{ title: "红色书籍推荐", url: "https://example.test/red-books" }] },
+    metadata: {
+      category: "tool_observation",
+      summary: "found candidate pages",
+      retryable: false,
+      toolName: "web_search",
+    },
+  };
+
+  const judgment = judgeTaskCompletion(
+    makeInput(message, [{ name: "web_fetch", description: "fetch", inputSchema: { type: "object" } }]),
+    searchResult,
+    message,
+  );
+
+  assert.equal(judgment.status, "needs_more_evidence");
+  assert.equal(judgment.recommendedToolName, "web_fetch");
+  assert.deepEqual(judgment.recommendedToolInput, { url: "https://example.test/red-books" });
+});
+
+test("judgeToolCallValue uses the next search candidate before local tools on web tasks", () => {
+  const message = "继续看这个网页正文";
+  const searchResult: ActionResult = {
+    action: { kind: "tool_call", toolName: "web_search", toolInput: { query: "红色文化" } },
+    ok: true,
+    output: { results: [{ title: "红色文化", url: "https://example.test/red-culture" }] },
+    metadata: {
+      category: "tool_observation",
+      summary: "found candidate pages",
+      retryable: false,
+      toolName: "web_search",
+    },
+  };
+  const input = makeInput(message, [
+    { name: "web_fetch", description: "fetch", inputSchema: { type: "object" } },
+    { name: "read_text_file", description: "read", inputSchema: { type: "object" } },
+  ]);
+  input.history = [searchResult];
+  input.workingMemory = {
+    step: 1,
+    phase: "investigate",
+    lastActionKind: "tool_call",
+    taskLoop: {
+      objective: "搜索红色文化网页正文",
+      mode: "web",
+      evidenceCount: 1,
+      completionGateCount: 0,
+    },
+  };
+
+  const judgment = judgeToolCallValue(
+    input,
+    { action: { kind: "tool_call", toolName: "read_text_file", toolInput: { path: "pubspec.yaml" } } },
+    searchResult,
+    message,
+  );
+
+  assert.equal(judgment.status, "redirect");
+  assert.equal(judgment.recommendedToolName, "web_fetch");
+  assert.deepEqual(judgment.recommendedToolInput, { url: "https://example.test/red-culture" });
+});
+
+test("judgeTaskCompletion extracts links from weak fetched HTML before searching again", () => {
+  const message = "看一下 https://example.test/home 的正文";
+  const fetchResult: ActionResult = {
+    action: { kind: "tool_call", toolName: "web_fetch", toolInput: { url: "https://example.test/home" } },
+    ok: true,
+    output: {
+      url: "https://example.test/home",
+      text: "下载客户端\n关注公众号\n扫码查看",
+      htmlPreview: "<html><body><a href='/article.html'>阅读全文</a><nav>下载客户端</nav></body></html>".repeat(2),
+    },
+    metadata: {
+      category: "tool_observation",
+      summary: "fetched weak shell page",
+      retryable: false,
+      toolName: "web_fetch",
+    },
+  };
+
+  const judgment = judgeTaskCompletion(
+    makeInput(message, [
+      { name: "web_extract_links", description: "extract links", inputSchema: { type: "object" } },
+      { name: "web_search", description: "search", inputSchema: { type: "object" } },
+    ]),
+    fetchResult,
+    message,
+  );
+
+  assert.equal(judgment.status, "needs_more_evidence");
+  assert.equal(judgment.recommendedToolName, "web_extract_links");
+});
+
+test("judgeTaskCompletion fetches the best extracted article link", () => {
+  const message = "继续看网页正文";
+  const linkResult: ActionResult = {
+    action: { kind: "tool_call", toolName: "web_extract_links", toolInput: { baseUrl: "https://example.test/home" } },
+    ok: true,
+    output: {
+      links: [
+        { url: "https://example.test/article.html", text: "阅读全文", score: 50, sameHost: true },
+      ],
+    },
+    metadata: {
+      category: "tool_observation",
+      summary: "extracted links",
+      retryable: false,
+      toolName: "web_extract_links",
+    },
+  };
+
+  const judgment = judgeTaskCompletion(
+    makeInput(message, [{ name: "web_fetch", description: "fetch", inputSchema: { type: "object" } }]),
+    linkResult,
+    message,
+  );
+
+  assert.equal(judgment.status, "needs_more_evidence");
+  assert.equal(judgment.recommendedToolName, "web_fetch");
+  assert.deepEqual(judgment.recommendedToolInput, { url: "https://example.test/article.html" });
+});

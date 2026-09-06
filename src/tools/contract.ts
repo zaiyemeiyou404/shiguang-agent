@@ -125,6 +125,7 @@ function inferCost(
 ): ToolCostClass {
   if (
     name === "read_text_file"
+    || name === "read_many_files"
     || name === "list_directory"
     || name === "stat_path"
     || name === "git_status"
@@ -156,6 +157,7 @@ function inferRecommendedBeforeTools(
   category: ToolContractCategory,
 ): string[] {
   if (name === "read_text_file" || capability === "fs.read") return ["stat_path", "list_directory"];
+  if (name === "read_many_files" || capability === "fs.read_many") return ["inspect_project", "code_map"];
   if (name === "run_validation" || capability === "process.validate") return ["git_status"];
   if (phase === "edit") return ["read_text_file", "search_workspace"];
   if (phase === "execute") return category === "process" ? ["inspect_project", "read_text_file"] : ["read_text_file"];
@@ -177,6 +179,12 @@ function inferRecommendedAfterTools(name: string, capability: string, phase: Too
     return ["read_text_file", "collect_diagnostics"];
   }
   if (name === "web_search" || capability === "web.search") {
+    return ["web_fetch"];
+  }
+  if (name === "web_fetch" || capability === "web.fetch") {
+    return ["web_extract_links"];
+  }
+  if (name === "web_extract_links" || capability === "web.extract_links") {
     return ["web_fetch"];
   }
   if (name === "start_background_process" || capability === "process.background.start") {
@@ -206,7 +214,9 @@ function inferCompletionSignals(
 
 function inferMaxPromptChars(name: string, category: ToolContractCategory, phase: ToolContractPhase): number {
   if (name === "read_text_file") return 2400;
+  if (name === "read_many_files") return 3600;
   if (name === "search_workspace") return 1800;
+  if (name === "web_extract_links") return 1600;
   if (category === "web" || category === "github" || category === "mcp") return 1200;
   if (phase === "inspect") return 1600;
   return 1000;

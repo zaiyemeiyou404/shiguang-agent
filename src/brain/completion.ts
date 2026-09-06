@@ -84,7 +84,7 @@ export function judgeTaskCompletion(
     if (isUrlIntent(message) && hasTool(input, "web_fetch") && hasSearchResultUrl(lastResult.output)) {
       return {
         status: "needs_more_evidence",
-        reason: "Search found candidate URLs; fetch the best page before final article feedback.",
+        reason: "Search found candidate URLs; fetch the best page before final web feedback.",
         recommendedToolName: "web_fetch",
         recommendedToolInput: { url: firstSearchResultUrl(lastResult.output) },
       };
@@ -95,6 +95,15 @@ export function judgeTaskCompletion(
   if (toolName === "web_fetch") {
     if (hasWebBodyEvidence(lastResult.output)) {
       return { status: "ready", reason: "Fetched web page contains body evidence." };
+    }
+    const linkInput = linkExtractionInputFromWebFetch(lastResult);
+    if (linkInput && hasTool(input, "web_extract_links")) {
+      return {
+        status: "needs_more_evidence",
+        reason: "Fetched web page looks like navigation or partial HTML; extract candidate article links before searching again.",
+        recommendedToolName: "web_extract_links",
+        recommendedToolInput: linkInput,
+      };
     }
     if (hasTool(input, "web_search")) {
       return {
@@ -107,7 +116,28 @@ export function judgeTaskCompletion(
     return { status: "needs_more_evidence", reason: "Fetched web page did not expose stable body text." };
   }
 
-  if (toolName === "read_text_file") {
+  if (toolName === "web_extract_links") {
+    const nextUrl = firstExtractedLinkUrl(lastResult.output);
+    if (nextUrl && hasTool(input, "web_fetch") && !hasFetchedUrl(input.history, nextUrl)) {
+      return {
+        status: "needs_more_evidence",
+        reason: "Extracted candidate article links; fetch the best candidate before final web feedback.",
+        recommendedToolName: "web_fetch",
+        recommendedToolInput: { url: nextUrl },
+      };
+    }
+    if (hasTool(input, "web_search")) {
+      return {
+        status: "needs_recovery",
+        reason: "No usable article link was extracted; search for an alternate indexed source.",
+        recommendedToolName: "web_search",
+        recommendedToolInput: { query: buildWebSearchQuery(message), limit: 5 },
+      };
+    }
+    return { status: "needs_more_evidence", reason: "Extracted links did not include a usable article URL." };
+  }
+
+  if (toolName === "read_text_file" || toolName === "read_many_files") {
     return { status: "ready", reason: "Requested file content is available for final feedback." };
   }
 
@@ -219,6 +249,14 @@ function recommendToolForCriterion(
   }
 
   if (criterionId === "body_evidence") {
+    const linkInput = lastResult?.ok ? linkExtractionInputFromWebFetch(lastResult) : null;
+    if (linkInput && hasTool(input, "web_extract_links")) {
+      return recommended("needs_more_evidence", "Task-loop needs candidate article links extracted from the fetched shell page.", "web_extract_links", linkInput);
+    }
+    const extractedUrl = firstExtractedLinkUrl(lastResult?.output);
+    if (extractedUrl && hasTool(input, "web_fetch") && !hasFetchedUrl(input.history, extractedUrl)) {
+      return recommended("needs_more_evidence", "Task-loop needs readable page body evidence from the extracted article link.", "web_fetch", { url: extractedUrl });
+    }
     const searchUrl = firstUnfetchedSearchResultUrl(input.history, lastResult);
     const fetchUrl = searchUrl ?? explicitUrl;
     if (fetchUrl && hasTool(input, "web_fetch") && !hasFetchedUrl(input.history, fetchUrl)) {
@@ -261,6 +299,10 @@ function recommendToolForCriterion(
     if (path && hasTool(input, "read_text_file") && !hasReadPath(input.history, path)) {
       return recommended("needs_more_evidence", `Task-loop needs the requested key file ${path}.`, "read_text_file", { path });
     }
+    const entrypoints = entrypointPaths(lastResult?.output);
+    if (entrypoints.length > 1 && hasTool(input, "read_many_files")) {
+      return recommended("needs_more_evidence", "Task-loop needs the discovered key files read together.", "read_many_files", { paths: entrypoints.slice(0, 6) });
+    }
     if (hasTool(input, "code_map") && !hasRecentTool(input.history, "code_map")) {
       return recommended("needs_more_evidence", "Task-loop needs a code map before project-level analysis.", "code_map", { maxFiles: 1200, includeTests: false });
     }
@@ -290,7 +332,7 @@ function hasAnswerStepEvidence(input: BrainInput, lastResult: ActionResult): boo
   if (toolName === "completion_check") return true;
   if (mode === "web") return toolName === "web_fetch" && hasWebBodyEvidence(lastResult.output);
   if (mode === "edit" || mode === "validation") return toolName === "run_validation" || toolName === "completion_check";
-  if (mode === "workspace") return toolName === "read_text_file";
+  if (mode === "workspace") return toolName === "read_text_file" || toolName === "read_many_files";
   return toolName === "read_text_file" || toolName === "web_fetch" || toolName === "run_validation";
 }
 
@@ -300,7 +342,7 @@ function hasAnswerEvidenceInLog(input: BrainInput): boolean {
   const evidenceLog = taskLoop?.evidenceLog ?? [];
   if (evidenceLog.length === 0) return false;
   if (mode === "web") return evidenceLog.some((entry) => entry.toolName === "web_fetch" && entry.kind === "web" && entry.quality === "strong");
-  if (mode === "workspace") return evidenceLog.some((entry) => entry.toolName === "read_text_file" && entry.quality === "strong");
+  if (mode === "workspace") return evidenceLog.some((entry) => (entry.toolName === "read_text_file" || entry.toolName === "read_many_files") && entry.quality === "strong");
   if (mode === "edit" || mode === "validation") {
     return evidenceLog.some((entry) => (entry.toolName === "run_validation" || entry.toolName === "completion_check") && entry.quality === "strong");
   }
@@ -322,6 +364,10 @@ function recommendAnswerStepEvidence(
     if (candidateUrl && hasTool(input, "web_fetch") && !hasFetchedUrl(input.history, candidateUrl)) {
       return recommended("needs_more_evidence", "Task-loop answer step needs the best search result fetched before answering.", "web_fetch", { url: candidateUrl });
     }
+    const linkInput = lastResult?.ok ? linkExtractionInputFromWebFetch(lastResult) : null;
+    if (linkInput && hasTool(input, "web_extract_links")) {
+      return recommended("needs_more_evidence", "Task-loop answer step needs candidate article links extracted from the fetched shell page.", "web_extract_links", linkInput);
+    }
     if (hasTool(input, "web_search")) {
       return recommended("needs_more_evidence", "Task-loop answer step needs an accessible web source with body text.", "web_search", { query: buildWebSearchQuery(message), limit: 5 });
     }
@@ -331,6 +377,10 @@ function recommendAnswerStepEvidence(
     const path = extractPathFromMessage(message) ?? firstEntrypointPath(lastResult?.output);
     if (path && hasTool(input, "read_text_file") && !hasReadPath(input.history, path)) {
       return recommended("needs_more_evidence", "Task-loop answer step needs a key file read before project feedback.", "read_text_file", { path });
+    }
+    const entrypoints = entrypointPaths(lastResult?.output);
+    if (entrypoints.length > 1 && hasTool(input, "read_many_files")) {
+      return recommended("needs_more_evidence", "Task-loop answer step needs several key files read before project feedback.", "read_many_files", { paths: entrypoints.slice(0, 6) });
     }
     if (hasTool(input, "code_map") && !hasRecentTool(input.history, "code_map")) {
       return recommended("needs_more_evidence", "Task-loop answer step needs code structure evidence before project feedback.", "code_map", { maxFiles: 1200, includeTests: false });
@@ -439,6 +489,16 @@ export function judgeToolCallValue(
       };
     }
 
+    const nextSearchCandidate = firstUnfetchedSearchResultUrl(input.history, lastResult);
+    if (nextSearchCandidate && hasTool(input, "web_fetch")) {
+      return {
+        status: "redirect",
+        reason: `The latest user request is web-oriented; fetch the search result ${nextSearchCandidate} before local workspace tools.`,
+        recommendedToolName: "web_fetch",
+        recommendedToolInput: { url: nextSearchCandidate },
+      };
+    }
+
     if (hasTool(input, "web_search")) {
       return {
         status: "redirect",
@@ -514,11 +574,11 @@ function judgeToolAgainstActiveTaskLoopCriterion(
 
 function proposedToolSatisfiesCriterion(toolName: string, criterionId: string): boolean {
   const allowed: Record<string, string[]> = {
-    source_located: ["web_fetch", "web_search"],
-    body_evidence: ["web_fetch", "web_search"],
+    source_located: ["web_fetch", "web_search", "web_extract_links"],
+    body_evidence: ["web_fetch", "web_search", "web_extract_links"],
     structure_evidence: ["inspect_project", "list_directory", "search_workspace", "code_map"],
-    target_evidence: ["read_text_file", "search_workspace", "inspect_project", "list_directory", "code_map"],
-    key_file_evidence: ["read_text_file", "code_map", "symbol_search", "dependency_graph"],
+    target_evidence: ["read_text_file", "read_many_files", "search_workspace", "inspect_project", "list_directory", "code_map"],
+    key_file_evidence: ["read_text_file", "read_many_files", "code_map", "symbol_search", "dependency_graph"],
     workspace_mutated: ["copy_path", "delete_path", "move_path", "patch_text_file", "terminal_command", "write_text_file"],
     validation_passed: ["run_validation", "completion_check"],
     request_understood: [],
@@ -537,7 +597,14 @@ function validationDidFail(result: ActionResult): boolean {
 }
 
 function isUrlIntent(message: string): boolean {
-  return /https?:\/\//i.test(message) || /网页|网址|链接|文章|正文|抓取|fetch|url/i.test(message);
+  const text = message.toLowerCase();
+  if (/https?:\/\//i.test(text)) return true;
+  if (/网页|网址|链接|文章|正文|抓取|联网|上网|网上|网络|官网|新闻|资料|文档|最新|最近|当前|发布|fetch|url|web|online|latest|current/.test(text)) {
+    return true;
+  }
+  const searchIntent = /搜|搜索|查一下|查询|查找|检索|look up|search|find/.test(text);
+  const localIntent = /工作区|本地|目录|文件|项目|代码|工程|仓库|workspace|local|repo|codebase|file|directory/.test(text);
+  return searchIntent && !localIntent;
 }
 
 function isBroadWorkspaceAnalysis(message: string): boolean {
@@ -554,6 +621,7 @@ function isLocalWorkspaceTool(toolName: string): boolean {
     "inspect_project",
     "list_directory",
     "read_text_file",
+    "read_many_files",
     "run_validation",
     "search_workspace",
   ].includes(toolName);
@@ -598,6 +666,7 @@ function isReadEvidenceTool(toolName: string): boolean {
     "inspect_project",
     "list_directory",
     "read_text_file",
+    "read_many_files",
     "search_workspace",
   ].includes(toolName);
 }
@@ -702,6 +771,42 @@ function firstUnfetchedSearchResultUrl(history: ActionResult[], lastResult: Acti
   return null;
 }
 
+function linkExtractionInputFromWebFetch(result: ActionResult): unknown | null {
+  if (result.action.kind !== "tool_call") return null;
+  const toolName = result.metadata?.toolName ?? result.action.toolName;
+  if (toolName !== "web_fetch") return null;
+  if (!result.output || typeof result.output !== "object" || Array.isArray(result.output)) return null;
+  const record = result.output as { htmlPreview?: unknown; html?: unknown; url?: unknown; finalUrl?: unknown };
+  const html = typeof record.htmlPreview === "string" && record.htmlPreview.trim().length > 80
+    ? record.htmlPreview
+    : typeof record.html === "string" && record.html.trim().length > 80
+      ? record.html
+      : null;
+  if (!html) return null;
+  const baseUrl = typeof record.finalUrl === "string"
+    ? record.finalUrl
+    : typeof record.url === "string"
+      ? record.url
+      : extractPathLikeUrl(result.action.toolInput);
+  return {
+    html,
+    ...(baseUrl ? { baseUrl } : {}),
+    limit: 20,
+  };
+}
+
+function firstExtractedLinkUrl(output: unknown): string | null {
+  if (!output || typeof output !== "object" || Array.isArray(output)) return null;
+  const links = (output as { links?: unknown }).links;
+  if (!Array.isArray(links)) return null;
+  for (const item of links) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const url = (item as { url?: unknown }).url;
+    if (typeof url === "string" && /^https?:\/\//i.test(url)) return url;
+  }
+  return null;
+}
+
 function searchResultUrls(output: unknown): string[] {
   if (!output || typeof output !== "object" || Array.isArray(output)) return [];
   const results = (output as { results?: unknown }).results;
@@ -716,17 +821,29 @@ function searchResultUrls(output: unknown): string[] {
 }
 
 function firstEntrypointPath(output: unknown): string | null {
-  if (!output || typeof output !== "object" || Array.isArray(output)) return null;
-  const entrypoints = (output as { entrypoints?: unknown }).entrypoints;
-  if (!Array.isArray(entrypoints)) return null;
-  for (const item of entrypoints) {
-    if (typeof item === "string" && item.trim()) return item.trim();
+  return entrypointPaths(output)[0] ?? null;
+}
+
+function entrypointPaths(output: unknown): string[] {
+  if (!output || typeof output !== "object" || Array.isArray(output)) return [];
+  const record = output as { entrypoints?: unknown; files?: unknown };
+  const candidates = Array.isArray(record.entrypoints)
+    ? record.entrypoints
+    : Array.isArray(record.files)
+      ? record.files
+      : [];
+  const paths: string[] = [];
+  for (const item of candidates) {
+    if (typeof item === "string" && item.trim()) {
+      paths.push(item.trim());
+      continue;
+    }
     if (!item || typeof item !== "object" || Array.isArray(item)) continue;
     const record = item as { path?: unknown; file?: unknown };
-    if (typeof record.path === "string" && record.path.trim()) return record.path.trim();
-    if (typeof record.file === "string" && record.file.trim()) return record.file.trim();
+    if (typeof record.path === "string" && record.path.trim()) paths.push(record.path.trim());
+    if (typeof record.file === "string" && record.file.trim()) paths.push(record.file.trim());
   }
-  return null;
+  return Array.from(new Set(paths)).slice(0, 10);
 }
 
 function hasRecentTool(history: ActionResult[], toolName: string): boolean {
@@ -737,11 +854,25 @@ function hasReadPath(history: ActionResult[], path: string): boolean {
   const target = normalizePath(path);
   return history.slice(-12).some((result) => {
     if (!result.ok || result.action.kind !== "tool_call") return false;
-    if ((result.metadata?.toolName ?? result.action.toolName) !== "read_text_file") return false;
+    const toolName = result.metadata?.toolName ?? result.action.toolName;
+    if (toolName !== "read_text_file" && toolName !== "read_many_files") return false;
     const inputPath = normalizePath(extractPathFromToolInput(result.action.toolInput));
     const outputPath = normalizePath(extractPathFromToolInput(result.output));
-    return inputPath === target || outputPath === target || inputPath.endsWith(`/${target}`) || outputPath.endsWith(`/${target}`);
+    return inputPath === target
+      || outputPath === target
+      || inputPath.endsWith(`/${target}`)
+      || outputPath.endsWith(`/${target}`)
+      || readManyOutputPaths(result.output).some((path) => path === target || path.endsWith(`/${target}`) || target.endsWith(`/${path}`));
   });
+}
+
+function readManyOutputPaths(output: unknown): string[] {
+  if (!output || typeof output !== "object" || Array.isArray(output)) return [];
+  const files = (output as { files?: unknown }).files;
+  if (!Array.isArray(files)) return [];
+  return files
+    .map((file) => !file || typeof file !== "object" || Array.isArray(file) ? "" : normalizePath(extractPathFromToolInput(file)))
+    .filter(Boolean);
 }
 
 function hasFailedReadPath(history: ActionResult[], path: string): boolean {

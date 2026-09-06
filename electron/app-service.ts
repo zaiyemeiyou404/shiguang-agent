@@ -33,6 +33,7 @@ import { SqliteSessionRepository } from "../dist/state/sqlite-session-repository
 import { SqliteTaskRepository } from "../dist/state/sqlite-task-repository.js";
 import { SqliteTurnRepository } from "../dist/state/sqlite-turn-repository.js";
 import { createReadTextFileTool } from "../dist/tools/builtins/read-text-file.js";
+import { createReadManyFilesTool } from "../dist/tools/builtins/read-many-files.js";
 import { createWriteTextFileTool } from "../dist/tools/builtins/write-text-file.js";
 import { createPatchTextFileTool } from "../dist/tools/builtins/patch-text-file.js";
 import { createRunTerminalCommandTool } from "../dist/tools/builtins/run-terminal-command.js";
@@ -49,6 +50,7 @@ import { createInspectProjectTool } from "../dist/tools/builtins/inspect-project
 import { createGitHubRepoTool } from "../dist/tools/builtins/github-repo.js";
 import { createWebFetchTool } from "../dist/tools/builtins/web-fetch.js";
 import { createWebSearchTool } from "../dist/tools/builtins/web-search.js";
+import { createWebExtractLinksTool } from "../dist/tools/builtins/web-extract-links.js";
 import {
   createCustomExtensionTools,
   ensureDefaultCustomSkills,
@@ -1122,6 +1124,7 @@ export class DesktopAppService {
       createGitHubRepoTool(workspaceRoot),
       createWebFetchTool(),
       createWebSearchTool(),
+      createWebExtractLinksTool(),
       createCollectDiagnosticsTool(workspaceRoot),
       createCodeMapTool(workspaceRoot),
       createSymbolSearchTool(workspaceRoot),
@@ -1129,6 +1132,7 @@ export class DesktopAppService {
       createListBackgroundProcessesTool(),
       createReadBackgroundProcessTool(),
       createReadTextFileTool(workspaceRoot),
+      createReadManyFilesTool(workspaceRoot),
       createSearchWorkspaceTool(workspaceRoot),
       createSearchMemoryTool(this.memoryService, workspaceRoot),
       createRememberFactTool(this.memoryService, workspaceRoot),
