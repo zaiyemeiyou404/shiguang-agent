@@ -743,6 +743,47 @@ test("judgeToolCallValue redirects tools that do not satisfy the active task-loo
   assert.deepEqual(judgment.recommendedToolInput, { url: "https://example.test/red-books" });
 });
 
+test("judgeToolCallValue enforces web task-loop mode before terminal or project tools", () => {
+  const message = "read this article https://example.test/red-books";
+  const input = makeInput(message, [
+    { name: "web_fetch", description: "fetch", inputSchema: { type: "object" } },
+    { name: "web_search", description: "search", inputSchema: { type: "object" } },
+    { name: "run_terminal_command", description: "terminal", inputSchema: { type: "object" } },
+  ]);
+  input.workingMemory = {
+    step: 1,
+    phase: "investigate",
+    lastActionKind: "tool_call",
+    taskLoop: {
+      objective: message,
+      mode: "web",
+      evidenceCount: 0,
+      completionGateCount: 0,
+      currentTaskId: "collect_evidence",
+      tasks: [
+        {
+          id: "collect_evidence",
+          title: "Locate web source",
+          status: "active",
+          criteria: [{ id: "source_located", description: "source", status: "pending" }],
+          attempts: 0,
+        },
+      ],
+    },
+  };
+
+  const judgment = judgeToolCallValue(
+    input,
+    { action: { kind: "tool_call", toolName: "run_terminal_command", toolInput: { command: "dir" } } },
+    null,
+    message,
+  );
+
+  assert.equal(judgment.status, "redirect");
+  assert.equal(judgment.recommendedToolName, "web_fetch");
+  assert.deepEqual(judgment.recommendedToolInput, { url: "https://example.test/red-books" });
+});
+
 test("judgeToolCallValue redirects to validation when validation criteria is active", () => {
   const message = "写 hello.py";
   const mutation: ActionResult = {

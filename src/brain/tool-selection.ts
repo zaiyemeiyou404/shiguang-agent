@@ -52,14 +52,14 @@ export function selectToolsForPlanner(
   maxSelected = DEFAULT_MAX_SELECTED_TOOLS,
 ): ToolSelection {
   const tools = input.availableTools;
-  if (tools.length <= maxSelected) {
-    return { selected: tools, total: tools.length, omitted: 0 };
-  }
-
   const latestText = latestUserText(input).toLowerCase();
   const text = buildIntentText(input);
   const intentText = latestText || text;
   const intent = classifyIntent(intentText, input.history);
+  if (tools.length <= maxSelected) {
+    const selected = narrowToolsForDominantIntent(tools, intent, intentText, input);
+    return { selected, total: tools.length, omitted: Math.max(0, tools.length - selected.length) };
+  }
   const recentToolNames = new Set(
     input.history
       .slice(-6)
@@ -102,7 +102,7 @@ export function selectToolsForPlanner(
       .map((item) => item.tool),
     [...pinnedToolsForIntent(intent, text), ...taskLoopRecommendedTools],
     maxSelected,
-  ), intent, intentText);
+  ), intent, intentText, input);
 
   return {
     selected,
@@ -115,16 +115,29 @@ function narrowToolsForDominantIntent(
   selected: ToolDescriptor[],
   intent: IntentFlags,
   text: string,
+  input: BrainInput,
 ): ToolDescriptor[] {
-  if (!intent.web || !isExplicitUrlText(text)) return selected;
-  const webTools = selected.filter((tool) => {
-    const contract = tool.contract ?? inferToolContract(tool);
-    return tool.name === "web_fetch"
-      || tool.name === "web_search"
-      || contract.category === "web"
-      || contract.category === "github";
-  });
-  return webTools.length > 0 ? webTools : selected;
+  const taskMode = input.workingMemory?.taskLoop?.mode;
+  if (taskMode === "web" || (intent.web && isExplicitUrlText(text))) {
+    const webTools = selected.filter((tool) => isWebToolForTask(tool));
+    return webTools.length > 0 ? webTools : selected;
+  }
+
+  if ((taskMode === "workspace" || taskMode === "edit" || taskMode === "validation") && !intent.web) {
+    const localTools = selected.filter((tool) => !isWebToolForTask(tool));
+    return localTools.length > 0 ? localTools : selected;
+  }
+
+  return selected;
+}
+
+function isWebToolForTask(tool: ToolDescriptor): boolean {
+  const contract = tool.contract ?? inferToolContract(tool);
+  return tool.name === "web_fetch"
+    || tool.name === "web_search"
+    || tool.name === "web_extract_links"
+    || contract.category === "web"
+    || contract.category === "github";
 }
 
 function buildIntentText(input: BrainInput): string {

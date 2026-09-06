@@ -77,6 +77,41 @@ test("selectToolsForPlanner keeps web tools for Chinese web-search requests", ()
   assert.ok(selected.includes("web_fetch"));
 });
 
+test("selectToolsForPlanner narrows small tool sets when task-loop mode is web", () => {
+  const input = makeInput("继续", [
+    makeTool("read_text_file"),
+    makeTool("run_terminal_command"),
+    makeTool("web_search", "Search web pages"),
+    makeTool("web_fetch", "Fetch a web page"),
+    makeTool("web_extract_links", "Extract web page links"),
+  ]);
+  input.workingMemory = {
+    step: 2,
+    phase: "investigate",
+    lastActionKind: "tool_call",
+    taskLoop: {
+      objective: "看一下 https://example.test/red-books",
+      mode: "web",
+      evidenceCount: 1,
+      completionGateCount: 0,
+      currentTaskId: "analyze_evidence",
+      tasks: [
+        {
+          id: "analyze_evidence",
+          title: "Extract body",
+          status: "active",
+          criteria: [{ id: "body_evidence", description: "body", status: "pending" }],
+          attempts: 0,
+        },
+      ],
+    },
+  };
+
+  const selected = selectToolsForPlanner(input, 14).selected.map((tool) => tool.name);
+
+  assert.deepEqual(selected, ["web_search", "web_fetch", "web_extract_links"]);
+});
+
 test("selectToolsForPlanner keeps adaptive rule tools for correction requests", () => {
   const tools = [
     makeTool("inspect_project"),

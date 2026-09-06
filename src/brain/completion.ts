@@ -506,6 +506,9 @@ export function judgeToolCallValue(
   const explicitUrl = extractFirstHttpUrl(message);
   const webIntent = taskMode === "web" || isUrlIntent(message);
 
+  const modeLockJudgment = judgeToolAgainstTaskModeLock(input, toolName, message, lastResult, explicitUrl);
+  if (modeLockJudgment) return modeLockJudgment;
+
   if (webIntent && isLocalWorkspaceTool(toolName)) {
     if (explicitUrl && hasTool(input, "web_fetch") && !hasFetchedUrl(input.history, explicitUrl)) {
       return {
@@ -614,6 +617,61 @@ function proposedToolSatisfiesCriterion(toolName: string, criterionId: string): 
   return allowed[criterionId]?.includes(toolName) ?? true;
 }
 
+function judgeToolAgainstTaskModeLock(
+  input: BrainInput,
+  proposedToolName: string,
+  message: string,
+  lastResult: ActionResult | null,
+  explicitUrl: string | null,
+): ToolCallValueJudgment | null {
+  const mode = input.workingMemory?.taskLoop?.mode;
+  if (!mode) return null;
+
+  if (mode === "web" && isWorkspaceBoundTool(proposedToolName)) {
+    if (explicitUrl && hasTool(input, "web_fetch") && !hasFetchedUrl(input.history, explicitUrl)) {
+      return {
+        status: "redirect",
+        reason: `Task-loop mode is locked to web; fetch ${explicitUrl} before any workspace tool.`,
+        recommendedToolName: "web_fetch",
+        recommendedToolInput: { url: explicitUrl },
+      };
+    }
+
+    const nextSearchCandidate = firstUnfetchedSearchResultUrl(input.history, lastResult);
+    if (nextSearchCandidate && hasTool(input, "web_fetch")) {
+      return {
+        status: "redirect",
+        reason: `Task-loop mode is locked to web; fetch ${nextSearchCandidate} before any workspace tool.`,
+        recommendedToolName: "web_fetch",
+        recommendedToolInput: { url: nextSearchCandidate },
+      };
+    }
+
+    if (hasTool(input, "web_search")) {
+      return {
+        status: "redirect",
+        reason: `Task-loop mode is locked to web; ${proposedToolName} would inspect or mutate the local workspace.`,
+        recommendedToolName: "web_search",
+        recommendedToolInput: { query: buildWebSearchQuery(message), limit: 5 },
+      };
+    }
+
+    return {
+      status: "avoid",
+      reason: `Task-loop mode is locked to web; ${proposedToolName} is a workspace/tooling action and web tools are not available in this run.`,
+    };
+  }
+
+  if ((mode === "workspace" || mode === "edit" || mode === "validation") && isRemoteLookupTool(proposedToolName) && !isUrlIntent(message)) {
+    return {
+      status: "avoid",
+      reason: `Task-loop mode is locked to ${mode}; ${proposedToolName} would leave the local task without an explicit web request.`,
+    };
+  }
+
+  return null;
+}
+
 function hasTool(input: BrainInput, name: string): boolean {
   return input.availableTools.some((tool) => tool.name === name);
 }
@@ -645,14 +703,27 @@ function isWorkspaceIntent(message: string, taskMode?: TaskLoopMode): boolean {
 function isLocalWorkspaceTool(toolName: string): boolean {
   return [
     "code_map",
+    "collect_diagnostics",
+    "dependency_graph",
+    "git_diff",
+    "git_status",
     "inspect_project",
     "list_directory",
     "find_files",
     "read_text_file",
     "read_many_files",
     "run_validation",
+    "run_terminal_command",
     "search_workspace",
+    "stat_path",
+    "symbol_search",
   ].includes(toolName);
+}
+
+function isWorkspaceBoundTool(toolName: string): boolean {
+  return isLocalWorkspaceTool(toolName)
+    || isWorkspaceMutationTool(toolName)
+    || toolName === "completion_check";
 }
 
 function isRemoteLookupTool(toolName: string): boolean {
@@ -669,6 +740,7 @@ function isWorkspaceMutationTool(toolName: string): boolean {
     "move_path",
     "patch_text_file",
     "terminal_command",
+    "run_terminal_command",
     "write_text_file",
   ].includes(toolName);
 }

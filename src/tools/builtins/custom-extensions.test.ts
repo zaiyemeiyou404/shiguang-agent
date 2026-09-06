@@ -149,6 +149,34 @@ test("custom skill selection does not leak project skills into standalone web re
   assert.deepEqual(selectedForWeb.map((skill) => skill.name), []);
 });
 
+test("project custom skills without triggers are still excluded from standalone web requests", async () => {
+  const {
+    createCustomExtensionTools,
+    loadCustomSkills,
+    selectCustomSkills,
+  } = await loadModule();
+  const extensionRoot = await makeExtensionRoot();
+  const createSkill = createCustomExtensionTools(extensionRoot).find((tool) => tool.descriptor.name === "create_custom_skill");
+  assert.ok(createSkill);
+
+  await createSkill.execute({
+    name: "workspace habit",
+    description: "Project-only habits",
+    layer: "project",
+    priority: 50,
+    instructions: "Only apply inside local project analysis tasks.",
+  });
+
+  const skills = loadCustomSkills(extensionRoot);
+  const selected = selectCustomSkills(skills, {
+    userMessage: "read this page https://example.test/news",
+    workspaceRoot: "G:/projects/current-app",
+    availableTools: ["web_fetch", "web_search"],
+  });
+
+  assert.deepEqual(selected.map((skill) => skill.name), []);
+});
+
 test("default web article reader skill is seeded and selected for URLs", async () => {
   const {
     ensureDefaultCustomSkills,

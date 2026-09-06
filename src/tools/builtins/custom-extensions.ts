@@ -454,11 +454,14 @@ function scoreCustomSkill(skill: CustomSkill, context?: CustomSkillSelectionCont
   const messageText = (context?.userMessage ?? "").toLowerCase();
   const workspaceText = (context?.workspaceRoot ?? "").toLowerCase();
   const availableTools = normalizeAvailableToolNames(context?.availableTools);
+  const standaloneWebRequest = isStandaloneWebRequest(context?.userMessage ?? "");
+  if (skill.layer === "project" && standaloneWebRequest) return Number.NEGATIVE_INFINITY;
+
   let score = skill.priority;
 
   if (skill.layer === "global") score += 8;
   if (skill.layer === "domain") score += 16;
-  if (skill.layer === "project" && context?.workspaceRoot) score += 18;
+  if (skill.layer === "project" && context?.workspaceRoot && allowScopeWorkspaceBoost(skill, context?.userMessage ?? "")) score += 18;
   if (skill.layer === "session") score += 12;
   if (skill.layer === "task") score += 20;
 
@@ -468,7 +471,7 @@ function scoreCustomSkill(skill: CustomSkill, context?: CustomSkillSelectionCont
     const messageMatches = triggers.filter((trigger) => messageText.includes(trigger));
     const workspaceMatches = triggers.filter((trigger) => workspaceText.includes(trigger));
     const toolMatches = triggers.filter((trigger) => toolText.includes(trigger));
-    const allowWorkspaceTrigger = skill.layer === "project" && !isStandaloneWebRequest(context?.userMessage ?? "");
+    const allowWorkspaceTrigger = skill.layer === "project" && allowScopeWorkspaceBoost(skill, context?.userMessage ?? "");
     const effectiveMatches = [
       ...messageMatches,
       ...(allowWorkspaceTrigger ? workspaceMatches : []),
@@ -485,9 +488,10 @@ function scoreCustomSkill(skill: CustomSkill, context?: CustomSkillSelectionCont
 
 function isStandaloneWebRequest(message: string): boolean {
   const text = message.toLowerCase();
+  const textWithoutUrls = text.replace(/https?:\/\/\S+/g, " ");
   const hasWebSignal = /https?:\/\/|联网|网页|网址|链接|搜索|搜一下|查一下|正文|文章|新闻|博客|web|url|link|article|news|search/.test(text);
   if (!hasWebSignal) return false;
-  return !/项目|工程|仓库|代码|文件|目录|工作区|修改|修复|运行|测试|构建|project|repo|code|file|workspace|fix|edit|build|test/.test(text);
+  return !/项目|工程|仓库|代码|文件|目录|工作区|修改|修复|运行|测试|构建|project|repo|code|file|workspace|fix|edit|build|\btest\b/.test(textWithoutUrls);
 }
 
 function allowScopeWorkspaceBoost(skill: CustomSkill, message: string): boolean {
@@ -511,6 +515,7 @@ export function formatCustomSkillInstructions(skills: CustomSkill[], context?: C
     "Relevant Shiguang skills are active.",
     "These are selected user/Agent-authored reusable instructions. Follow them when relevant, but the latest user message remains authoritative.",
     "Skill contract: shiguang.skill.v1. Layers: global < domain < project < session < task. Higher priority and trigger matches are injected first.",
+    "Project-layer skills require project/workspace intent; standalone web, URL, search, news, or article tasks must not activate project skills only because the current workspace path matches.",
     "",
     ...enabled.map((skill) => [
       `Skill: ${skill.name}`,

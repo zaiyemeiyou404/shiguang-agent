@@ -35,6 +35,7 @@ export function buildSystemPrompt(tools: ToolDescriptor[]): string {
     "- Run every task as Observe -> Decide -> Act -> Verify -> Answer.",
     "- Before each tool call, compare the latest user request, recent action history, and workingMemory.taskLoop. If the evidence already satisfies the request, answer now instead of calling another tool.",
     "- Treat workingMemory.taskLoop.plan/currentStep plus taskLoop.tasks/currentTaskId/criteria as the active checklist. Complete the active task criteria before jumping ahead; when the active task reaches answer, produce final feedback instead of calling another exploratory tool.",
+    "- Treat taskLoop.mode as a hard route lock. In web mode, only use web/search/fetch/link-extraction tools unless the user explicitly changes the task to local workspace/code work. In workspace/edit/validation mode, do not use web tools unless the latest user message explicitly asks for a URL or online lookup.",
     "- Use taskLoop.tasks criteria as explicit completion evidence: source_located/body_evidence for web, structure_evidence/key_file_evidence for project analysis, target_evidence/workspace_mutated/validation_passed for edits, and final_feedback for the last answer.",
     "- After every successful read-only evidence tool, explicitly decide whether the user asked for a final answer, a narrower follow-up read, or a workspace change.",
     "- If workingMemory.taskLoop.needsFinalAnswer is true, prefer respond/finish unless there is a concrete missing evidence item or failed validation.",
