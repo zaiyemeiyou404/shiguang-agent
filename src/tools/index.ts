@@ -12,6 +12,7 @@ export { createPatchTextFileTool } from "./builtins/patch-text-file.js";
 export { createRunTerminalCommandTool } from "./builtins/run-terminal-command.js";
 export { createRunValidationTool } from "./builtins/run-validation.js";
 export { createSearchWorkspaceTool } from "./builtins/search-workspace.js";
+export { createFindFilesTool } from "./builtins/find-files.js";
 export { createListDirectoryTool } from "./builtins/list-directory.js";
 export { createStatPathTool } from "./builtins/stat-path.js";
 export { createCopyPathTool } from "./builtins/copy-path.js";

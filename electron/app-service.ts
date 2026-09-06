@@ -39,6 +39,7 @@ import { createPatchTextFileTool } from "../dist/tools/builtins/patch-text-file.
 import { createRunTerminalCommandTool } from "../dist/tools/builtins/run-terminal-command.js";
 import { createRunValidationTool } from "../dist/tools/builtins/run-validation.js";
 import { createSearchWorkspaceTool } from "../dist/tools/builtins/search-workspace.js";
+import { createFindFilesTool } from "../dist/tools/builtins/find-files.js";
 import { createListDirectoryTool } from "../dist/tools/builtins/list-directory.js";
 import { createStatPathTool } from "../dist/tools/builtins/stat-path.js";
 import { createCopyPathTool } from "../dist/tools/builtins/copy-path.js";
@@ -1134,6 +1135,7 @@ export class DesktopAppService {
       createReadTextFileTool(workspaceRoot),
       createReadManyFilesTool(workspaceRoot),
       createSearchWorkspaceTool(workspaceRoot),
+      createFindFilesTool(workspaceRoot),
       createSearchMemoryTool(this.memoryService, workspaceRoot),
       createRememberFactTool(this.memoryService, workspaceRoot),
       createWriteTextFileTool(workspaceRoot),

@@ -923,3 +923,32 @@ test("judgeTaskCompletion fetches the best extracted article link", () => {
   assert.equal(judgment.recommendedToolName, "web_fetch");
   assert.deepEqual(judgment.recommendedToolInput, { url: "https://example.test/article.html" });
 });
+
+test("judgeTaskCompletion recovers failed file reads with find_files when available", () => {
+  const message = "分析 pubspec.yaml";
+  const failedRead: ActionResult = {
+    action: { kind: "tool_call", toolName: "read_text_file", toolInput: { path: "worktest/worktest/pubspec.yaml" } },
+    ok: false,
+    output: null,
+    error: "ENOENT",
+    metadata: {
+      category: "tool_error",
+      summary: "missing file",
+      retryable: false,
+      toolName: "read_text_file",
+    },
+  };
+
+  const judgment = judgeTaskCompletion(
+    makeInput(message, [
+      { name: "find_files", description: "find files", inputSchema: { type: "object" } },
+      { name: "search_workspace", description: "search", inputSchema: { type: "object" } },
+    ]),
+    failedRead,
+    message,
+  );
+
+  assert.equal(judgment.status, "needs_recovery");
+  assert.equal(judgment.recommendedToolName, "find_files");
+  assert.deepEqual(judgment.recommendedToolInput, { query: "pubspec.yaml", maxResults: 20 });
+});

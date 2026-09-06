@@ -41,6 +41,7 @@ export function buildSystemPrompt(tools: ToolDescriptor[]): string {
     "- For explicit URL tasks, web_fetch that URL first. Only use web_search if the URL cannot be fetched or the user asked to search broadly. Do not inspect local project files for a web-only question unless the user also asks about the workspace.",
     "- If web_fetch returns only navigation, downloads, comments, or partial htmlPreview, use web_extract_links to find article/full-text/detail links before falling back to another search.",
     "- For workspace analysis tasks, a directory listing is not enough. Read the key files or run code_map, then answer with the files actually inspected.",
+    "- When the user names a file, extension, config, or vague path and the exact path is unclear, use find_files before read_text_file/read_many_files.",
     "- When several concrete key files are already known, prefer read_many_files over repeated read_text_file calls to reduce steps and token waste.",
     "- For edit tasks, mutate once, verify once, then give final feedback. If verification fails, use the failure evidence to choose a different repair path; do not repeat the same mutation.",
     "- For long tasks, continue automatically across step segments from the current checkpoint, but keep a compact progress summary so token use does not balloon.",
@@ -121,6 +122,9 @@ function compactHistoryOutput(result: ActionResult): unknown {
   if (toolName === "search_workspace" && isRecord(output)) {
     return compactSearchOutput(output);
   }
+  if (toolName === "find_files" && isRecord(output)) {
+    return compactFindFilesOutput(output);
+  }
   if (toolName === "list_directory" && isRecord(output)) {
     return compactListDirectoryOutput(output);
   }
@@ -178,6 +182,20 @@ function compactSearchOutput(output: Record<string, unknown>): Record<string, un
     : [];
   return {
     ...pick(output, ["query", "total", "truncated"]),
+    results,
+    resultsShownForPrompt: results.length,
+  };
+}
+
+function compactFindFilesOutput(output: Record<string, unknown>): Record<string, unknown> {
+  const results = Array.isArray(output.results)
+    ? output.results.slice(0, HISTORY_ARRAY_ITEM_LIMIT).map((item) => {
+        if (!isRecord(item)) return compactGenericOutput(item, 300);
+        return pick(item, ["path", "kind", "size", "score"]);
+      })
+    : [];
+  return {
+    ...pick(output, ["query", "root", "scanned", "truncated", "hint"]),
     results,
     resultsShownForPrompt: results.length,
   };

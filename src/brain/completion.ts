@@ -141,6 +141,19 @@ export function judgeTaskCompletion(
     return { status: "ready", reason: "Requested file content is available for final feedback." };
   }
 
+  if (toolName === "find_files") {
+    const firstPath = firstFoundFilePath(lastResult.output);
+    if (firstPath && hasTool(input, "read_text_file") && !hasReadPath(input.history, firstPath)) {
+      return {
+        status: "needs_more_evidence",
+        reason: "find_files located likely targets; read the best match before final workspace feedback.",
+        recommendedToolName: "read_text_file",
+        recommendedToolInput: { path: firstPath },
+      };
+    }
+    return { status: hasFoundFiles(lastResult.output) ? "ready" : "needs_recovery", reason: hasFoundFiles(lastResult.output) ? "find_files located matching paths." : "find_files found no matching paths." };
+  }
+
   if (toolName === "list_directory" || toolName === "inspect_project" || toolName === "search_workspace") {
     if (!isBroadWorkspaceAnalysis(message)) {
       return { status: "ready", reason: `${toolName} produced enough read-only evidence for this narrow request.` };
@@ -279,6 +292,9 @@ function recommendToolForCriterion(
   if (criterionId === "target_evidence") {
     const path = extractPathFromMessage(message);
     if (recovering && path && hasFailedReadPath(input.history, path)) {
+      if (hasTool(input, "find_files")) {
+        return recommended("needs_recovery", `Reading ${path} failed; finding matching filenames can recover the correct target path.`, "find_files", { query: inferPathSearchQuery(path, message), maxResults: 20 });
+      }
       if (hasTool(input, "search_workspace")) {
         return recommended("needs_recovery", `Reading ${path} failed; searching the workspace for the correct target path.`, "search_workspace", { query: path });
       }
@@ -288,6 +304,9 @@ function recommendToolForCriterion(
     }
     if (path && hasTool(input, "read_text_file") && !hasReadPath(input.history, path)) {
       return recommended("needs_more_evidence", `Task-loop needs fresh evidence from ${path} before changing it.`, "read_text_file", { path });
+    }
+    if (hasTool(input, "find_files") && /文件|路径|哪里|哪个|找|定位|readme|package|config|\*\./i.test(message)) {
+      return recommended(recovering ? "needs_recovery" : "needs_more_evidence", "Task-loop needs the target file path located before reading or editing.", "find_files", { query: inferPathSearchQuery(path, message), maxResults: 20 });
     }
     if (hasTool(input, "search_workspace")) {
       return recommended(recovering ? "needs_recovery" : "needs_more_evidence", "Task-loop needs target evidence before editing.", "search_workspace", { query: path ?? message });
@@ -424,8 +443,16 @@ function inferFailedToolRecovery(
     };
   }
 
-  if ((toolName === "read_text_file" || toolName === "stat_path") && hasTool(input, "search_workspace")) {
+  if ((toolName === "read_text_file" || toolName === "read_many_files" || toolName === "stat_path") && hasTool(input, "search_workspace")) {
     const target = extractPathFromToolInput(failedResult.action.toolInput) ?? extractPathFromMessage(message);
+    if (hasTool(input, "find_files")) {
+      return {
+        status: "needs_recovery",
+        reason: `${toolName} failed; finding matching filenames avoids repeating a stale or duplicated path.`,
+        recommendedToolName: "find_files",
+        recommendedToolInput: { query: inferPathSearchQuery(target, message), maxResults: 20 },
+      };
+    }
     return {
       status: "needs_recovery",
       reason: `${toolName} failed; searching for the target file avoids repeating a stale or duplicated path.`,
@@ -434,7 +461,7 @@ function inferFailedToolRecovery(
     };
   }
 
-  if ((toolName === "read_text_file" || toolName === "list_directory" || toolName === "stat_path") && hasTool(input, "list_directory")) {
+  if ((toolName === "read_text_file" || toolName === "read_many_files" || toolName === "list_directory" || toolName === "stat_path") && hasTool(input, "list_directory")) {
     const target = extractPathFromToolInput(failedResult.action.toolInput);
     const parent = inferParentDirectory(target);
     return {
@@ -576,9 +603,9 @@ function proposedToolSatisfiesCriterion(toolName: string, criterionId: string): 
   const allowed: Record<string, string[]> = {
     source_located: ["web_fetch", "web_search", "web_extract_links"],
     body_evidence: ["web_fetch", "web_search", "web_extract_links"],
-    structure_evidence: ["inspect_project", "list_directory", "search_workspace", "code_map"],
-    target_evidence: ["read_text_file", "read_many_files", "search_workspace", "inspect_project", "list_directory", "code_map"],
-    key_file_evidence: ["read_text_file", "read_many_files", "code_map", "symbol_search", "dependency_graph"],
+    structure_evidence: ["inspect_project", "list_directory", "find_files", "search_workspace", "code_map"],
+    target_evidence: ["read_text_file", "read_many_files", "find_files", "search_workspace", "inspect_project", "list_directory", "code_map"],
+    key_file_evidence: ["read_text_file", "read_many_files", "find_files", "code_map", "symbol_search", "dependency_graph"],
     workspace_mutated: ["copy_path", "delete_path", "move_path", "patch_text_file", "terminal_command", "write_text_file"],
     validation_passed: ["run_validation", "completion_check"],
     request_understood: [],
@@ -620,6 +647,7 @@ function isLocalWorkspaceTool(toolName: string): boolean {
     "code_map",
     "inspect_project",
     "list_directory",
+    "find_files",
     "read_text_file",
     "read_many_files",
     "run_validation",
@@ -665,6 +693,7 @@ function isReadEvidenceTool(toolName: string): boolean {
     "code_map",
     "inspect_project",
     "list_directory",
+    "find_files",
     "read_text_file",
     "read_many_files",
     "search_workspace",
@@ -818,6 +847,23 @@ function searchResultUrls(output: unknown): string[] {
     if (typeof url === "string" && /^https?:\/\//i.test(url)) urls.push(url);
   }
   return urls;
+}
+
+function hasFoundFiles(output: unknown): boolean {
+  return firstFoundFilePath(output) !== null;
+}
+
+function firstFoundFilePath(output: unknown): string | null {
+  if (!output || typeof output !== "object" || Array.isArray(output)) return null;
+  const results = (output as { results?: unknown }).results;
+  if (!Array.isArray(results)) return null;
+  for (const item of results) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const record = item as { path?: unknown; kind?: unknown };
+    if (record.kind === "directory") continue;
+    if (typeof record.path === "string" && record.path.trim()) return record.path.trim();
+  }
+  return null;
 }
 
 function firstEntrypointPath(output: unknown): string | null {

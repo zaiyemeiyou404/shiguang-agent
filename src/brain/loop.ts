@@ -197,7 +197,7 @@ function createTaskLoopTasks(
 
   if (mode === "edit" || mode === "validation") {
     return [
-      taskLoopTask("collect_evidence", "检查目标文件或失败诊断", ["target_evidence"], ["read_text_file", "read_many_files", "search_workspace", "collect_diagnostics"], "active"),
+      taskLoopTask("collect_evidence", "检查目标文件或失败诊断", ["target_evidence"], ["find_files", "read_text_file", "read_many_files", "search_workspace", "collect_diagnostics"], "active"),
       taskLoopTask("apply_change", "执行一次聚焦的工作区修改", ["workspace_mutated"], ["patch_text_file", "write_text_file"], "pending", ["collect_evidence"]),
       taskLoopTask("verify", "验证修改后的工作区", ["validation_passed"], ["run_validation"], "pending", ["apply_change"]),
       taskLoopTask("answer", "汇报修改内容和验证结果", ["final_feedback"], [], "pending", ["verify"]),
@@ -206,8 +206,8 @@ function createTaskLoopTasks(
 
   if (mode === "workspace") {
     return [
-      taskLoopTask("collect_evidence", "检查项目结构和相关路径", ["structure_evidence"], ["inspect_project", "list_directory", "search_workspace"], "active"),
-      taskLoopTask("analyze_evidence", "读取关键文件或生成代码地图", ["key_file_evidence"], ["read_many_files", "read_text_file", "code_map"], "pending", ["collect_evidence"]),
+      taskLoopTask("collect_evidence", "检查项目结构和相关路径", ["structure_evidence"], ["inspect_project", "find_files", "list_directory", "search_workspace"], "active"),
+      taskLoopTask("analyze_evidence", "读取关键文件或生成代码地图", ["key_file_evidence"], ["find_files", "read_many_files", "read_text_file", "code_map"], "pending", ["collect_evidence"]),
       taskLoopTask("answer", "基于已检查证据说明结论", ["final_feedback"], [], "pending", ["analyze_evidence"]),
     ];
   }
@@ -391,6 +391,13 @@ function taskCriteriaSatisfiedByResult(result: ActionResult, toolName: string | 
   if (toolName === "read_text_file" || toolName === "read_many_files" || toolName === "code_map" || toolName === "dependency_graph" || toolName === "symbol_search") {
     return ["structure_evidence", "target_evidence", "key_file_evidence"];
   }
+  if (toolName === "find_files") {
+    const satisfied = ["structure_evidence"];
+    if (hasTaskLoopRecoveryTargetEvidence(result.output, toolName)) {
+      satisfied.push("target_evidence", "key_file_evidence");
+    }
+    return satisfied;
+  }
   if (toolName === "list_directory" || toolName === "inspect_project" || toolName === "search_workspace") {
     const satisfied = ["structure_evidence"];
     if (activeTaskHasCriterion(activeTask, "target_evidence") && hasTaskLoopRecoveryTargetEvidence(result.output, toolName)) {
@@ -408,7 +415,7 @@ function activeTaskHasCriterion(activeTask: TaskLoopTask | undefined, criterionI
 function hasTaskLoopRecoveryTargetEvidence(output: unknown, toolName: string): boolean {
   if (!output || typeof output !== "object" || Array.isArray(output)) return false;
   const record = output as Record<string, unknown>;
-  if (toolName === "search_workspace") {
+  if (toolName === "search_workspace" || toolName === "find_files") {
     return Array.isArray(record.results) && record.results.length > 0;
   }
   if (toolName === "list_directory" || toolName === "inspect_project") {
@@ -491,7 +498,7 @@ function updateTaskLoopPlan(
   if (result.metadata?.workspaceMutation === true) return markPlanThrough(plan, "apply_change");
   if (toolName === "run_validation" || toolName === "completion_check") return markPlanThrough(plan, "verify");
   if (toolName === "web_fetch" || toolName === "read_text_file" || toolName === "read_many_files" || toolName === "code_map") return markPlanThrough(plan, "analyze_evidence");
-  if (toolName === "web_search" || toolName === "web_extract_links" || toolName === "list_directory" || toolName === "inspect_project" || toolName === "search_workspace") {
+  if (toolName === "web_search" || toolName === "web_extract_links" || toolName === "find_files" || toolName === "list_directory" || toolName === "inspect_project" || toolName === "search_workspace") {
     return markPlanThrough(plan, "collect_evidence");
   }
 
@@ -549,7 +556,7 @@ function inferTaskLoopModeFromResult(
   if (result.metadata?.workspaceMutation === true) return "edit";
   if (toolName === "run_validation") return "validation";
   if (toolName === "web_search" || toolName === "web_fetch" || toolName === "web_extract_links") return "web";
-  if (toolName === "read_text_file" || toolName === "read_many_files" || toolName === "list_directory" || toolName === "inspect_project" || toolName === "search_workspace") {
+  if (toolName === "read_text_file" || toolName === "read_many_files" || toolName === "find_files" || toolName === "list_directory" || toolName === "inspect_project" || toolName === "search_workspace") {
     if (currentMode === "edit" || currentMode === "validation") return currentMode;
     return currentMode === "web" ? "web" : "workspace";
   }
@@ -705,7 +712,7 @@ function inferTaskLoopEvidenceQuality(
   if (toolName === "read_text_file") return hasTaskLoopReadableFileContent(result.output) ? "strong" : "weak";
   if (toolName === "read_many_files") return hasTaskLoopReadableManyFileContent(result.output) ? "strong" : "weak";
   if (toolName === "code_map" || toolName === "dependency_graph" || toolName === "symbol_search") return "strong";
-  if (toolName === "list_directory" || toolName === "inspect_project" || toolName === "search_workspace") {
+  if (toolName === "find_files" || toolName === "list_directory" || toolName === "inspect_project" || toolName === "search_workspace") {
     return hasTaskLoopRecoveryTargetEvidence(result.output, toolName) ? "strong" : "weak";
   }
   return "weak";
@@ -743,7 +750,7 @@ function inferTaskLoopEvidenceKind(
   if (toolName === "code_map" || toolName === "dependency_graph" || toolName === "symbol_search") return "code";
   if (toolName === "run_validation" || toolName === "completion_check") return "validation";
   if (toolName === "terminal_command") return "terminal";
-  if (toolName === "list_directory" || toolName === "inspect_project" || toolName === "search_workspace") return "workspace";
+  if (toolName === "find_files" || toolName === "list_directory" || toolName === "inspect_project" || toolName === "search_workspace") return "workspace";
   return "unknown";
 }
 

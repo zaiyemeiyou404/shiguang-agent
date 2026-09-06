@@ -128,6 +128,7 @@ function inferCost(
     || name === "read_many_files"
     || name === "list_directory"
     || name === "stat_path"
+    || name === "find_files"
     || name === "git_status"
     || name === "echo"
   ) {
@@ -135,6 +136,7 @@ function inferCost(
   }
   if (
     name === "search_workspace"
+    || name === "find_files"
     || name === "code_map"
     || name === "symbol_search"
     || name === "dependency_graph"
@@ -158,6 +160,7 @@ function inferRecommendedBeforeTools(
 ): string[] {
   if (name === "read_text_file" || capability === "fs.read") return ["stat_path", "list_directory"];
   if (name === "read_many_files" || capability === "fs.read_many") return ["inspect_project", "code_map"];
+  if (name === "find_files" || capability === "fs.find") return ["list_directory"];
   if (name === "run_validation" || capability === "process.validate") return ["git_status"];
   if (phase === "edit") return ["read_text_file", "search_workspace"];
   if (phase === "execute") return category === "process" ? ["inspect_project", "read_text_file"] : ["read_text_file"];
@@ -167,7 +170,10 @@ function inferRecommendedBeforeTools(
 
 function inferRecommendedAfterTools(name: string, capability: string, phase: ToolContractPhase): string[] {
   if (name === "inspect_project" || capability === "project.inspect") {
-    return ["code_map", "dependency_graph", "collect_diagnostics"];
+    return ["find_files", "code_map", "dependency_graph", "collect_diagnostics"];
+  }
+  if (name === "find_files" || capability === "fs.find") {
+    return ["read_text_file", "read_many_files"];
   }
   if (name === "code_map" || capability === "code.map") {
     return ["symbol_search", "dependency_graph", "read_text_file"];
@@ -216,6 +222,7 @@ function inferMaxPromptChars(name: string, category: ToolContractCategory, phase
   if (name === "read_text_file") return 2400;
   if (name === "read_many_files") return 3600;
   if (name === "search_workspace") return 1800;
+  if (name === "find_files") return 1800;
   if (name === "web_extract_links") return 1600;
   if (category === "web" || category === "github" || category === "mcp") return 1200;
   if (phase === "inspect") return 1600;

@@ -16,6 +16,7 @@ const CORE_INSPECTION_TOOLS = new Set([
   "inspect_project",
   "list_directory",
   "stat_path",
+  "find_files",
   "read_text_file",
   "read_many_files",
   "search_workspace",
@@ -304,6 +305,7 @@ function scoreTool(
   if (intent.web && name === "web_extract_links" && hasWeakWebFetchWithHtmlPreview(history)) score += 64;
   if (intent.web && name === "web_extract_links" && /正文|文章|全文|链接|网页|抓取|article|body|link|html/i.test(text)) score += 18;
   if (!intent.web && name === "read_many_files" && /多个|几个|这些|整体|项目|工程|结构|分析|readme|package|config|入口|multi|several|project|codebase/i.test(text)) score += 22;
+  if (!intent.web && name === "find_files" && /找|查找|定位|哪里|哪个|文件名|路径|readme|package|config|入口|\*\.|find|locate|glob|where/i.test(text)) score += 34;
   if (intent.web && isLocalWorkspaceToolName(name)) score -= isExplicitUrlText(text) ? 90 : 48;
   if (!intent.web && (name === "web_search" || name === "web_fetch") && history.some((result) => isRecentWorkspaceEvidence(result))) score -= 18;
   if (intent.memory && contract.category === "memory") score += 24;
@@ -406,11 +408,11 @@ function toolNamesForTaskLoopCriterion(
       }
       return ["web_fetch", "web_search"];
     case "structure_evidence":
-      return ["inspect_project", "list_directory", "search_workspace"];
+      return ["inspect_project", "find_files", "list_directory", "search_workspace"];
     case "target_evidence":
-      return ["read_many_files", "read_text_file", "search_workspace", "list_directory"];
+      return ["find_files", "read_many_files", "read_text_file", "search_workspace", "list_directory"];
     case "key_file_evidence":
-      return ["read_many_files", "read_text_file", "code_map", "symbol_search"];
+      return ["find_files", "read_many_files", "read_text_file", "code_map", "symbol_search"];
     case "workspace_mutated":
       return ["patch_text_file", "write_text_file"];
     case "validation_passed":
@@ -447,9 +449,14 @@ function inferRecommendedNextTools(history: ActionResult[]): Set<string> {
     if (toolName === "web_fetch" && result.ok && hasHtmlPreview(result.output)) recommended.add("web_extract_links");
     if (toolName === "web_extract_links") recommended.add("web_fetch");
     if (toolName === "inspect_project" || toolName === "list_directory" || toolName === "search_workspace") {
+      recommended.add("find_files");
       recommended.add("read_text_file");
       recommended.add("read_many_files");
       recommended.add("code_map");
+    }
+    if (toolName === "find_files") {
+      recommended.add("read_text_file");
+      recommended.add("read_many_files");
     }
     const after = (result.metadata as { recommendedAfterTools?: unknown } | undefined)?.recommendedAfterTools;
     if (Array.isArray(after)) {
@@ -466,6 +473,7 @@ function isRecentWorkspaceEvidence(result: ActionResult): boolean {
   return result.ok === true && (
     toolName === "inspect_project"
     || toolName === "list_directory"
+    || toolName === "find_files"
     || toolName === "read_text_file"
     || toolName === "read_many_files"
     || toolName === "search_workspace"
@@ -482,6 +490,7 @@ function isLocalWorkspaceToolName(name: string): boolean {
 
 function isRepeatProneToolName(name: string): boolean {
   return name === "list_directory"
+    || name === "find_files"
     || name === "inspect_project"
     || name === "search_workspace"
     || name === "web_search"
