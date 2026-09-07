@@ -77,6 +77,7 @@ type RunActivityTranscript = {
   createdAt: string;
   meta: string[];
   active: boolean;
+  debugPayload?: unknown;
 };
 
 type RunFailureInsight = {
@@ -97,9 +98,11 @@ const CODEX_PROVIDER_HINT = "先做 Hermes 风格 API provider registry：Codex 
 
 const SESSION_PIN_STORAGE_KEY = "shiguang:pinned-sessions";
 const SESSION_DRAFT_STORAGE_KEY = "shiguang:session-drafts";
+const DEBUG_MODE_STORAGE_KEY = "shiguang:debug-mode";
 const MAX_TIMELINE_SOURCE_EVENTS = 320;
 const MAX_TIMELINE_RENDER_ITEMS = 120;
 const MAX_CHAT_ACTIVITY_ITEMS = 36;
+const MAX_CHAT_ACTIVITY_ITEMS_DEBUG = 120;
 const RUN_REFRESH_MIN_INTERVAL_MS = 1500;
 
 const PROVIDER_PRESETS: ProviderDraft[] = [
@@ -197,6 +200,11 @@ function readSessionDrafts(): Record<string, string> {
   } catch {
     return {};
   }
+}
+
+function readDebugMode(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem(DEBUG_MODE_STORAGE_KEY) === "true";
 }
 
 function Pill({ variant, children }: { variant: PillVariant; children: React.ReactNode }) {
@@ -1054,6 +1062,7 @@ function SimpleChatTranscript({
   entries,
   liveEvents,
   showLiveEvents,
+  debugMode,
   pendingApprovals,
   decisionState,
   onApprovalDecision,
@@ -1061,6 +1070,7 @@ function SimpleChatTranscript({
   entries: DesktopConversationEntry[];
   liveEvents: DesktopEvent[];
   showLiveEvents: boolean;
+  debugMode: boolean;
   pendingApprovals: DesktopApproval[];
   decisionState: Record<string, "approving" | "approved" | "denied" | undefined>;
   onApprovalDecision: (approvalId: string, decision: "granted" | "denied") => void;
@@ -1173,7 +1183,7 @@ function SimpleChatTranscript({
     return [];
   });
 
-  const activityItems: ChatTranscriptItem[] = !showLiveEvents ? [] : buildRunActivityTranscript(liveEvents).map((activity) => ({
+  const activityItems: ChatTranscriptItem[] = !showLiveEvents ? [] : buildRunActivityTranscript(liveEvents, debugMode).map((activity) => ({
     id: `activity:${activity.id}`,
     source: "event" as const,
     kind: "tool_activity" as const,
@@ -1235,6 +1245,7 @@ function SimpleChatTranscript({
             <RunActivityTranscriptNode
               key={item.id}
               activity={item.activity}
+              debugMode={debugMode}
               time={item.duplicateCount && item.duplicateCount > 1 ? `${item.time} x${item.duplicateCount}` : item.time}
             />
           );
@@ -1297,33 +1308,29 @@ function compareChatTranscriptItems(a: { createdAt?: string; id: string }, b: { 
   return a.id.localeCompare(b.id);
 }
 
-function buildRunActivityTranscript(events: DesktopEvent[]): RunActivityTranscript[] {
-  const latestByCall = new Map<string, DesktopEvent>();
-
-  for (const event of events) {
-    if (event.kind !== "tool_pipeline") continue;
-    if (isTaskLoopPipelineEvent(event)) continue;
-    const payload = eventPayloadRecord(event);
-    const phase = typeof payload.phase === "string" ? payload.phase : null;
-    if (!phase) continue;
-    const toolName = toolEventName(event) ?? "tool";
-    const callKey = typeof payload.toolCallId === "string"
-      ? payload.toolCallId
-      : typeof payload.approvalId === "string"
-        ? payload.approvalId
-        : event.id;
-    const key = `${event.runId}:${toolName}:${callKey}`;
-    const existing = latestByCall.get(key);
-    if (!existing || Date.parse(event.createdAt) >= Date.parse(existing.createdAt)) {
-      latestByCall.set(key, event);
-    }
-  }
-
-  return Array.from(latestByCall.values())
+function buildRunActivityTranscript(events: DesktopEvent[], debugMode: boolean): RunActivityTranscript[] {
+  return events
+    .filter((event) => event.kind === "tool_pipeline")
+    .filter((event) => !isTaskLoopPipelineEvent(event))
+    .filter((event) => debugMode || shouldShowToolPipelineInChat(event))
     .map(activityFromToolPipelineEvent)
     .filter((activity): activity is RunActivityTranscript => Boolean(activity))
     .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
-    .slice(-MAX_CHAT_ACTIVITY_ITEMS);
+    .slice(debugMode ? -MAX_CHAT_ACTIVITY_ITEMS_DEBUG : -MAX_CHAT_ACTIVITY_ITEMS);
+}
+
+function shouldShowToolPipelineInChat(event: DesktopEvent): boolean {
+  const payload = eventPayloadRecord(event);
+  const phase = typeof payload.phase === "string" ? payload.phase : "";
+  return phase === "pre_execute"
+    || phase === "approval_required"
+    || phase === "approved"
+    || phase === "denied"
+    || phase === "executing"
+    || phase === "completed"
+    || phase === "failed"
+    || phase === "approval_executed"
+    || phase === "approval_failed";
 }
 
 function activityFromToolPipelineEvent(event: DesktopEvent): RunActivityTranscript | null {
@@ -1345,7 +1352,7 @@ function activityFromToolPipelineEvent(event: DesktopEvent): RunActivityTranscri
       : event.id;
 
   return {
-    id: `${event.runId}:${toolName ?? "tool"}:${idPart}`,
+    id: `${event.runId}:${toolName ?? "tool"}:${idPart}:${phase}:${event.id}`,
     runId: event.runId,
     title,
     detail,
@@ -1357,10 +1364,18 @@ function activityFromToolPipelineEvent(event: DesktopEvent): RunActivityTranscri
     createdAt: event.createdAt,
     meta,
     active: phase === "pre_execute" || phase === "executing" || phase === "approval_required" || phase === "approved",
+    debugPayload: {
+      eventId: event.id,
+      eventKind: event.kind,
+      runId: event.runId,
+      seq: event.seq,
+      createdAt: event.createdAt,
+      payload: event.payload,
+    },
   };
 }
 
-function RunActivityTranscriptNode({ activity, time }: { activity: RunActivityTranscript; time: string }) {
+function RunActivityTranscriptNode({ activity, time, debugMode }: { activity: RunActivityTranscript; time: string; debugMode: boolean }) {
   const dotTone = activity.tone === "neutral" ? "accent" : activity.tone;
   return (
     <article className={`timeline-node run-activity-node ${activity.tone}${activity.active ? " active" : ""}`}>
@@ -1380,6 +1395,12 @@ function RunActivityTranscriptNode({ activity, time }: { activity: RunActivityTr
           <div className="run-activity-meta">
             {activity.meta.map((item) => <span key={item}>{item}</span>)}
           </div>
+        ) : null}
+        {debugMode && activity.debugPayload ? (
+          <details className="run-activity-debug">
+            <summary>Debug payload</summary>
+            <pre className="tool-json">{formatPayload(activity.debugPayload)}</pre>
+          </details>
         ) : null}
       </div>
     </article>
@@ -4969,6 +4990,7 @@ export default function App() {
   const [sending, setSending] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsMode, setSettingsMode] = useState<SettingsDrawerMode>("full");
+  const [debugMode, setDebugMode] = useState(() => readDebugMode());
   const [surface, setSurface] = useState<MainSurface>("home");
   const [settings, setSettings] = useState<DesktopSettings | null>(null);
   const [decisionState, setDecisionState] = useState<Record<string, "approving" | "approved" | "denied">>({});
@@ -5014,7 +5036,6 @@ export default function App() {
     : null;
   const showActiveRunTranscript = Boolean(
     activeRun
-      && (activeRun.status === "pending" || activeRun.status === "running" || activeRun.status === "paused" || activeRun.status === "needs_approval")
       && (sessionTurns.length === 0 || (latestSessionRun?.id ?? null) === (activeRunId ?? null)),
   );
   const pendingApprovals = workspaceSnapshot?.pendingApprovals ?? [];
@@ -5274,6 +5295,11 @@ export default function App() {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(SESSION_DRAFT_STORAGE_KEY, JSON.stringify(sessionDrafts));
   }, [sessionDrafts]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(DEBUG_MODE_STORAGE_KEY, debugMode ? "true" : "false");
+  }, [debugMode]);
 
   useEffect(() => {
     setPinnedSessionIds((prev) => prev.filter((id) => sessions.some((session) => session.id === id)));
@@ -6112,6 +6138,7 @@ export default function App() {
                     entries={sessionConversation}
                     liveEvents={sortedEvents}
                     showLiveEvents={showActiveRunTranscript}
+                    debugMode={debugMode}
                     pendingApprovals={pendingApprovals}
                     decisionState={decisionState}
                     onApprovalDecision={handleApprovalDecision}
@@ -6171,6 +6198,14 @@ export default function App() {
                     <div className="composer-actions">
                     <button className="composer-action" type="button" onClick={() => { void handlePickAttachments(); }} disabled={!activeSessionId || sending || isProcessingRun || runActionState !== "idle"}>📎 附件{selectedAttachments.length > 0 ? ` (${selectedAttachments.length})` : ""}</button>
                     <button className="composer-action" type="button" onClick={() => { void openSettings("model"); }}>⚙ 模型</button>
+                    <button
+                      className={`composer-action debug-toggle${debugMode ? " active" : ""}`}
+                      type="button"
+                      title={debugMode ? "Debug mode is on: show detailed tool logs" : "Debug mode is off: show concise tool process"}
+                      onClick={() => setDebugMode((value) => !value)}
+                    >
+                      Debug {debugMode ? "on" : "off"}
+                    </button>
                   </div>
                   <div className="composer-right-actions">
                     <div className="composer-token-meter" title={liveRunUsageSummary.requests > 0 ? "当前 run 的实时模型用量" : "当前会话累计模型用量"}>
@@ -6683,6 +6718,14 @@ export default function App() {
                   <div className="composer-actions">
                     <button className="composer-action" type="button" onClick={() => { void handlePickAttachments(); }} disabled={!activeSessionId || sending || isProcessingRun || runActionState !== "idle"}>📎 附件{selectedAttachments.length > 0 ? ` (${selectedAttachments.length})` : ""}</button>
                     <button className="composer-action" type="button" onClick={() => { void openSettings("model"); }}>⚙ 模型</button>
+                    <button
+                      className={`composer-action debug-toggle${debugMode ? " active" : ""}`}
+                      type="button"
+                      title={debugMode ? "Debug mode is on: show detailed tool logs" : "Debug mode is off: show concise tool process"}
+                      onClick={() => setDebugMode((value) => !value)}
+                    >
+                      Debug {debugMode ? "on" : "off"}
+                    </button>
                   </div>
                   <button className={`send-btn ${isProcessingRun ? (composerHasPayload ? "supplement" : "pause") : ""}`} type="button" onClick={() => { void handleSend(); }} disabled={!canSubmitComposer}>
                     {composerSendLabel}

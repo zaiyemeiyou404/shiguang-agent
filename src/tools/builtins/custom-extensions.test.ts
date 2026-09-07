@@ -114,6 +114,35 @@ test("custom skills support layered trigger-based selection", async () => {
   assert.doesNotMatch(prompt, /Focus on Python code quality/);
 });
 
+test("custom skill selection honors explicit skill names in the user request", async () => {
+  const {
+    createCustomExtensionTools,
+    loadCustomSkills,
+    selectCustomSkills,
+  } = await loadModule();
+  const extensionRoot = await makeExtensionRoot();
+  const createSkill = createCustomExtensionTools(extensionRoot).find((tool) => tool.descriptor.name === "create_custom_skill");
+  assert.ok(createSkill);
+
+  await createSkill.execute({
+    name: "web article reader",
+    description: "Read web article bodies",
+    layer: "domain",
+    scope: "web_fetch",
+    triggers: ["http", "article"],
+    priority: 85,
+    instructions: "When explicitly requested, use the article reader workflow.",
+  });
+
+  const skills = loadCustomSkills(extensionRoot);
+  const selected = selectCustomSkills(skills, {
+    userMessage: "查一下网络搜索的概念，并调用web_article_reader",
+    availableTools: ["web_search", "web_fetch"],
+  });
+
+  assert.deepEqual(selected.map((skill) => skill.name), ["web_article_reader"]);
+});
+
 test("custom skill selection does not leak project skills into standalone web requests", async () => {
   const {
     createCustomExtensionTools,

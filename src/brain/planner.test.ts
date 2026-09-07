@@ -289,6 +289,58 @@ test("RulePlanner uses web_search first for online lookup requests", async () =>
   });
 });
 
+test("RulePlanner treats requested skill names as routing hints, not web search keywords", async () => {
+  const planner = new RulePlanner();
+  const availableTools: ToolDescriptor[] = [
+    {
+      name: "web_search",
+      description: "Searches the public web",
+      inputSchema: { type: "object" },
+      capability: "web.search",
+    },
+    {
+      name: "web_fetch",
+      description: "Fetches public web pages",
+      inputSchema: { type: "object" },
+      capability: "web.fetch",
+    },
+  ];
+
+  const decision = await planner.decide(makeInput([], availableTools, "查一下网络搜索的概念，并调用web_article_reader"));
+
+  assert.deepEqual(decision.action, {
+    kind: "tool_call",
+    toolName: "web_search",
+    toolInput: { query: "网络搜索的概念", limit: 5 },
+  });
+});
+
+test("LlmPlanner sanitizes tool routing directives out of model web_search queries", async () => {
+  const model = new RecordingModel({
+    kind: "tool_call",
+    toolName: "web_search",
+    toolInput: { query: "网络搜索的概念，并调用web_article_reader", limit: 5 },
+  });
+  const planner = new LlmPlanner(model);
+  const availableTools: ToolDescriptor[] = [
+    {
+      name: "web_search",
+      description: "Searches the public web",
+      inputSchema: { type: "object" },
+      capability: "web.search",
+    },
+  ];
+
+  const decision = await planner.decide(makeInput([], availableTools, "查一下网络搜索的概念，并调用web_article_reader"));
+
+  assert.deepEqual(decision.action, {
+    kind: "tool_call",
+    toolName: "web_search",
+    toolInput: { query: "网络搜索的概念", limit: 5 },
+  });
+  assert.match(decision.reasoning ?? "", /Tool input sanitizer/);
+});
+
 test("RulePlanner fetches explicit URLs before searching", async () => {
   const planner = new RulePlanner();
   const availableTools: ToolDescriptor[] = [

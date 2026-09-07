@@ -26,6 +26,57 @@ test("BasicEvaluator stops immediately after a respond action", async () => {
   assert.deepEqual(action, { kind: "stop", reason: "respond" });
 });
 
+test("BasicEvaluator returns first non-retryable tool error to the planner", async () => {
+  const evaluator = new BasicEvaluator();
+  const decision: BrainDecision = {
+    action: { kind: "tool_call", toolName: "read_text_file", toolInput: { path: "missing.md" } },
+    reasoning: "Read target file.",
+  };
+  const result: ActionResult = {
+    action: decision.action,
+    ok: false,
+    output: null,
+    error: "ENOENT: no such file or directory",
+    metadata: {
+      category: "tool_error",
+      summary: "missing.md was not found",
+      retryable: false,
+      toolName: "read_text_file",
+      errorKind: "not_found",
+    },
+  };
+
+  const action = await evaluator.evaluate(decision, result, [result]);
+
+  assert.deepEqual(action, { kind: "continue" });
+});
+
+test("BasicEvaluator pauses after repeated identical non-retryable tool errors", async () => {
+  const evaluator = new BasicEvaluator();
+  const decision: BrainDecision = {
+    action: { kind: "tool_call", toolName: "read_text_file", toolInput: { path: "missing.md" } },
+    reasoning: "Read target file again.",
+  };
+  const history: ActionResult[] = [0, 1, 2].map(() => ({
+    action: decision.action,
+    ok: false,
+    output: null,
+    error: "ENOENT: no such file or directory",
+    metadata: {
+      category: "tool_error",
+      summary: "missing.md was not found",
+      retryable: false,
+      toolName: "read_text_file",
+      errorKind: "not_found",
+    },
+  }));
+
+  const action = await evaluator.evaluate(decision, history[2]!, history);
+
+  assert.equal(action.kind, "stop");
+  assert.equal(action.reason, "non_retryable_tool_error");
+});
+
 test("BasicEvaluator pauses after repeated identical read-only tool calls", async () => {
   const evaluator = new BasicEvaluator();
   const decision: BrainDecision = {

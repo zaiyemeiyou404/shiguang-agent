@@ -58,7 +58,7 @@ export class LlmPlanner implements Planner {
 
     const request = this.buildRequest(input);
     const response = await this.model.generateDecision(request, context);
-    const decision = { action: response.action, reasoning: response.reasoning };
+    const decision = sanitizeToolRoutingDecision({ action: response.action, reasoning: response.reasoning }, message);
     const preflight = inferToolPreflightDecision(input, decision, lastResult, message);
     if (preflight) return preflight;
     const fallback = await inferDeterministicToolFallback(input, decision, context);
@@ -226,6 +226,35 @@ function inferToolPreflightDecision(
     reasoning: [
       decision.reasoning,
       `Tool preflight: completion evaluator says the task is ready (${judgment.reason}); refusing an unnecessary ${decision.action.toolName ?? "tool"} call.`,
+    ].filter(Boolean).join(" "),
+  };
+}
+
+function sanitizeToolRoutingDecision(decision: BrainDecision, message: string): BrainDecision {
+  if (decision.action.kind !== "tool_call") return decision;
+  const toolName = decision.action.toolName;
+  if (toolName !== "web_search" && toolName !== "search_workspace") return decision;
+  if (!decision.action.toolInput || typeof decision.action.toolInput !== "object" || Array.isArray(decision.action.toolInput)) return decision;
+
+  const inputRecord = decision.action.toolInput as Record<string, unknown>;
+  const rawQuery = typeof inputRecord.query === "string" ? inputRecord.query : "";
+  const cleaned = toolName === "web_search"
+    ? cleanWebSearchQuery(rawQuery || message)
+    : cleanWorkspaceSearchQuery(rawQuery || message);
+  if (!cleaned || cleaned === rawQuery) return decision;
+
+  return {
+    ...decision,
+    action: {
+      ...decision.action,
+      toolInput: {
+        ...inputRecord,
+        query: cleaned,
+      },
+    },
+    reasoning: [
+      decision.reasoning,
+      `Tool input sanitizer: removed routing/tool instructions from ${toolName} query.`,
     ].filter(Boolean).join(" "),
   };
 }
@@ -906,7 +935,7 @@ function inferInitialSearchQuery(message: string, availableTools: ToolDescriptor
     return secretAnswerMatch.toLowerCase();
   }
 
-  const normalized = normalizeSearchQuery(text)
+  const normalized = cleanWorkspaceSearchQuery(text)
     .split(/\s+/)
     .filter((token) => token.length >= 1);
 
@@ -920,12 +949,33 @@ function inferInitialWebSearchQuery(message: string, availableTools: ToolDescrip
   if (!isWebLookupIntent(message)) return null;
   if (isLocalWorkspaceLookupIntent(message)) return null;
 
-  const normalized = message
-    .replace(/你能|能不能|可以|帮我|请|一下|吗|？|\?/g, " ")
-    .replace(/联网|上网|网上|网页|网络|搜索|搜|查询|查找|查|检索/g, " ")
+  const normalized = cleanWebSearchQuery(message);
+  return normalized || message.trim();
+}
+
+function cleanWorkspaceSearchQuery(value: string): string {
+  return normalizeSearchQuery(stripToolRoutingDirectives(value));
+}
+
+function cleanWebSearchQuery(value: string): string {
+  return stripWebSearchCommandWords(stripToolRoutingDirectives(value));
+}
+
+function stripToolRoutingDirectives(value: string): string {
+  return value
+    .replace(/[，,、;；]?\s*(?:并|然后|再|同时)?\s*(?:调用|使用|用|启用|走|通过)\s*(?:这个|该)?\s*(?:skill|工具|tool|插件|能力)?\s*[:：]?\s*[A-Za-z][A-Za-z0-9_-]*(?:\s*(?:skill|工具|tool|插件|能力))?/gi, " ")
+    .replace(/[，,、;；]?\s*(?:and\s+)?(?:call|use|invoke|run)\s+(?:the\s+)?[A-Za-z][A-Za-z0-9_-]*(?:\s+(?:skill|tool|plugin))?/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
-  return normalized || message.trim();
+}
+
+function stripWebSearchCommandWords(value: string): string {
+  const stripped = value
+    .replace(/^\s*(?:你能|能不能|可以|帮我|请|麻烦|能)?\s*(?:联网搜索|上网搜索|网上搜索|上网查|查一下|查查|查询|搜索一下|搜一下|搜索|搜|检索|查找|找一下|查)\s*/i, "")
+    .replace(/\s*(?:一下|看看|看一下)?\s*(?:吗|么|嘛|呢)?\s*[？?]?\s*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return stripped || value.trim();
 }
 
 function inferInitialWebFetchUrl(message: string, availableTools: ToolDescriptor[]): string | null {

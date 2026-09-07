@@ -456,6 +456,7 @@ function scoreCustomSkill(skill: CustomSkill, context?: CustomSkillSelectionCont
   const availableTools = normalizeAvailableToolNames(context?.availableTools);
   const standaloneWebRequest = isStandaloneWebRequest(context?.userMessage ?? "");
   if (skill.layer === "project" && standaloneWebRequest) return Number.NEGATIVE_INFINITY;
+  const explicitNameMatch = isSkillExplicitlyMentioned(skill, messageText);
 
   let score = skill.priority;
 
@@ -477,13 +478,28 @@ function scoreCustomSkill(skill: CustomSkill, context?: CustomSkillSelectionCont
       ...(allowWorkspaceTrigger ? workspaceMatches : []),
       ...toolMatches,
     ];
-    if (effectiveMatches.length === 0 && skill.layer !== "global") return Number.NEGATIVE_INFINITY;
+    if (effectiveMatches.length === 0 && !explicitNameMatch && skill.layer !== "global") return Number.NEGATIVE_INFINITY;
     score += new Set(effectiveMatches).size * 28;
   }
 
+  if (explicitNameMatch) score += 420;
   if (skill.scope && availableTools.has(skill.scope)) score += 35;
   if (skill.scope && `${messageText}\n${allowScopeWorkspaceBoost(skill, context?.userMessage ?? "") ? workspaceText : ""}`.includes(skill.scope.toLowerCase())) score += 24;
   return score;
+}
+
+function isSkillExplicitlyMentioned(skill: CustomSkill, messageText: string): boolean {
+  const candidates = new Set([
+    skill.name.toLowerCase(),
+    skill.name.toLowerCase().replace(/[_-]+/g, " "),
+    skill.name.toLowerCase().replace(/[_\s]+/g, "-"),
+    skill.name.toLowerCase().replace(/[-\s]+/g, "_"),
+  ]);
+  for (const candidate of candidates) {
+    const trimmed = candidate.trim();
+    if (trimmed.length >= 3 && messageText.includes(trimmed)) return true;
+  }
+  return false;
 }
 
 function isStandaloneWebRequest(message: string): boolean {

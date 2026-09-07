@@ -3634,6 +3634,36 @@ body::before,
   color: rgba(248, 113, 113, 0.82);
 }
 
+.run-activity-debug {
+  margin-top: 4px;
+  border: 1px solid rgba(96, 165, 250, 0.14);
+  border-radius: 10px;
+  background: rgba(2, 6, 23, 0.35);
+  overflow: hidden;
+}
+
+.run-activity-debug summary {
+  padding: 7px 10px;
+  color: rgba(147, 197, 253, 0.86);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.run-activity-debug .tool-json {
+  max-height: 260px;
+  margin: 0;
+  border-width: 1px 0 0;
+  border-radius: 0;
+}
+
+.debug-toggle.active {
+  border-color: rgba(34, 211, 238, 0.42);
+  background: rgba(34, 211, 238, 0.16);
+  color: #9ff7ff;
+}
+
 .message-meta {
   margin-bottom: 6px;
   font-size: 11px;

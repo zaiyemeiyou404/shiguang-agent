@@ -33,7 +33,6 @@ export class BasicEvaluator implements Evaluator {
     result?: ActionResult,
     history: ActionResult[] = result ? [result] : [],
   ): Promise<LoopAction> {
-    // 对外可见回复也要立刻停；否则同一轮里可能反复生成多条助手消息。
     if (
       decision.action.kind === "respond"
       || decision.action.kind === "finish"
@@ -55,17 +54,7 @@ export class BasicEvaluator implements Evaluator {
       return { kind: "continue" };
     }
 
-    if (result.metadata.retryable !== true) {
-      // 不可重试错误交给上层尽快暴露，避免 loop 在错误上下文里空转。
-      return {
-        kind: "stop",
-        reason: "non_retryable_tool_error",
-        summary: summarizeToolError(result),
-      };
-    }
-
-    if (countConsecutiveRetryableToolErrors(history, toolName(result)) >= 3) {
-      // 同一工具连续 3 次可重试失败，通常说明外部条件没变，继续重试价值不高。
+    if (result.metadata.retryable === true && countConsecutiveRetryableToolErrors(history, toolName(result)) >= 3) {
       return {
         kind: "stop",
         reason: "repeated_retryable_tool_error",
@@ -73,6 +62,16 @@ export class BasicEvaluator implements Evaluator {
       };
     }
 
+    if (result.metadata.retryable !== true && countConsecutiveSameToolErrors(history, result) >= 3) {
+      return {
+        kind: "stop",
+        reason: "non_retryable_tool_error",
+        summary: summarizeToolError(result),
+      };
+    }
+
+    // First-time tool errors flow back into the planner/model so it can repair
+    // bad inputs, switch tools, or produce an evidence-based explanation.
     return { kind: "continue" };
   }
 }
@@ -152,6 +151,30 @@ function countConsecutiveRetryableToolErrors(
     count++;
   }
   return count;
+}
+
+function countConsecutiveSameToolErrors(
+  history: ActionResult[],
+  current: ActionResult,
+): number {
+  const currentSignature = toolErrorSignature(current);
+  let count = 0;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const item = history[i];
+    if (!isToolError(item) || toolErrorSignature(item) !== currentSignature) {
+      break;
+    }
+    count++;
+  }
+  return count;
+}
+
+function toolErrorSignature(result: ActionResult): string {
+  return [
+    toolName(result) ?? "",
+    stableJson(result.action.toolInput ?? null),
+    result.metadata?.errorKind ?? "",
+  ].join("|");
 }
 
 function summarizeToolError(result: ActionResult): string {
