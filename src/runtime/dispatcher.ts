@@ -426,12 +426,49 @@ function buildToolPipelineDisplay(payload: {
 function titleForPhase(phase: ToolPipelinePhase, toolLabel: string): string {
   if (phase === "pre_execute") return `准备${toolLabel}`;
   if (phase === "executing") return `正在${toolLabel}`;
-  if (phase === "completed") return `${toolLabel}完成`;
+  if (phase === "completed") return completedTitleForTool(toolLabel);
   if (phase === "failed") return `${toolLabel}失败`;
   if (phase === "approval_required") return `等待审批：${toolLabel}`;
   if (phase === "approved") return `审批通过：${toolLabel}`;
   if (phase === "denied") return `审批拒绝：${toolLabel}`;
   return toolLabel;
+}
+
+function completedTitleForTool(toolLabel: string): string {
+  const labels: Record<string, string> = {
+    "检查项目结构": "检查了项目结构",
+    "浏览目录": "浏览了目录",
+    "读取路径信息": "读取了路径信息",
+    "查找文件": "查找了文件",
+    "搜索工作区": "搜索了工作区",
+    "读取文件": "读取了文件",
+    "批量读取文件": "读取了多个文件",
+    "写入文件": "写入了文件",
+    "修改文件": "修改了文件",
+    "复制路径": "复制了路径",
+    "移动路径": "移动了路径",
+    "删除路径": "删除了路径",
+    "运行命令": "运行了命令",
+    "运行验证": "运行了验证",
+    "收集诊断": "收集了诊断",
+    "生成代码地图": "生成了代码地图",
+    "搜索符号": "搜索了符号",
+    "分析依赖": "分析了依赖",
+    "读取 GitHub 仓库": "读取了 GitHub 仓库",
+    "搜索网页": "搜索了网页",
+    "抓取网页": "抓取了网页",
+    "提取网页链接": "提取了网页链接",
+    "查看自定义扩展": "查看了自定义扩展",
+    "记录 Agent 规则": "记录了 Agent 规则",
+    "创建 Skill": "创建了 Skill",
+    "创建自定义工具": "创建了自定义工具",
+    "运行自定义工具": "运行了自定义工具",
+    "搜索记忆": "搜索了记忆",
+    "写入记忆": "写入了记忆",
+    "删除记忆": "删除了记忆",
+    "确认任务完成度": "确认了任务完成度",
+  };
+  return labels[toolLabel] ?? `${toolLabel}完成`;
 }
 
 function detailForPhase(

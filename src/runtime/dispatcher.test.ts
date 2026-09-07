@@ -218,6 +218,6 @@ test("ActionDispatcher attaches Codex-style readable display metadata to tool pi
   assert.equal(executingDisplay?.target, "查询 \"网络搜索的概念\"");
   assert.match(executingDisplay?.reason ?? "", /search first/);
   assert.match(executingDisplay?.expected ?? "", /候选来源/);
-  assert.equal(completedDisplay?.title, "搜索网页完成");
+  assert.equal(completedDisplay?.title, "搜索了网页");
   assert.match(completedDisplay?.result ?? "", /返回 1 条结果/);
 });

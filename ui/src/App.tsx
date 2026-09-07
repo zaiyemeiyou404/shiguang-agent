@@ -1309,14 +1309,52 @@ function compareChatTranscriptItems(a: { createdAt?: string; id: string }, b: { 
 }
 
 function buildRunActivityTranscript(events: DesktopEvent[], debugMode: boolean): RunActivityTranscript[] {
-  return events
+  const visibleEvents = events
     .filter((event) => event.kind === "tool_pipeline")
     .filter((event) => !isTaskLoopPipelineEvent(event))
-    .filter((event) => debugMode || shouldShowToolPipelineInChat(event))
-    .map(activityFromToolPipelineEvent)
+    .filter((event) => debugMode || shouldShowToolPipelineInChat(event));
+  return groupToolPipelineEventsForTranscript(visibleEvents)
+    .map((group) => activityFromToolPipelineEvent(group.latest, group.events))
     .filter((activity): activity is RunActivityTranscript => Boolean(activity))
     .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
     .slice(debugMode ? -MAX_CHAT_ACTIVITY_ITEMS_DEBUG : -MAX_CHAT_ACTIVITY_ITEMS);
+}
+
+function groupToolPipelineEventsForTranscript(events: DesktopEvent[]): Array<{ latest: DesktopEvent; events: DesktopEvent[] }> {
+  const groups = new Map<string, { latest: DesktopEvent; events: DesktopEvent[] }>();
+  const sorted = [...events].sort((a, b) => {
+    if (a.runId !== b.runId) return a.runId.localeCompare(b.runId);
+    if (a.seq !== b.seq) return a.seq - b.seq;
+    return Date.parse(a.createdAt) - Date.parse(b.createdAt);
+  });
+
+  for (const event of sorted) {
+    const key = toolPipelineGroupKey(event);
+    const existing = groups.get(key);
+    if (!existing) {
+      groups.set(key, { latest: event, events: [event] });
+      continue;
+    }
+    existing.events.push(event);
+    if (isNewerToolPipelineEvent(event, existing.latest)) {
+      existing.latest = event;
+    }
+  }
+
+  return [...groups.values()].sort((a, b) => Date.parse(a.latest.createdAt) - Date.parse(b.latest.createdAt));
+}
+
+function toolPipelineGroupKey(event: DesktopEvent): string {
+  const payload = eventPayloadRecord(event);
+  const tool = typeof payload.tool === "string" ? payload.tool : "tool";
+  const toolCallId = typeof payload.toolCallId === "string" ? payload.toolCallId : null;
+  const approvalId = typeof payload.approvalId === "string" ? payload.approvalId : null;
+  return `${event.runId}:${tool}:${toolCallId ?? approvalId ?? event.id}`;
+}
+
+function isNewerToolPipelineEvent(next: DesktopEvent, current: DesktopEvent): boolean {
+  if (next.seq !== current.seq) return next.seq > current.seq;
+  return Date.parse(next.createdAt) >= Date.parse(current.createdAt);
 }
 
 function shouldShowToolPipelineInChat(event: DesktopEvent): boolean {
@@ -1333,7 +1371,7 @@ function shouldShowToolPipelineInChat(event: DesktopEvent): boolean {
     || phase === "approval_failed";
 }
 
-function activityFromToolPipelineEvent(event: DesktopEvent): RunActivityTranscript | null {
+function activityFromToolPipelineEvent(event: DesktopEvent, relatedEvents: DesktopEvent[] = [event]): RunActivityTranscript | null {
   const summary = summarizeToolPipelineEvent(event);
   if (!summary) return null;
   const payload = eventPayloadRecord(event);
@@ -1371,12 +1409,16 @@ function activityFromToolPipelineEvent(event: DesktopEvent): RunActivityTranscri
     meta,
     active: phase === "pre_execute" || phase === "executing" || phase === "approval_required" || phase === "approved",
     debugPayload: {
-      eventId: event.id,
-      eventKind: event.kind,
       runId: event.runId,
-      seq: event.seq,
-      createdAt: event.createdAt,
-      payload: event.payload,
+      tool: toolName,
+      latestPhase: phase,
+      phases: relatedEvents.map((related) => ({
+        eventId: related.id,
+        eventKind: related.kind,
+        seq: related.seq,
+        createdAt: related.createdAt,
+        payload: related.payload,
+      })),
     },
   };
 }
