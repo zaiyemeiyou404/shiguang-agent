@@ -536,6 +536,50 @@ test("judgeTaskCompletion treats html preview alone as weak web evidence", () =>
   assert.equal(judgment.recommendedToolName, "web_search");
 });
 
+test("judgeTaskCompletion honors weak web_fetch quality even when text exists", () => {
+  const result: ActionResult = {
+    action: { kind: "tool_call", toolName: "web_fetch", toolInput: { url: "https://example.test/shell" } },
+    ok: true,
+    output: {
+      url: "https://example.test/shell",
+      text: "APP 下载客户端 微信 关注公众号 评论 分享 举报 这里有一些页面文字但不是正文。",
+      htmlPreview: "<html><body><a href='/article.html'>阅读全文</a><nav>下载客户端</nav></body></html>",
+      extraction: {
+        strategy: "whole_body",
+        candidateCount: 0,
+        needsModelReview: true,
+        quality: {
+          status: "weak",
+          score: -10,
+          textChars: 38,
+          paragraphCount: 0,
+          boilerplateHits: 3,
+          reasons: ["正文过短"],
+        },
+        hint: "try links",
+      },
+    },
+    metadata: {
+      category: "tool_observation",
+      summary: "weak shell",
+      retryable: false,
+      toolName: "web_fetch",
+    },
+  };
+
+  const judgment = judgeTaskCompletion(
+    makeInput("看一下 https://example.test/shell", [
+      { name: "web_extract_links", description: "extract links", inputSchema: { type: "object" } },
+      { name: "web_search", description: "search", inputSchema: { type: "object" } },
+    ]),
+    result,
+    "看一下 https://example.test/shell",
+  );
+
+  assert.equal(judgment.status, "needs_more_evidence");
+  assert.equal(judgment.recommendedToolName, "web_extract_links");
+});
+
 test("judgeTaskCompletion fetches the next search candidate after weak body evidence", () => {
   const search: ActionResult = {
     action: { kind: "tool_call", toolName: "web_search", toolInput: { query: "red books" } },

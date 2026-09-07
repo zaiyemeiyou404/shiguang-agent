@@ -439,6 +439,9 @@ function hasTaskLoopWebBodyEvidence(output: unknown): boolean {
   if (isTaskLoopReadableArticleText(output, 160)) return true;
   if (!output || typeof output !== "object") return false;
   const record = output as Record<string, unknown>;
+  const quality = ((record.extraction as { quality?: { status?: unknown } } | undefined)?.quality?.status);
+  if (quality === "strong") return true;
+  if (quality === "weak" || quality === "failed") return false;
   for (const key of ["text", "content", "markdown"]) {
     const value = record[key];
     if (isTaskLoopReadableArticleText(value, 160)) return true;
@@ -2722,6 +2725,7 @@ function summarizeReadOnlyObservation(result: ActionResult, message: string): st
       content?: unknown;
       htmlPreview?: unknown;
       articleCandidates?: Array<{ text?: unknown; source?: unknown; score?: unknown }>;
+      extraction?: { quality?: { status?: unknown; reasons?: unknown; textChars?: unknown; paragraphCount?: unknown } };
       truncated?: unknown;
       htmlPreviewTruncated?: unknown;
     } | null;
@@ -2739,10 +2743,18 @@ function summarizeReadOnlyObservation(result: ActionResult, message: string): st
       typeof output?.htmlPreview === "string" ? output.htmlPreview.trim() : "",
     ].find((value) => value.length > 0) ?? "";
     const preview = content.slice(0, 1200);
+    const quality = output?.extraction?.quality;
+    const qualityStatus = typeof quality?.status === "string" ? quality.status : "";
+    const qualityReasons = Array.isArray(quality?.reasons)
+      ? quality.reasons.filter((reason): reason is string => typeof reason === "string").slice(0, 3)
+      : [];
+    const qualityLine = qualityStatus
+      ? `\n\n正文质量：${qualityStatus}${qualityReasons.length > 0 ? `（${qualityReasons.join("；")}）` : ""}`
+      : "";
     const truncated = output?.truncated === true || output?.htmlPreviewTruncated === true || content.length > 1200
       ? "\n\n网页内容较长，我先整理前半部分；如果你要完整正文，可以继续让我拉取/归纳剩余部分。"
       : "";
-    return `已抓取 ${title}${url ? `：${url}` : ""}。\n\n${preview || "页面返回了内容，但没有提取到稳定正文。可以换一个链接，或让我继续尝试从 HTML 候选块里筛正文。"}${truncated}`;
+    return `已抓取 ${title}${url ? `：${url}` : ""}。${qualityLine}\n\n${preview || "页面返回了内容，但没有提取到稳定正文。可以换一个链接，或让我继续尝试从 HTML 候选块里筛正文。"}${truncated}`;
   }
 
   if (toolName === "web_extract_links") {

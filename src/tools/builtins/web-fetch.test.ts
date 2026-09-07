@@ -23,7 +23,20 @@ type WebFetchOutput = {
   text: string;
   truncated: boolean;
   articleCandidates?: Array<{ source: string; score: number; text: string; truncated: boolean }>;
-  extraction?: { strategy: string; candidateCount: number; needsModelReview: boolean; hint: string };
+  extraction?: {
+    strategy: string;
+    candidateCount: number;
+    needsModelReview: boolean;
+    quality?: {
+      status: "strong" | "weak" | "failed";
+      score: number;
+      textChars: number;
+      paragraphCount: number;
+      boilerplateHits: number;
+      reasons: string[];
+    };
+    hint: string;
+  };
   htmlPreview?: string;
   htmlPreviewTruncated?: boolean;
 };
@@ -121,6 +134,39 @@ test("web_fetch prefers news article body over navigation chrome", async () => {
     assert.ok(result.articleCandidates.length >= 1);
     assert.match(result.articleCandidates[0]?.text ?? "", /中华民族复兴伟业/);
     assert.equal(result.extraction?.strategy, "article_candidate");
+    assert.equal(result.extraction?.quality?.status, "strong");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("web_fetch marks shell pages as weak or failed body evidence", async () => {
+  const { createWebFetchTool } = await loadModule();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(
+    `<!doctype html>
+    <html>
+      <head><title>下载客户端</title></head>
+      <body>
+        <nav>APP 下载客户端 微信 关注公众号 评论 分享 举报</nav>
+        <a href="/real-article.html">阅读全文</a>
+        <footer>版权所有 ICP备案</footer>
+      </body>
+    </html>`,
+    {
+      status: 200,
+      headers: { "content-type": "text/html; charset=utf-8" },
+    },
+  );
+
+  try {
+    const tool = createWebFetchTool();
+    const result = await tool.execute({ url: "https://example.test/shell.html" });
+
+    assertOutput(result);
+    assert.notEqual(result.extraction?.quality?.status, "strong");
+    assert.equal(result.extraction?.needsModelReview, true);
+    assert.match(result.extraction?.hint ?? "", /web_extract_links/);
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -878,9 +878,9 @@ function linkExtractionInputFromWebFetch(result: ActionResult): unknown | null {
   if (toolName !== "web_fetch") return null;
   if (!result.output || typeof result.output !== "object" || Array.isArray(result.output)) return null;
   const record = result.output as { htmlPreview?: unknown; html?: unknown; url?: unknown; finalUrl?: unknown };
-  const html = typeof record.htmlPreview === "string" && record.htmlPreview.trim().length > 80
+  const html = typeof record.htmlPreview === "string" && record.htmlPreview.trim().length > 40
     ? record.htmlPreview
-    : typeof record.html === "string" && record.html.trim().length > 80
+    : typeof record.html === "string" && record.html.trim().length > 40
       ? record.html
       : null;
   if (!html) return null;
@@ -1031,7 +1031,11 @@ function hasWebBodyEvidence(output: unknown): boolean {
     text?: unknown;
     content?: unknown;
     articleCandidates?: Array<{ text?: unknown }>;
+    extraction?: { quality?: { status?: unknown } };
   };
+  const quality = record.extraction?.quality?.status;
+  if (quality === "strong") return true;
+  if (quality === "weak" || quality === "failed") return false;
   if (isReadableArticleText(record.text, 80)) return true;
   if (isReadableArticleText(record.content, 80)) return true;
   if (Array.isArray(record.articleCandidates)) {

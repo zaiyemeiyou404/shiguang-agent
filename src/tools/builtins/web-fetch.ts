@@ -24,8 +24,20 @@ interface ExtractedReadableHtml {
     strategy: "article_candidate" | "whole_body";
     candidateCount: number;
     needsModelReview: boolean;
+    quality: ReadableQuality;
     hint: string;
   };
+}
+
+type ReadableQualityStatus = "strong" | "weak" | "failed";
+
+interface ReadableQuality {
+  status: ReadableQualityStatus;
+  score: number;
+  textChars: number;
+  paragraphCount: number;
+  boilerplateHits: number;
+  reasons: string[];
 }
 
 function parseInput(input: unknown): WebFetchInput {
@@ -255,6 +267,52 @@ function scoreReadableText(text: string, title?: string): number {
   return lengthScore + punctuationScore + paragraphScore + titleScore - navPenalty;
 }
 
+function evaluateReadableQuality(text: string, candidates: Array<{ source: string; score: number; text: string }>): ReadableQuality {
+  const normalized = normalizeText(text);
+  const paragraphCount = normalized.split(/\n+/).filter((line) => line.trim().length >= 24).length;
+  const boilerplateHits = [
+    /下载.*客户端/,
+    /扫码|二维码|APP|广告|举报|评论|分享/,
+    /关注.*公众号/,
+    /copyright|版权所有|ICP备案/i,
+    /登录|注册|推荐阅读|相关新闻|热门新闻/,
+  ].filter((pattern) => pattern.test(normalized)).length;
+  const topScore = Math.round(candidates[0]?.score ?? 0);
+  const hasStructuredSource = candidates.some((candidate) => {
+    return candidate.source.startsWith("json-ld")
+      || candidate.source.startsWith("paragraph_cluster")
+      || candidate.source === "article"
+      || candidate.source === "main";
+  });
+  const reasons: string[] = [];
+  if (normalized.length >= 400) reasons.push("正文长度充足");
+  if (paragraphCount >= 3) reasons.push("包含多个正文段落");
+  if (hasStructuredSource) reasons.push("命中了结构化正文候选");
+  if (boilerplateHits > 0) reasons.push(`检测到 ${boilerplateHits} 类导航/页脚噪声`);
+  if (normalized.length < 160) reasons.push("正文过短");
+  if (candidates.length === 0) reasons.push("没有稳定正文候选");
+
+  let status: ReadableQualityStatus = "weak";
+  if (
+    (normalized.length >= 140 && paragraphCount >= 2 && boilerplateHits < 3)
+    || (normalized.length >= 80 && hasStructuredSource && boilerplateHits < 2)
+  ) {
+    status = "strong";
+  }
+  if (normalized.length < 80 || (!hasStructuredSource && paragraphCount === 0 && boilerplateHits >= 2)) {
+    status = "failed";
+  }
+
+  return {
+    status,
+    score: topScore,
+    textChars: normalized.length,
+    paragraphCount,
+    boilerplateHits,
+    reasons,
+  };
+}
+
 function candidateSourceBoost(source: string): number {
   if (source.startsWith("json-ld:articleBody")) return 260;
   if (source.startsWith("paragraph_cluster")) return 180;
@@ -317,6 +375,7 @@ function extractReadableHtml(html: string): ExtractedReadableHtml {
     .filter((candidate) => candidate.text.length > 80)
     .sort((a, b) => b.score - a.score);
   const best = rankedCandidates[0]?.text ?? focusArticleText(htmlToText(extractBodyHtml(html)), title);
+  const quality = evaluateReadableQuality(best, rankedCandidates);
   const articleCandidates = rankedCandidates.slice(0, 5).map((candidate) => {
     const trimmed = trimCandidateText(candidate.text);
     return {
@@ -333,8 +392,11 @@ function extractReadableHtml(html: string): ExtractedReadableHtml {
     extraction: {
       strategy,
       candidateCount: rankedCandidates.length,
-      needsModelReview: articleCandidates.length > 1 || /扫码|APP|下载|评论|举报|客户端/.test(best),
-      hint: "Model should review articleCandidates and choose the block that best matches the user's requested page/article body. If text contains navigation, app download, comment, or footer boilerplate, prefer a cleaner candidate.",
+      needsModelReview: quality.status !== "strong" || articleCandidates.length > 1 || /扫码|APP|下载|评论|举报|客户端/.test(best),
+      quality,
+      hint: quality.status === "strong"
+        ? "Readable article body was extracted. Answer from text/articleCandidates and cite the page title or URL when useful."
+        : "Readable body is weak or missing. Try web_extract_links on htmlPreview first, then web_search for an alternate accessible source before answering.",
     },
   };
 }
