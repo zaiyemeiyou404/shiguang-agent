@@ -88,6 +88,55 @@ test("runLoop pauses with step_limit when the step budget is exhausted", async (
   assert.equal(state.history.length, 2);
 });
 
+test("runLoop initializes task-loop from parsed user command objective", async () => {
+  const state = await runLoop(
+    {
+      context: makeContext("查一下网络搜索的概念，并调用web_article_reader"),
+      runId: "run_parsed_user_command",
+      priorTurns: [],
+      history: [],
+      availableTools: [],
+    },
+    {
+      planner: {
+        async decide(): Promise<BrainDecision> {
+          return { action: { kind: "respond", content: "ok" } };
+        },
+      },
+      policy: {
+        async check(next): Promise<BrainDecision> {
+          return next;
+        },
+      },
+      dispatcher: {
+        async dispatch(next): Promise<ActionResult> {
+          return {
+            action: next.action,
+            ok: true,
+            output: next.action.content ?? "",
+            metadata: {
+              category: "assistant_response",
+              summary: next.action.content ?? "",
+              retryable: false,
+            },
+          };
+        },
+      },
+      evaluator: {
+        async evaluate() {
+          return { kind: "stop", reason: "respond", summary: "ok" } as const;
+        },
+      },
+    },
+    1,
+  );
+
+  assert.equal(state.workingMemory.taskLoop?.objective, "查一下网络搜索的概念");
+  assert.equal(state.workingMemory.taskLoop?.mode, "web");
+  assert.equal(state.workingMemory.taskLoop?.userCommand?.normalizedSearchQuery, "网络搜索的概念");
+  assert.deepEqual(state.workingMemory.taskLoop?.userCommand?.skillDirectives, ["web_article_reader"]);
+});
+
 test("runLoop finalizes at the step boundary when task-loop evidence is ready", async () => {
   const seededReadMany: ActionResult = {
     action: { kind: "tool_call", toolName: "read_many_files", toolInput: { paths: ["package.json", "README.md"] } },

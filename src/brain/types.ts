@@ -45,6 +45,17 @@ export interface WorkingMemorySnapshot {
   phase?: PlannerPhase;
   taskLoop?: {
     objective: string;
+    userCommand?: {
+      raw: string;
+      objective: string;
+      normalizedSearchQuery?: string;
+      explicitUrls?: string[];
+      toolDirectives?: string[];
+      skillDirectives?: string[];
+      outputDirectives?: string[];
+      constraints?: string[];
+      modeHint?: TaskLoopMode | null;
+    };
     mode: TaskLoopMode;
     evidenceCount: number;
     completionGateCount: number;

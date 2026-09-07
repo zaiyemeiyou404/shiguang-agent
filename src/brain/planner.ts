@@ -4,6 +4,7 @@ import type { LlmPlannerModel, LlmPlannerModelRequest, PlannerContext } from "./
 import { renderPrompt, type RenderedPrompt } from "../context/render.js";
 import { selectToolsForPlanner } from "./tool-selection.js";
 import { judgeTaskCompletion, judgeToolCallValue } from "./completion.js";
+import { parseUserCommand, stripToolRoutingDirectives } from "./user-command.js";
 
 export interface Planner {
   decide(input: BrainInput, context?: PlannerContext): Promise<BrainDecision>;
@@ -239,7 +240,7 @@ function sanitizeToolRoutingDecision(decision: BrainDecision, message: string): 
   const inputRecord = decision.action.toolInput as Record<string, unknown>;
   const rawQuery = typeof inputRecord.query === "string" ? inputRecord.query : "";
   const cleaned = toolName === "web_search"
-    ? cleanWebSearchQuery(rawQuery || message)
+    ? parseUserCommand(rawQuery || message).normalizedSearchQuery
     : cleanWorkspaceSearchQuery(rawQuery || message);
   if (!cleaned || cleaned === rawQuery) return decision;
 
@@ -949,33 +950,12 @@ function inferInitialWebSearchQuery(message: string, availableTools: ToolDescrip
   if (!isWebLookupIntent(message)) return null;
   if (isLocalWorkspaceLookupIntent(message)) return null;
 
-  const normalized = cleanWebSearchQuery(message);
+  const normalized = parseUserCommand(message).normalizedSearchQuery;
   return normalized || message.trim();
 }
 
 function cleanWorkspaceSearchQuery(value: string): string {
   return normalizeSearchQuery(stripToolRoutingDirectives(value));
-}
-
-function cleanWebSearchQuery(value: string): string {
-  return stripWebSearchCommandWords(stripToolRoutingDirectives(value));
-}
-
-function stripToolRoutingDirectives(value: string): string {
-  return value
-    .replace(/[，,、;；]?\s*(?:并|然后|再|同时)?\s*(?:调用|使用|用|启用|走|通过)\s*(?:这个|该)?\s*(?:skill|工具|tool|插件|能力)?\s*[:：]?\s*[A-Za-z][A-Za-z0-9_-]*(?:\s*(?:skill|工具|tool|插件|能力))?/gi, " ")
-    .replace(/[，,、;；]?\s*(?:and\s+)?(?:call|use|invoke|run)\s+(?:the\s+)?[A-Za-z][A-Za-z0-9_-]*(?:\s+(?:skill|tool|plugin))?/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function stripWebSearchCommandWords(value: string): string {
-  const stripped = value
-    .replace(/^\s*(?:你能|能不能|可以|帮我|请|麻烦|能)?\s*(?:联网搜索|上网搜索|网上搜索|上网查|查一下|查查|查询|搜索一下|搜一下|搜索|搜|检索|查找|找一下|查)\s*/i, "")
-    .replace(/\s*(?:一下|看看|看一下)?\s*(?:吗|么|嘛|呢)?\s*[？?]?\s*$/i, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  return stripped || value.trim();
 }
 
 function inferInitialWebFetchUrl(message: string, availableTools: ToolDescriptor[]): string | null {

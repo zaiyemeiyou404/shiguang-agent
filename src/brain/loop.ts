@@ -14,6 +14,7 @@ import type { Evaluator, LoopStopReason } from "./evaluator.js";
 import type { ToolExecutionContext, ValidationModeHint } from "../tools/types.js";
 import { addUsageToRunUsage, emptyRunTokenUsage, type LlmTokenUsage, type RunTokenUsage } from "./usage.js";
 import { judgeTaskCompletion } from "./completion.js";
+import { parseUserCommand } from "./user-command.js";
 
 export interface LoopDeps {
   planner: Planner;
@@ -90,10 +91,22 @@ function createInitialWorkingMemory(input: BrainInput, resetForNewTask = shouldS
 }
 
 function createInitialTaskLoop(input: BrainInput): NonNullable<WorkingMemorySnapshot["taskLoop"]> {
-  const objective = latestUserMessage(input).trim();
-  const mode = inferTaskLoopMode(objective);
+  const parsedCommand = parseUserCommand(latestUserMessage(input));
+  const objective = parsedCommand.objective.trim();
+  const mode = parsedCommand.modeHint ?? inferTaskLoopMode(parsedCommand.raw || objective);
   return {
     objective: objective || "Continue the current task.",
+    userCommand: {
+      raw: parsedCommand.raw,
+      objective: parsedCommand.objective,
+      normalizedSearchQuery: parsedCommand.normalizedSearchQuery,
+      explicitUrls: parsedCommand.explicitUrls,
+      toolDirectives: parsedCommand.toolDirectives,
+      skillDirectives: parsedCommand.skillDirectives,
+      outputDirectives: parsedCommand.outputDirectives,
+      constraints: parsedCommand.constraints,
+      modeHint: parsedCommand.modeHint,
+    },
     mode,
     evidenceCount: 0,
     completionGateCount: 0,
@@ -112,11 +125,12 @@ function shouldStartFreshTaskLoop(input: BrainInput): boolean {
   if (!message || isContinuationTaskMessage(message)) return false;
 
   const previousObjective = normalizeTaskObjective(previous.objective);
-  const nextObjective = normalizeTaskObjective(message);
+  const parsedCommand = parseUserCommand(message);
+  const nextObjective = normalizeTaskObjective(parsedCommand.objective);
   if (!nextObjective || nextObjective === previousObjective) return false;
 
   const previousMode = previous.mode;
-  const nextMode = inferTaskLoopMode(message);
+  const nextMode = parsedCommand.modeHint ?? inferTaskLoopMode(message);
   if (nextMode !== "chat" && nextMode !== previousMode) return true;
 
   const previousAnchor = extractTaskAnchor(previous.objective) ?? previous.lastEvidenceTarget ?? "";
