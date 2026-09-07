@@ -1339,10 +1339,16 @@ function activityFromToolPipelineEvent(event: DesktopEvent): RunActivityTranscri
   const payload = eventPayloadRecord(event);
   const phase = typeof payload.phase === "string" ? payload.phase : "unknown";
   const toolName = toolEventName(event);
+  const display = toolDisplayPayload(payload);
   const toolLabel = formatToolActivityName(toolName);
-  const title = formatToolActivityTranscriptTitle(toolName, phase, payload, summary.label);
-  const detail = formatToolActivityTranscriptDetail(toolName, phase, payload, summary.detail);
+  const title = display?.title ?? formatToolActivityTranscriptTitle(toolName, phase, payload, summary.label);
+  const detail = display?.detail ?? formatToolActivityTranscriptDetail(toolName, phase, payload, summary.detail);
   const meta = [
+    display?.target ? `目标：${truncateInline(display.target, 90)}` : null,
+    display?.reason ? `原因：${truncateInline(display.reason, 90)}` : null,
+    display?.expected ? `预期：${truncateInline(display.expected, 110)}` : null,
+    display?.risk ? `风险 ${display.risk}` : null,
+    display?.cost ? `成本 ${display.cost}` : null,
     activityScopeLabel(toolName, payload),
   ].filter((item): item is string => Boolean(item));
   const idPart = typeof payload.toolCallId === "string"
@@ -1609,6 +1615,35 @@ function eventPayloadRecord(event: DesktopEvent): Record<string, unknown> {
   return (typeof event.payload === "object" && event.payload !== null)
     ? event.payload as Record<string, unknown>
     : {};
+}
+
+function toolDisplayPayload(payload: Record<string, unknown>): {
+  title?: string;
+  detail?: string;
+  target?: string;
+  reason?: string;
+  expected?: string;
+  result?: string;
+  risk?: string;
+  cost?: string;
+} | null {
+  const display = payload.display;
+  if (!display || typeof display !== "object") return null;
+  const record = display as Record<string, unknown>;
+  const pick = (key: string): string | undefined => {
+    const value = record[key];
+    return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  };
+  return {
+    title: pick("title"),
+    detail: pick("detail"),
+    target: pick("target"),
+    reason: pick("reason"),
+    expected: pick("expected"),
+    result: pick("result"),
+    risk: pick("risk"),
+    cost: pick("cost"),
+  };
 }
 
 function isAutoContinuationEvent(event: DesktopEvent): boolean {

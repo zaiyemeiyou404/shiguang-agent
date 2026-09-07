@@ -180,3 +180,44 @@ test("ActionDispatcher emits tool_pipeline phases around successful tool calls",
   const ids = pipelineEvents.map((event) => (event.payload as { toolCallId?: unknown }).toolCallId);
   assert.ok(ids.every((id) => typeof id === "string" && id === result.metadata?.toolCallId));
 });
+
+test("ActionDispatcher attaches Codex-style readable display metadata to tool pipeline events", async () => {
+  const sink = new InMemoryEventSink();
+  const registry = new ToolRegistry();
+  registry.register({
+    descriptor: {
+      name: "web_search",
+      description: "Search the web",
+      inputSchema: { type: "object", properties: { query: { type: "string" } } },
+    },
+    async execute(input) {
+      return {
+        query: (input as { query?: string }).query,
+        results: [{ title: "网络搜索概念", url: "https://example.test/search" }],
+      };
+    },
+  });
+  const dispatcher = new ActionDispatcher(registry, sink);
+
+  await dispatcher.dispatch({
+    action: {
+      kind: "tool_call",
+      toolName: "web_search",
+      toolInput: { query: "网络搜索的概念" },
+    },
+    reasoning: "User asked for online information, so search first.",
+  }, "run_display");
+
+  const events = await sink.list("run_display");
+  const executing = events.find((event) => event.kind === "tool_pipeline" && (event.payload as { phase?: unknown }).phase === "executing");
+  const completed = events.find((event) => event.kind === "tool_pipeline" && (event.payload as { phase?: unknown }).phase === "completed");
+  const executingDisplay = (executing?.payload as { display?: { title?: string; target?: string; reason?: string; expected?: string } }).display;
+  const completedDisplay = (completed?.payload as { display?: { title?: string; result?: string } }).display;
+
+  assert.equal(executingDisplay?.title, "正在搜索网页");
+  assert.equal(executingDisplay?.target, "查询 \"网络搜索的概念\"");
+  assert.match(executingDisplay?.reason ?? "", /search first/);
+  assert.match(executingDisplay?.expected ?? "", /候选来源/);
+  assert.equal(completedDisplay?.title, "搜索网页完成");
+  assert.match(completedDisplay?.result ?? "", /返回 1 条结果/);
+});
