@@ -1009,6 +1009,50 @@ test("judgeTaskCompletion fetches the best extracted article link", () => {
   assert.deepEqual(judgment.recommendedToolInput, { url: "https://example.test/article.html" });
 });
 
+test("judgeTaskCompletion fetches next extracted link when the first was already tried", () => {
+  const message = "continue reading the web article";
+  const triedFetch: ActionResult = {
+    action: { kind: "tool_call", toolName: "web_fetch", toolInput: { url: "https://example.test/shell.html" } },
+    ok: true,
+    output: {
+      url: "https://example.test/shell.html",
+      text: "APP download shell",
+      extraction: { quality: { status: "weak" } },
+    },
+    metadata: {
+      category: "tool_observation",
+      summary: "weak shell",
+      retryable: false,
+      toolName: "web_fetch",
+    },
+  };
+  const linkResult: ActionResult = {
+    action: { kind: "tool_call", toolName: "web_extract_links", toolInput: { baseUrl: "https://example.test/home" } },
+    ok: true,
+    output: {
+      links: [
+        { url: "https://example.test/shell.html", text: "shell", score: 90, sameHost: true },
+        { url: "https://example.test/real-article.html", text: "Read full article", score: 80, sameHost: true },
+      ],
+    },
+    metadata: {
+      category: "tool_observation",
+      summary: "extracted links",
+      retryable: false,
+      toolName: "web_extract_links",
+    },
+  };
+
+  const input = makeInput(message, [{ name: "web_fetch", description: "fetch", inputSchema: { type: "object" } }]);
+  input.history = [triedFetch];
+
+  const judgment = judgeTaskCompletion(input, linkResult, message);
+
+  assert.equal(judgment.status, "needs_more_evidence");
+  assert.equal(judgment.recommendedToolName, "web_fetch");
+  assert.deepEqual(judgment.recommendedToolInput, { url: "https://example.test/real-article.html" });
+});
+
 test("judgeTaskCompletion recovers failed file reads with find_files when available", () => {
   const message = "分析 pubspec.yaml";
   const failedRead: ActionResult = {

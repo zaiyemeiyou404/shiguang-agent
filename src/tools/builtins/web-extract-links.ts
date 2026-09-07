@@ -95,10 +95,15 @@ function textFromHtml(fragment: string): string {
   return decodeHtml(fragment.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
 }
 
-function getHref(tag: string): string | null {
-  const match = tag.match(/\bhref\s*=\s*(["'])([\s\S]*?)\1/i)
-    ?? tag.match(/\bhref\s*=\s*([^\s>]+)/i);
+function getAttribute(tag: string, name: string): string | null {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = tag.match(new RegExp(`\\b${escaped}\\s*=\\s*(["'])([\\s\\S]*?)\\1`, "i"))
+    ?? tag.match(new RegExp(`\\b${escaped}\\s*=\\s*([^\\s>]+)`, "i"));
   return decodeHtml((match?.[2] ?? match?.[1] ?? "").trim()) || null;
+}
+
+function getHref(tag: string): string | null {
+  return getAttribute(tag, "href");
 }
 
 function normalizeCandidateUrl(href: string, baseUrl: URL | null): string | null {
@@ -124,26 +129,90 @@ function scoreLink(url: string, text: string): number {
   return score;
 }
 
+function addCandidateLink(
+  byUrl: Map<string, ExtractedLink>,
+  href: string | null,
+  text: string,
+  baseUrl: URL | null,
+  includeExternal: boolean,
+): void {
+  if (!href) return;
+  const normalized = normalizeCandidateUrl(href, baseUrl);
+  if (!normalized) return;
+  const linkUrl = new URL(normalized);
+  const sameHost = baseUrl ? linkUrl.hostname === baseUrl.hostname : true;
+  if (!includeExternal && !sameHost) return;
+  const label = text.trim() || normalized;
+  const next = {
+    url: normalized,
+    text: label,
+    sameHost,
+    score: scoreLink(normalized, label),
+  };
+  const existing = byUrl.get(normalized);
+  if (!existing || next.score > existing.score) byUrl.set(normalized, next);
+}
+
+function extractJsonLdUrls(html: string): Array<{ url: string; text: string }> {
+  const candidates: Array<{ url: string; text: string }> = [];
+  for (const match of html.matchAll(/<script\b[^>]*type\s*=\s*(["'])application\/ld\+json\1[^>]*>([\s\S]*?)<\/script>/gi)) {
+    const raw = decodeHtml(match[2] ?? "").trim();
+    if (!raw) continue;
+    const title = raw.match(/"headline"\s*:\s*"([\s\S]*?)"/i)?.[1]
+      ?? raw.match(/"name"\s*:\s*"([\s\S]*?)"/i)?.[1]
+      ?? "structured article link";
+    for (const urlMatch of raw.matchAll(/"(?:url|@id)"\s*:\s*"([^"]+https?:\/\/[^"]+|https?:\/\/[^"]+)"/gi)) {
+      candidates.push({ url: urlMatch[1] ?? "", text: decodeHtml(title) });
+    }
+    for (const pageMatch of raw.matchAll(/"mainEntityOfPage"\s*:\s*(?:"([^"]+)"|\{[\s\S]*?"@id"\s*:\s*"([^"]+)"[\s\S]*?\})/gi)) {
+      candidates.push({ url: pageMatch[1] ?? pageMatch[2] ?? "", text: decodeHtml(title) });
+    }
+  }
+  return candidates;
+}
+
+function extractMetadataLinks(html: string): Array<{ url: string; text: string }> {
+  const candidates: Array<{ url: string; text: string }> = [];
+  for (const match of html.matchAll(/<link\b[^>]*>/gi)) {
+    const tag = match[0] ?? "";
+    const rel = getAttribute(tag, "rel")?.toLowerCase() ?? "";
+    if (!/(canonical|amphtml|alternate)/.test(rel)) continue;
+    candidates.push({ url: getAttribute(tag, "href") ?? "", text: rel.includes("canonical") ? "canonical article URL" : "alternate article URL" });
+  }
+  for (const match of html.matchAll(/<meta\b[^>]*>/gi)) {
+    const tag = match[0] ?? "";
+    const key = `${getAttribute(tag, "property") ?? ""} ${getAttribute(tag, "name") ?? ""}`.toLowerCase();
+    if (!/(og:url|twitter:url|article|publishurl|shareurl|url)/.test(key)) continue;
+    candidates.push({ url: getAttribute(tag, "content") ?? "", text: key.trim() || "metadata article URL" });
+  }
+  return candidates;
+}
+
+function extractInlineArticleUrls(html: string): Array<{ url: string; text: string }> {
+  const candidates: Array<{ url: string; text: string }> = [];
+  const seen = new Set<string>();
+  for (const match of html.matchAll(/https?:\\?\/\\?\/[^\s"'<>]+/g)) {
+    const raw = (match[0] ?? "").replace(/\\\//g, "/").replace(/[)"'<>\\]+$/g, "");
+    if (seen.has(raw)) continue;
+    seen.add(raw);
+    if (!/\.(?:html?|shtml)(?:$|[?#])|\/20\d{2}[/-]/i.test(raw)) continue;
+    candidates.push({ url: raw, text: "inline article URL" });
+  }
+  return candidates;
+}
+
 function extractLinks(html: string, baseUrl: URL | null, includeExternal: boolean, limit: number): ExtractedLink[] {
   const byUrl = new Map<string, ExtractedLink>();
   for (const match of html.matchAll(/<a\b[^>]*>[\s\S]*?<\/a>/gi)) {
     const tag = match[0] ?? "";
-    const href = getHref(tag);
-    if (!href) continue;
-    const normalized = normalizeCandidateUrl(href, baseUrl);
-    if (!normalized) continue;
-    const linkUrl = new URL(normalized);
-    const sameHost = baseUrl ? linkUrl.hostname === baseUrl.hostname : true;
-    if (!includeExternal && !sameHost) continue;
-    const text = textFromHtml(tag);
-    const existing = byUrl.get(normalized);
-    const next = {
-      url: normalized,
-      text: text || normalized,
-      sameHost,
-      score: scoreLink(normalized, text),
-    };
-    if (!existing || next.score > existing.score) byUrl.set(normalized, next);
+    addCandidateLink(byUrl, getHref(tag), textFromHtml(tag), baseUrl, includeExternal);
+  }
+  for (const candidate of [
+    ...extractMetadataLinks(html),
+    ...extractJsonLdUrls(html),
+    ...extractInlineArticleUrls(html),
+  ]) {
+    addCandidateLink(byUrl, candidate.url, candidate.text, baseUrl, includeExternal);
   }
   return Array.from(byUrl.values())
     .sort((left, right) => right.score - left.score || left.url.localeCompare(right.url))

@@ -70,3 +70,26 @@ test("web_extract_links can include external links when requested", async () => 
   assert.equal(result.links[0]?.url, "https://external.test/news.html");
   assert.equal(result.links[0]?.sameHost, false);
 });
+
+test("web_extract_links discovers metadata and inline article URLs", async () => {
+  const { createWebExtractLinksTool } = await loadModule();
+  const tool = createWebExtractLinksTool();
+
+  const result = await tool.execute({
+    baseUrl: "https://example.test/shell/",
+    html: `
+      <link rel="canonical" href="/2026/09/07/canonical-article.html">
+      <meta property="og:url" content="https://example.test/2026/09/07/og-article.shtml">
+      <script type="application/ld+json">
+        {"@type":"NewsArticle","headline":"Article title","mainEntityOfPage":{"@id":"https://example.test/2026/09/07/jsonld-article.html"}}
+      </script>
+      <script>window.next = "https:\\/\\/example.test\\/2026\\/09\\/07\\/inline-article.html";</script>
+    `,
+  });
+
+  assertOutput(result);
+  const urls = result.links.map((link) => link.url);
+  assert.ok(urls.includes("https://example.test/2026/09/07/canonical-article.html"));
+  assert.ok(urls.includes("https://example.test/2026/09/07/jsonld-article.html"));
+  assert.ok(urls.includes("https://example.test/2026/09/07/inline-article.html"));
+});

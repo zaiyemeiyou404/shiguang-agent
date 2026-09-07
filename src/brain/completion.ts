@@ -117,8 +117,8 @@ export function judgeTaskCompletion(
   }
 
   if (toolName === "web_extract_links") {
-    const nextUrl = firstExtractedLinkUrl(lastResult.output);
-    if (nextUrl && hasTool(input, "web_fetch") && !hasFetchedUrl(input.history, nextUrl)) {
+    const nextUrl = firstUnfetchedExtractedLinkUrl(lastResult.output, input.history);
+    if (nextUrl && hasTool(input, "web_fetch")) {
       return {
         status: "needs_more_evidence",
         reason: "Extracted candidate article links; fetch the best candidate before final web feedback.",
@@ -266,8 +266,8 @@ function recommendToolForCriterion(
     if (linkInput && hasTool(input, "web_extract_links")) {
       return recommended("needs_more_evidence", "Task-loop needs candidate article links extracted from the fetched shell page.", "web_extract_links", linkInput);
     }
-    const extractedUrl = firstExtractedLinkUrl(lastResult?.output);
-    if (extractedUrl && hasTool(input, "web_fetch") && !hasFetchedUrl(input.history, extractedUrl)) {
+    const extractedUrl = firstUnfetchedExtractedLinkUrl(lastResult?.output, input.history);
+    if (extractedUrl && hasTool(input, "web_fetch")) {
       return recommended("needs_more_evidence", "Task-loop needs readable page body evidence from the extracted article link.", "web_fetch", { url: extractedUrl });
     }
     const searchUrl = firstUnfetchedSearchResultUrl(input.history, lastResult);
@@ -897,15 +897,24 @@ function linkExtractionInputFromWebFetch(result: ActionResult): unknown | null {
 }
 
 function firstExtractedLinkUrl(output: unknown): string | null {
-  if (!output || typeof output !== "object" || Array.isArray(output)) return null;
+  return extractedLinkUrls(output)[0] ?? null;
+}
+
+function firstUnfetchedExtractedLinkUrl(output: unknown, history: ActionResult[]): string | null {
+  return extractedLinkUrls(output).find((url) => !hasFetchedUrl(history, url)) ?? null;
+}
+
+function extractedLinkUrls(output: unknown): string[] {
+  if (!output || typeof output !== "object" || Array.isArray(output)) return [];
   const links = (output as { links?: unknown }).links;
-  if (!Array.isArray(links)) return null;
+  if (!Array.isArray(links)) return [];
+  const urls: string[] = [];
   for (const item of links) {
     if (!item || typeof item !== "object" || Array.isArray(item)) continue;
     const url = (item as { url?: unknown }).url;
-    if (typeof url === "string" && /^https?:\/\//i.test(url)) return url;
+    if (typeof url === "string" && /^https?:\/\//i.test(url)) urls.push(url);
   }
-  return null;
+  return urls;
 }
 
 function searchResultUrls(output: unknown): string[] {
