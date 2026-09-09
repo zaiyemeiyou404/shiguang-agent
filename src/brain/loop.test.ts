@@ -482,6 +482,39 @@ test("applyActionResultToWorkingMemory blocks final readiness when evidence drif
   assert.equal(next.taskLoop?.needsFinalAnswer, false);
 });
 
+test("applyActionResultToWorkingMemory records unresolved tool failure diagnostics", () => {
+  const previous = {
+    step: 1,
+    phase: "investigate" as const,
+    lastActionKind: "tool_call" as const,
+    lastObservation: {
+      category: "tool_observation" as const,
+      summary: "Directory listed successfully.",
+    },
+  };
+
+  const next = applyActionResultToWorkingMemory(previous, 2, {
+    action: { kind: "tool_call", toolName: "read_text_file", toolInput: { path: "missing.md" } },
+    ok: false,
+    output: null,
+    error: "File not found or not readable: missing.md",
+    metadata: {
+      category: "tool_error",
+      summary: "File not found or not readable: missing.md",
+      retryable: false,
+      toolName: "read_text_file",
+      errorKind: "not_found",
+    },
+  });
+
+  assert.equal(next.lastToolFailure?.toolName, "read_text_file");
+  assert.equal(next.lastToolFailure?.repeatCount, 1);
+  assert.equal(next.lastToolFailure?.suggestedNextTool, "find_files");
+  assert.deepEqual(next.lastToolFailure?.suggestedNextInput, { query: "missing.md" });
+  assert.match(next.lastToolFailure?.recoveryHint ?? "", /find_files/);
+  assert.equal(next.lastToolFailure?.adjacentSuccessSummary, "Directory listed successfully.");
+});
+
 test("applyActionResultToWorkingMemory marks final readiness only after self-check passes", () => {
   const previous = {
     step: 0,

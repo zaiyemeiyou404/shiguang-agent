@@ -76,6 +76,8 @@ interface ToolPipelineDisplay {
   detail: string;
   expected?: string;
   result?: string;
+  nextStep?: string;
+  debugHint?: string;
   risk?: string;
   cost?: string;
 }
@@ -401,6 +403,8 @@ function buildToolPipelineDisplay(payload: {
     : payload.phase === "failed"
       ? failureSummary(payload.error, payload.retryable)
       : undefined;
+  const nextStep = nextStepForToolPipeline(payload);
+  const debugHint = debugHintForToolPipeline(payload);
   const detail = detailForPhase(payload.phase, {
     toolLabel,
     action,
@@ -418,6 +422,8 @@ function buildToolPipelineDisplay(payload: {
     detail,
     ...(expected ? { expected } : {}),
     ...(result ? { result } : {}),
+    ...(nextStep ? { nextStep } : {}),
+    ...(debugHint ? { debugHint } : {}),
     ...(risk ? { risk } : {}),
     ...(cost ? { cost } : {}),
   };
@@ -619,10 +625,14 @@ function resultSummaryForTool(toolName: string | undefined, output: unknown): st
   if (toolName === "web_fetch") {
     const title = stringFromRecord(output, "title");
     const status = numberFromRecord(output, "status");
-    const extraction = stringFromRecord(output, "extraction");
+    const extraction = isRecord(output.extraction) ? output.extraction : null;
+    const extractionStrategy = extraction ? stringFromRecord(extraction, "strategy") : undefined;
+    const quality = isRecord(extraction?.quality) ? extraction.quality : null;
+    const qualityStatus = quality ? stringFromRecord(quality, "status") : undefined;
+    const textChars = quality ? numberFromRecord(quality, "textChars") : undefined;
     const text = stringFromRecord(output, "text");
     const articleCandidates = Array.isArray(output.articleCandidates) ? output.articleCandidates.length : 0;
-    return `网页抓取完成${status !== undefined ? `，状态 ${status}` : ""}${title ? `，标题「${title}」` : ""}${extraction ? `，正文策略 ${extraction}` : ""}${text ? `，可读文本约 ${text.length} 字` : ""}${articleCandidates ? `，正文候选 ${articleCandidates} 个` : ""}。`;
+    return `网页抓取完成${status !== undefined ? `，状态 ${status}` : ""}${title ? `，标题「${title}」` : ""}${extractionStrategy ? `，正文策略 ${extractionStrategy}` : ""}${qualityStatus ? `，质量 ${qualityStatus}` : ""}${textChars !== undefined ? `，正文约 ${textChars} 字` : text ? `，可读文本约 ${text.length} 字` : ""}${articleCandidates ? `，正文候选 ${articleCandidates} 个` : ""}。`;
   }
   if (toolName === "list_directory") {
     const entries = Array.isArray(output.entries) ? output.entries : [];
@@ -661,6 +671,53 @@ function failureSummary(error: string | undefined, retryable: boolean | undefine
   return `${error?.trim() || "工具执行失败。"} ${suffix}`;
 }
 
+function nextStepForToolPipeline(payload: {
+  phase: ToolPipelinePhase;
+  tool?: string;
+  output?: unknown;
+  error?: string;
+  retryable?: boolean;
+}): string | undefined {
+  if (payload.phase === "failed") {
+    if (payload.tool === "web_fetch") return "把失败原因回灌给任务循环，改用网页搜索、链接提取或换可访问来源。";
+    if (payload.tool === "web_search") return "换搜索 provider、简化关键词，或在有明确 URL 时直接抓取网页。";
+    if (payload.tool === "read_text_file" || payload.tool === "list_directory") return "先校正路径或查找文件，再读取真实内容。";
+    if (payload.tool === "run_validation") return "读取首个失败位置或收集诊断，再做最小修复。";
+    return "换参数、换工具或暂停说明阻塞点，不要重复相同失败调用。";
+  }
+
+  if (payload.phase !== "completed") return undefined;
+  if (payload.tool === "web_search") return "选择最相关结果继续 web_fetch，搜索片段不能直接当最终正文。";
+  if (payload.tool === "web_fetch") {
+    const extraction = isRecord(payload.output) && isRecord(payload.output.extraction) ? payload.output.extraction : null;
+    const quality = isRecord(extraction?.quality) ? stringFromRecord(extraction.quality, "status") : null;
+    if (quality === "strong") return "正文证据可用，下一步应基于该正文回答或总结。";
+    return "正文质量不足，下一步优先提取链接或换来源。";
+  }
+  if (payload.tool === "write_text_file" || payload.tool === "patch_text_file") return "改动完成后应运行验证或明确说明未验证原因。";
+  if (payload.tool === "run_validation") return "根据验证结果决定总结、修复或继续收集诊断。";
+  return undefined;
+}
+
+function debugHintForToolPipeline(payload: {
+  phase: ToolPipelinePhase;
+  tool?: string;
+  input?: unknown;
+  output?: unknown;
+  error?: string;
+}): string | undefined {
+  if (payload.phase === "failed") {
+    return `debug: tool=${payload.tool ?? "unknown"} input=${summarize(payload.input, 180)} error=${payload.error ?? "unknown"}`;
+  }
+  if (payload.phase === "completed" && payload.tool === "web_fetch" && isRecord(payload.output)) {
+    const extraction = isRecord(payload.output.extraction) ? payload.output.extraction : null;
+    const quality = isRecord(extraction?.quality) ? extraction.quality : null;
+    const reasons = Array.isArray(quality?.reasons) ? quality.reasons.filter((item): item is string => typeof item === "string") : [];
+    if (reasons.length > 0) return `debug: readability=${stringFromRecord(quality, "status") ?? "unknown"} reasons=${reasons.slice(0, 3).join("；")}`;
+  }
+  return undefined;
+}
+
 function cleanReason(reason: string | undefined): string | undefined {
   const text = reason?.replace(/\s+/g, " ").trim();
   if (!text) return undefined;
@@ -677,7 +734,8 @@ function stringFromRecord(record: Record<string, unknown> | null, key: string): 
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function numberFromRecord(record: Record<string, unknown>, key: string): number | undefined {
+function numberFromRecord(record: Record<string, unknown> | null | undefined, key: string): number | undefined {
+  if (!record) return undefined;
   const value = record[key];
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }

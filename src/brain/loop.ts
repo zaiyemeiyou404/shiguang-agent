@@ -1069,6 +1069,7 @@ function updateWorkingMemory(
   const validationFailure = inferValidationFailure(result);
   const repairAttempt = updateRepairAttempt(previous, result, validationFailure);
   const taskLoop = updateTaskLoop(previous, result, toolName, step);
+  const lastToolFailure = buildLastToolFailure(previous, result, toolName, step);
 
   return {
     step,
@@ -1089,6 +1090,7 @@ function updateWorkingMemory(
           ? { validationFailure: previous.validationFailure }
           : {}),
     ...(repairAttempt ? { repairAttempt } : {}),
+    ...(lastToolFailure ? { lastToolFailure } : {}),
     ...(isRetryableToolError
       ? {
           retryableToolErrors: {
@@ -1100,6 +1102,90 @@ function updateWorkingMemory(
         }
       : {}),
   };
+}
+
+function buildLastToolFailure(
+  previous: WorkingMemorySnapshot,
+  result: ActionResult,
+  toolName: string | undefined,
+  step: number,
+): WorkingMemorySnapshot["lastToolFailure"] | null {
+  if (result.ok || result.action.kind !== "tool_call" || !toolName) return null;
+  const signature = toolActionSignature(result.action) ?? `${toolName}:${stableJson(result.action.toolInput ?? null)}`;
+  const repeatCount = previous.lastToolFailure?.toolName === toolName
+    && previous.lastToolFailure.inputSignature === signature
+    ? previous.lastToolFailure.repeatCount + 1
+    : 1;
+  const suggestion = inferToolFailureSuggestion(toolName, result);
+  return {
+    toolName,
+    inputSignature: signature,
+    inputPreview: truncateDiagnosticPreview(stableJson(result.action.toolInput ?? null), 500),
+    error: truncateDiagnosticPreview(result.error ?? result.metadata?.summary ?? "Tool failed without a detailed error.", 1000),
+    ...(result.metadata?.errorKind ? { errorKind: result.metadata.errorKind } : {}),
+    retryable: result.metadata?.retryable === true,
+    failedAtStep: step,
+    repeatCount,
+    recoveryHint: suggestion.hint,
+    ...(suggestion.nextTool ? { suggestedNextTool: suggestion.nextTool } : {}),
+    ...(suggestion.nextInput ? { suggestedNextInput: suggestion.nextInput } : {}),
+    ...(previous.lastObservation?.summary ? { adjacentSuccessSummary: previous.lastObservation.summary } : {}),
+  };
+}
+
+function inferToolFailureSuggestion(toolName: string, result: ActionResult): { hint: string; nextTool?: string; nextInput?: unknown } {
+  const error = `${result.error ?? ""} ${result.metadata?.summary ?? ""}`;
+  const target = inferTaskLoopTarget(result);
+  if (toolName === "read_text_file" || toolName === "stat_path") {
+    const basename = target?.split(/[\\/]/).filter(Boolean).at(-1);
+    return {
+      hint: "文件路径读取失败。下一步应先用 find_files 或 list_directory 校正路径，不要原样重试同一路径。",
+      nextTool: "find_files",
+      nextInput: { query: basename ?? target ?? "*" },
+    };
+  }
+  if (toolName === "list_directory" || toolName === "inspect_project") {
+    return {
+      hint: "目录/项目检查失败。下一步应校正工作区或路径；如果只是只读外部检查，可换成允许外部只读的终端命令。",
+      nextTool: "find_files",
+      nextInput: { query: "*", includeDirectories: true, maxResults: 40 },
+    };
+  }
+  if (toolName === "web_fetch") {
+    return {
+      hint: "网页抓取失败。下一步应使用 web_search 找可访问镜像或同主题来源，或从已抓到的 htmlPreview 提取链接。",
+      nextTool: "web_search",
+    };
+  }
+  if (toolName === "web_search") {
+    return {
+      hint: "搜索失败。下一步应换搜索 provider、简化关键词，或在用户提供 URL 时直接 web_fetch。",
+      nextTool: "web_search",
+    };
+  }
+  if (toolName === "run_validation") {
+    return {
+      hint: "验证失败。下一步应读取失败摘要里的首个 suspect 文件或运行 collect_diagnostics，不要直接宣布完成。",
+      nextTool: "collect_diagnostics",
+    };
+  }
+  if (toolName === "run_terminal_command") {
+    const notFound = /not recognized|not found|ENOENT|无法将|不是内部或外部命令/i.test(error);
+    return {
+      hint: notFound
+        ? "命令不可用或路径不对。下一步应检查可用脚本/项目结构，或换成平台可用命令。"
+        : "命令执行失败。下一步应根据退出码和输出选择修复、换命令或向用户说明阻塞点。",
+      nextTool: notFound ? "inspect_project" : "collect_diagnostics",
+    };
+  }
+  return {
+    hint: "工具失败已结构化记录。下一步必须换参数、换工具或向用户说明阻塞点，不要重复相同工具输入。",
+  };
+}
+
+function truncateDiagnosticPreview(value: string, limit: number): string {
+  const text = value.replace(/\s+/g, " ").trim();
+  return text.length <= limit ? text : `${text.slice(0, limit)}...[truncated ${text.length - limit} chars]`;
 }
 
 function inferNextPhase(

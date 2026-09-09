@@ -15,6 +15,8 @@ interface ReadableCandidate {
   score: number;
   text: string;
   truncated: boolean;
+  textChars: number;
+  paragraphCount: number;
 }
 
 interface ExtractedReadableHtml {
@@ -24,7 +26,10 @@ interface ExtractedReadableHtml {
     strategy: "article_candidate" | "whole_body";
     candidateCount: number;
     needsModelReview: boolean;
+    selectedSource?: string;
     quality: ReadableQuality;
+    qualitySummary: string;
+    nextAction: "answer_from_body" | "extract_links" | "search_alternate";
     hint: string;
   };
 }
@@ -188,6 +193,56 @@ function extractJsonLdArticleBodies(html: string): Array<{ source: string; text:
   return candidates;
 }
 
+function extractMetaArticleCandidates(html: string): Array<{ source: string; text: string }> {
+  const candidates: Array<{ source: string; text: string }> = [];
+  for (const match of html.matchAll(/<meta\b[^>]*>/gi)) {
+    const tag = match[0] ?? "";
+    const name = getMetaAttribute(tag, "name") ?? getMetaAttribute(tag, "property") ?? "";
+    const content = getMetaAttribute(tag, "content") ?? "";
+    if (!content.trim()) continue;
+    if (!/(^description$|og:description|twitter:description|article:body|news_keywords)/i.test(name)) continue;
+    candidates.push({ source: `meta:${name}`, text: content });
+  }
+  return candidates;
+}
+
+function getMetaAttribute(tag: string, attributeName: "name" | "property" | "content"): string | null {
+  const match = tag.match(new RegExp(`${attributeName}\\s*=\\s*(['"])([\\s\\S]*?)\\1`, "i"));
+  return match ? htmlToText(match[2] ?? "") : null;
+}
+
+function extractEmbeddedArticleTextCandidates(html: string): Array<{ source: string; text: string }> {
+  const candidates: Array<{ source: string; text: string }> = [];
+  const scripts = [...html.matchAll(/<script\b(?![^>]*type\s*=\s*(['"])application\/ld\+json\1)[^>]*>([\s\S]*?)<\/script>/gi)]
+    .map((match) => match[2] ?? "")
+    .join("\n");
+  const fieldPattern = /["'](?:articleBody|content|body|text|summary|description)["']\s*:\s*["']((?:\\.|[^"'\\]){120,})["']/gi;
+  for (const match of scripts.matchAll(fieldPattern)) {
+    const raw = match[1] ?? "";
+    const text = decodeScriptString(raw);
+    if (looksLikeArticleText(text)) candidates.push({ source: "embedded:script-text", text });
+  }
+  return candidates.slice(0, 8);
+}
+
+function decodeScriptString(value: string): string {
+  return normalizeText(value
+    .replace(/\\u([0-9a-f]{4})/gi, (_, code: string) => String.fromCharCode(Number.parseInt(code, 16)))
+    .replace(/\\n/g, "\n")
+    .replace(/\\r/g, "\n")
+    .replace(/\\"/g, "\"")
+    .replace(/\\\//g, "/")
+    .replace(/<[^>]+>/g, " "));
+}
+
+function looksLikeArticleText(text: string): boolean {
+  const normalized = normalizeText(text);
+  if (normalized.length < 120) return false;
+  const punctuation = normalized.match(/[。！？；，,.!?;]/g)?.length ?? 0;
+  const noise = /function\s*\(|window\.|var\s+|const\s+|广告|登录|注册/.test(normalized);
+  return punctuation >= 3 && !noise;
+}
+
 function findJsonArticleBodies(value: unknown): string[] {
   if (!value || typeof value !== "object") return [];
   if (Array.isArray(value)) return value.flatMap(findJsonArticleBodies);
@@ -232,6 +287,8 @@ function collectReadableCandidates(html: string): Array<{ source: string; text: 
   const candidates: Array<{ source: string; text: string }> = [];
   const body = extractBodyHtml(html);
   candidates.push(...extractJsonLdArticleBodies(html));
+  candidates.push(...extractMetaArticleCandidates(html));
+  candidates.push(...extractEmbeddedArticleTextCandidates(html));
   const structuralPatterns = [
     { source: "article", pattern: /<article\b[^>]*>[\s\S]*?<\/article>/gi },
     { source: "main", pattern: /<main\b[^>]*>[\s\S]*?<\/main>/gi },
@@ -281,6 +338,7 @@ function evaluateReadableQuality(text: string, candidates: Array<{ source: strin
   const hasStructuredSource = candidates.some((candidate) => {
     return candidate.source.startsWith("json-ld")
       || candidate.source.startsWith("paragraph_cluster")
+      || candidate.source.startsWith("embedded:")
       || candidate.source === "article"
       || candidate.source === "main";
   });
@@ -315,9 +373,11 @@ function evaluateReadableQuality(text: string, candidates: Array<{ source: strin
 
 function candidateSourceBoost(source: string): number {
   if (source.startsWith("json-ld:articleBody")) return 260;
+  if (source.startsWith("embedded:")) return 190;
   if (source.startsWith("paragraph_cluster")) return 180;
   if (source === "article") return 160;
   if (source === "main") return 110;
+  if (source.startsWith("meta:")) return 20;
   if (source === "whole_body") return -140;
   return 80;
 }
@@ -378,14 +438,30 @@ function extractReadableHtml(html: string): ExtractedReadableHtml {
   const quality = evaluateReadableQuality(best, rankedCandidates);
   const articleCandidates = rankedCandidates.slice(0, 5).map((candidate) => {
     const trimmed = trimCandidateText(candidate.text);
+    const textChars = candidate.text.length;
+    const paragraphCount = candidate.text.split(/\n+/).filter((line) => line.trim().length >= 24).length;
     return {
       source: candidate.source,
       score: Math.round(candidate.score),
       text: trimmed.text,
       truncated: trimmed.truncated,
+      textChars,
+      paragraphCount,
     };
   });
   const strategy = rankedCandidates.length > 0 ? "article_candidate" : "whole_body";
+  const nextAction = quality.status === "strong"
+    ? "answer_from_body"
+    : articleCandidates.length > 0
+      ? "extract_links"
+      : "search_alternate";
+  const qualitySummary = [
+    `status=${quality.status}`,
+    `score=${quality.score}`,
+    `chars=${quality.textChars}`,
+    `paragraphs=${quality.paragraphCount}`,
+    ...(quality.reasons.length > 0 ? [`reasons=${quality.reasons.slice(0, 4).join("；")}`] : []),
+  ].join("; ");
   return {
     text: best,
     articleCandidates,
@@ -393,7 +469,10 @@ function extractReadableHtml(html: string): ExtractedReadableHtml {
       strategy,
       candidateCount: rankedCandidates.length,
       needsModelReview: quality.status !== "strong" || articleCandidates.length > 1 || /扫码|APP|下载|评论|举报|客户端/.test(best),
+      ...(rankedCandidates[0]?.source ? { selectedSource: rankedCandidates[0].source } : {}),
       quality,
+      qualitySummary,
+      nextAction,
       hint: quality.status === "strong"
         ? "Readable article body was extracted. Answer from text/articleCandidates and cite the page title or URL when useful."
         : "Readable body is weak or missing. Try web_extract_links on htmlPreview first, then web_search for an alternate accessible source before answering.",
@@ -464,6 +543,7 @@ export function createWebFetchTool(): Tool {
           ? {
               articleCandidates: extracted.articleCandidates,
               extraction: extracted.extraction,
+              readability: extracted.extraction.quality,
             }
           : {}),
         ...htmlFields,

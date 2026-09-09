@@ -473,6 +473,49 @@ test("LlmPlanner redirects model web drift back to workspace evidence for local 
   assert.match(decision.reasoning ?? "", /Workspace route lock/);
 });
 
+test("LlmPlanner blocks identical failed tool input and switches to the suggested recovery tool", async () => {
+  const model = new RecordingModel({
+    kind: "tool_call",
+    toolName: "read_text_file",
+    toolInput: { path: "missing.md" },
+  });
+  const planner = new LlmPlanner(model);
+
+  const decision = await planner.decide(makeInput(
+    [],
+    [
+      { name: "read_text_file", description: "Read a file", inputSchema: { type: "object" } },
+      { name: "find_files", description: "Find files", inputSchema: { type: "object" } },
+    ],
+    "继续",
+    {
+      step: 2,
+      phase: "investigate",
+      lastActionKind: "tool_call",
+      lastToolName: "read_text_file",
+      lastToolFailure: {
+        toolName: "read_text_file",
+        inputSignature: "read_text_file:{\"path\":\"missing.md\"}",
+        inputPreview: "{\"path\":\"missing.md\"}",
+        error: "File not found or not readable: missing.md",
+        retryable: false,
+        failedAtStep: 2,
+        repeatCount: 1,
+        recoveryHint: "Use find_files to correct the path.",
+        suggestedNextTool: "find_files",
+        suggestedNextInput: { query: "missing.md" },
+      },
+    },
+  ));
+
+  assert.deepEqual(decision.action, {
+    kind: "tool_call",
+    toolName: "find_files",
+    toolInput: { query: "missing.md" },
+  });
+  assert.match(decision.reasoning ?? "", /Failure diagnostic/);
+});
+
 test("RulePlanner fetches explicit URLs before searching", async () => {
   const planner = new RulePlanner();
   const availableTools: ToolDescriptor[] = [

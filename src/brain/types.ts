@@ -189,6 +189,20 @@ export interface WorkingMemorySnapshot {
     assertActual?: string;
     assertDiffSummary?: string;
   };
+  lastToolFailure?: {
+    toolName: string;
+    inputSignature: string;
+    inputPreview: string;
+    error: string;
+    errorKind?: string;
+    retryable: boolean;
+    failedAtStep: number;
+    repeatCount: number;
+    recoveryHint: string;
+    suggestedNextTool?: string;
+    suggestedNextInput?: unknown;
+    adjacentSuccessSummary?: string;
+  };
   repairAttempt?: {
     // 记录同一 suspect 上已经尝试过哪些修复路径，避免死循环重复改同一补丁。
     suspectFile: string;

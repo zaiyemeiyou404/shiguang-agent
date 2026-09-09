@@ -312,6 +312,7 @@ export function formatWorkingMemory(workingMemory: WorkingMemorySnapshot): strin
     "Treat workingMemory.taskLoop.taskKind as the route lock for this turn. If taskKind is web_article/web_search, ignore stale project skills and workspace paths unless the latest user message explicitly asks for local files.",
     "Treat workingMemory.taskLoop.userCommand.commandContract as authoritative for the latest task. Use contract.targets for URLs/paths and contract.directives only as routing preferences, not as user-facing search terms.",
     "The taskLoop.evidenceLog is the compact evidence ledger. Prefer strong evidence, treat weak evidence as a reason to recover or fetch/read a better source, and do not repeat failed or already weak tool attempts unless there is a new target.",
+    "If workingMemory.lastToolFailure is present, treat it as the active failure diagnostic. Consume its toolName, inputSignature, error, repeatCount, recoveryHint, and suggestedNextTool before deciding. Do not repeat the same failed tool/input unless you have new evidence or a corrected input.",
     "The taskLoop.selfCheck is the final readiness gate. If it says needs_evidence or needs_repair, satisfy that gap before final feedback. If it says passed, summarize the evidence and answer instead of calling unrelated tools.",
     JSON.stringify({ workingMemory }, null, 2),
   ].join("\n");

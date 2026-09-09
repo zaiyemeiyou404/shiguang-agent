@@ -191,6 +191,9 @@ function inferToolPreflightDecision(
 ): BrainDecision | null {
   if (decision.action.kind !== "tool_call") return null;
 
+  const failureRecovery = inferLastToolFailureRecovery(input, decision);
+  if (failureRecovery) return failureRecovery;
+
   const contract = currentCommandContract(input, message);
   const explicitUrl = contract.targets.urls[0] ?? inferInitialWebFetchUrl(message, input.availableTools);
   if (explicitUrl && !hasFetchedUrl(input.history, explicitUrl)) {
@@ -260,6 +263,44 @@ function inferToolPreflightDecision(
   }
 
   return null;
+}
+
+function inferLastToolFailureRecovery(input: BrainInput, decision: BrainDecision): BrainDecision | null {
+  const failure = input.workingMemory?.lastToolFailure;
+  if (!failure || decision.action.kind !== "tool_call") return null;
+  const signature = toolActionSignature(decision.action);
+  if (!signature || signature !== failure.inputSignature) return null;
+
+  if (
+    failure.suggestedNextTool
+    && failure.suggestedNextTool !== decision.action.toolName
+    && hasTool(input.availableTools, failure.suggestedNextTool)
+  ) {
+    return {
+      action: {
+        kind: "tool_call",
+        toolName: failure.suggestedNextTool,
+        toolInput: failure.suggestedNextInput ?? {},
+      },
+      reasoning: [
+        `Failure diagnostic: ${failure.toolName} already failed with the same input (${failure.error}).`,
+        `Recovery hint: ${failure.recoveryHint}`,
+        `Switching to ${failure.suggestedNextTool} instead of repeating the failed call.`,
+      ].join(" "),
+    };
+  }
+
+  return {
+    action: {
+      kind: "respond",
+      content: [
+        `刚才 \`${failure.toolName}\` 已经用相同参数失败过，我先不再重复调用，避免继续空转。`,
+        `错误：${failure.error}`,
+        `建议：${failure.recoveryHint}`,
+      ].join("\n"),
+    },
+    reasoning: "Failure diagnostic: blocked an identical failed tool/input repeat because no available alternate tool was present.",
+  };
 }
 
 function sanitizeToolRoutingDecision(input: BrainInput, decision: BrainDecision, message: string): BrainDecision {

@@ -212,7 +212,7 @@ test("ActionDispatcher attaches Codex-style readable display metadata to tool pi
   const executing = events.find((event) => event.kind === "tool_pipeline" && (event.payload as { phase?: unknown }).phase === "executing");
   const completed = events.find((event) => event.kind === "tool_pipeline" && (event.payload as { phase?: unknown }).phase === "completed");
   const executingDisplay = (executing?.payload as { display?: { title?: string; target?: string; reason?: string; expected?: string } }).display;
-  const completedDisplay = (completed?.payload as { display?: { title?: string; result?: string } }).display;
+  const completedDisplay = (completed?.payload as { display?: { title?: string; result?: string; nextStep?: string } }).display;
 
   assert.equal(executingDisplay?.title, "正在搜索网页");
   assert.equal(executingDisplay?.target, "查询 \"网络搜索的概念\"");
@@ -220,4 +220,39 @@ test("ActionDispatcher attaches Codex-style readable display metadata to tool pi
   assert.match(executingDisplay?.expected ?? "", /候选来源/);
   assert.equal(completedDisplay?.title, "搜索了网页");
   assert.match(completedDisplay?.result ?? "", /返回 1 条结果/);
+  assert.match(completedDisplay?.nextStep ?? "", /web_fetch/);
+});
+
+test("ActionDispatcher explains failed tool recovery in pipeline display", async () => {
+  const sink = new InMemoryEventSink();
+  const registry = new ToolRegistry();
+  registry.register({
+    descriptor: {
+      name: "web_fetch",
+      description: "Fetch the web page",
+      inputSchema: { type: "object", properties: { url: { type: "string" } } },
+    },
+    async execute() {
+      throw new Error("network timeout");
+    },
+  });
+  const dispatcher = new ActionDispatcher(registry, sink);
+
+  await dispatcher.dispatch({
+    action: {
+      kind: "tool_call",
+      toolName: "web_fetch",
+      toolInput: { url: "https://example.test/article" },
+    },
+    reasoning: "Need the actual article body.",
+  }, "run_failed_display");
+
+  const events = await sink.list("run_failed_display");
+  const failed = events.find((event) => event.kind === "tool_pipeline" && (event.payload as { phase?: unknown }).phase === "failed");
+  const display = (failed?.payload as { display?: { title?: string; result?: string; nextStep?: string; debugHint?: string } }).display;
+
+  assert.equal(display?.title, "抓取网页失败");
+  assert.match(display?.result ?? "", /network timeout/);
+  assert.match(display?.nextStep ?? "", /网页搜索|链接提取/);
+  assert.match(display?.debugHint ?? "", /tool=web_fetch/);
 });

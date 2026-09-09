@@ -15,6 +15,15 @@ type WebFetchModule = {
   createWebFetchTool(): WebFetchTool;
 };
 
+type Readability = {
+  status: "strong" | "weak" | "failed";
+  score: number;
+  textChars: number;
+  paragraphCount: number;
+  boilerplateHits: number;
+  reasons: string[];
+};
+
 type WebFetchOutput = {
   url: string;
   status: number;
@@ -22,21 +31,18 @@ type WebFetchOutput = {
   title?: string;
   text: string;
   truncated: boolean;
-  articleCandidates?: Array<{ source: string; score: number; text: string; truncated: boolean }>;
+  articleCandidates?: Array<{ source: string; score: number; text: string; truncated: boolean; textChars: number; paragraphCount: number }>;
   extraction?: {
     strategy: string;
     candidateCount: number;
     needsModelReview: boolean;
-    quality?: {
-      status: "strong" | "weak" | "failed";
-      score: number;
-      textChars: number;
-      paragraphCount: number;
-      boilerplateHits: number;
-      reasons: string[];
-    };
+    selectedSource?: string;
+    quality?: Readability;
+    qualitySummary?: string;
+    nextAction?: "answer_from_body" | "extract_links" | "search_alternate";
     hint: string;
   };
+  readability?: Readability;
   htmlPreview?: string;
   htmlPreviewTruncated?: boolean;
 };
@@ -133,8 +139,11 @@ test("web_fetch prefers news article body over navigation chrome", async () => {
     assert.ok(result.articleCandidates);
     assert.ok(result.articleCandidates.length >= 1);
     assert.match(result.articleCandidates[0]?.text ?? "", /中华民族复兴伟业/);
+    assert.equal(typeof result.articleCandidates[0]?.textChars, "number");
     assert.equal(result.extraction?.strategy, "article_candidate");
     assert.equal(result.extraction?.quality?.status, "strong");
+    assert.equal(result.extraction?.nextAction, "answer_from_body");
+    assert.equal(result.readability?.status, "strong");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -249,6 +258,45 @@ test("web_fetch can infer an article from dense paragraph clusters", async () =>
     assert.match(result.text, /clear takeaway/);
     assert.doesNotMatch(result.text, /Recommended links/);
     assert.ok(result.articleCandidates?.some((candidate) => candidate.source.startsWith("paragraph_cluster")));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("web_fetch can extract article text hidden in page scripts", async () => {
+  const { createWebFetchTool } = await loadModule();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(
+    `<!doctype html>
+    <html>
+      <head><title>Script Article</title></head>
+      <body>
+        <nav>Download App Login Register</nav>
+        <script>
+          window.__ARTICLE__ = {
+            "articleBody": "The first article paragraph explains the concept of web search. Search engines crawl and index pages, then return relevant ranked results. The second paragraph explains that users type keywords and the system retrieves, ranks, and summarizes candidate pages. The third paragraph emphasizes that search snippets are only candidates, so an agent should open the selected page and verify the body before giving a final answer."
+          };
+          window.__DATA__ = {
+            "content": "第一段正文介绍网络搜索的概念，它通过搜索引擎索引网页并返回相关结果。第二段正文说明用户输入关键词后，系统会进行召回、排序和摘要展示。第三段正文强调搜索结果还需要进一步打开网页核验，不能只依赖搜索片段。"
+          };
+        </script>
+      </body>
+    </html>`,
+    {
+      status: 200,
+      headers: { "content-type": "text/html; charset=utf-8" },
+    },
+  );
+
+  try {
+    const tool = createWebFetchTool();
+    const result = await tool.execute({ url: "https://example.test/script.html" });
+
+    assertOutput(result);
+    assert.match(result.text, /Search engines crawl and index pages/);
+    assert.equal(result.articleCandidates?.[0]?.source, "embedded:script-text");
+    assert.equal(result.extraction?.selectedSource, "embedded:script-text");
+    assert.match(result.extraction?.qualitySummary ?? "", /status=strong/);
   } finally {
     globalThis.fetch = originalFetch;
   }
