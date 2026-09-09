@@ -145,6 +145,103 @@ test("judgeTaskCompletion uses task-loop criteria to fetch explicit URLs before 
   assert.deepEqual(judgment.recommendedToolInput, { url: "https://example.test/article" });
 });
 
+test("judgeTaskCompletion uses the command contract URL when continuing", () => {
+  const input = makeInput("continue", [
+    { name: "web_fetch", description: "fetch", inputSchema: { type: "object" } },
+  ]);
+  input.workingMemory = {
+    step: 2,
+    phase: "investigate",
+    lastActionKind: "tool_call",
+    taskLoop: {
+      objective: "read https://example.test/article",
+      mode: "web",
+      taskKind: "web_article",
+      evidenceCount: 0,
+      completionGateCount: 0,
+      currentTaskId: "collect_evidence",
+      userCommand: {
+        raw: "read https://example.test/article",
+        objective: "read https://example.test/article",
+        explicitUrls: ["https://example.test/article"],
+        commandContract: {
+          version: "shiguang.command.v1",
+          original: "read https://example.test/article",
+          objective: "read https://example.test/article",
+          route: "web",
+          taskKind: "web_article",
+          targets: { urls: ["https://example.test/article"], paths: [] },
+          directives: { tools: [], skills: [], output: [], constraints: [] },
+          immutable: true,
+        },
+      },
+      tasks: [
+        {
+          id: "collect_evidence",
+          title: "Locate source",
+          status: "active",
+          criteria: [{ id: "source_located", description: "source", status: "pending" }],
+          attempts: 0,
+        },
+      ],
+    },
+  };
+
+  const judgment = judgeTaskCompletion(input, null, "continue");
+
+  assert.equal(judgment.status, "needs_more_evidence");
+  assert.equal(judgment.recommendedToolName, "web_fetch");
+  assert.deepEqual(judgment.recommendedToolInput, { url: "https://example.test/article" });
+});
+
+test("judgeTaskCompletion uses the command contract query for continued web recovery", () => {
+  const input = makeInput("continue", [
+    { name: "web_search", description: "search", inputSchema: { type: "object" } },
+  ]);
+  input.workingMemory = {
+    step: 3,
+    phase: "investigate",
+    lastActionKind: "tool_call",
+    lastToolName: "web_fetch",
+    taskLoop: {
+      objective: "network search concept",
+      mode: "web",
+      taskKind: "web_search",
+      evidenceCount: 1,
+      completionGateCount: 0,
+      userCommand: {
+        raw: "search network search concept and call web_article_reader",
+        objective: "search network search concept",
+        normalizedSearchQuery: "search network search concept",
+        toolDirectives: ["web_article_reader"],
+        skillDirectives: ["web_article_reader"],
+        commandContract: {
+          version: "shiguang.command.v1",
+          original: "search network search concept and call web_article_reader",
+          objective: "search network search concept",
+          route: "web",
+          taskKind: "web_search",
+          targets: { urls: [], paths: [] },
+          directives: { tools: ["web_article_reader"], skills: ["web_article_reader"], output: [], constraints: [] },
+          immutable: true,
+        },
+      },
+    },
+  };
+  const result: ActionResult = {
+    action: { kind: "tool_call", toolName: "web_fetch", toolInput: { url: "https://example.test/shell" } },
+    ok: true,
+    output: { url: "https://example.test/shell", text: "" },
+    metadata: { category: "tool_observation", summary: "weak fetch", retryable: false, toolName: "web_fetch" },
+  };
+
+  const judgment = judgeTaskCompletion(input, result, "continue");
+
+  assert.equal(judgment.status, "needs_more_evidence");
+  assert.equal(judgment.recommendedToolName, "web_search");
+  assert.deepEqual(judgment.recommendedToolInput, { query: "search network search concept", limit: 5 });
+});
+
 test("judgeTaskCompletion uses task-loop answer step as a completion gate", () => {
   const result: ActionResult = {
     action: { kind: "tool_call", toolName: "web_fetch", toolInput: { url: "https://example.test/article" } },
@@ -714,6 +811,28 @@ test("judgeToolCallValue avoids remote lookup for workspace-only analysis", () =
   assert.equal(judgment.status, "avoid");
 });
 
+test("judgeToolCallValue redirects remote lookup to workspace discovery for local file translation", () => {
+  const message = "翻译一下工作区文件";
+  const decision: BrainDecision = {
+    action: { kind: "tool_call", toolName: "web_search", toolInput: { query: "翻译工作区文件" } },
+  };
+
+  const judgment = judgeToolCallValue(
+    makeInput(message, [
+      { name: "find_files", description: "find files", inputSchema: { type: "object" } },
+      { name: "search_workspace", description: "search workspace", inputSchema: { type: "object" } },
+      { name: "web_search", description: "search web", inputSchema: { type: "object" } },
+    ]),
+    decision,
+    null,
+    message,
+  );
+
+  assert.equal(judgment.status, "redirect");
+  assert.equal(judgment.recommendedToolName, "find_files");
+  assert.deepEqual(judgment.recommendedToolInput, { query: "*", includeDirectories: true, maxResults: 40 });
+});
+
 test("judgeToolCallValue requires read evidence before workspace mutations", () => {
   const message = "fix src/app.ts";
   const decision: BrainDecision = {
@@ -907,6 +1026,48 @@ test("judgeTaskCompletion requires fetching search results for broad web search 
   assert.deepEqual(judgment.recommendedToolInput, { url: "https://example.test/red-books" });
 });
 
+test("judgeTaskCompletion does not finish web_article tasks from search snippets", () => {
+  const message = "继续";
+  const searchResult: ActionResult = {
+    action: { kind: "tool_call", toolName: "web_search", toolInput: { query: "红色书籍 正文" } },
+    ok: true,
+    output: { results: [{ title: "红色书籍", url: "https://example.test/red-books" }] },
+    metadata: {
+      category: "tool_observation",
+      summary: "found candidate pages",
+      retryable: false,
+      toolName: "web_search",
+    },
+  };
+  const input = makeInput(message, [{ name: "web_fetch", description: "fetch", inputSchema: { type: "object" } }]);
+  input.workingMemory = {
+    step: 2,
+    phase: "investigate",
+    lastActionKind: "tool_call",
+    taskLoop: {
+      objective: "读取红色书籍网页正文",
+      mode: "web",
+      taskKind: "web_article",
+      userCommand: {
+        raw: "看一下红色书籍网页正文",
+        objective: "看一下红色书籍网页正文",
+        normalizedSearchQuery: "红色书籍网页正文",
+        toolDirectives: [],
+        explicitUrls: [],
+        taskKind: "web_article",
+      },
+      evidenceCount: 1,
+      completionGateCount: 0,
+    },
+  };
+
+  const judgment = judgeTaskCompletion(input, searchResult, message);
+
+  assert.equal(judgment.status, "needs_more_evidence");
+  assert.equal(judgment.recommendedToolName, "web_fetch");
+  assert.deepEqual(judgment.recommendedToolInput, { url: "https://example.test/red-books" });
+});
+
 test("judgeToolCallValue uses the next search candidate before local tools on web tasks", () => {
   const message = "继续看这个网页正文";
   const searchResult: ActionResult = {
@@ -1080,4 +1241,86 @@ test("judgeTaskCompletion recovers failed file reads with find_files when availa
   assert.equal(judgment.status, "needs_recovery");
   assert.equal(judgment.recommendedToolName, "find_files");
   assert.deepEqual(judgment.recommendedToolInput, { query: "pubspec.yaml", maxResults: 20 });
+  assert.equal(judgment.completionScore?.ready, false);
+  assert.equal(judgment.recoveryPlan?.kind, "alternate_tool");
+  assert.equal(judgment.recoveryPlan?.failedTool, "read_text_file");
+  assert.equal(judgment.recoveryPlan?.nextTool, "find_files");
+  assert.equal(judgment.recoveryPlan?.shouldAskModel, false);
+});
+
+test("judgeTaskCompletion enriches ready web evidence with a passing score", () => {
+  const message = "summarize https://example.test/article";
+  const fetchedArticle: ActionResult = {
+    action: { kind: "tool_call", toolName: "web_fetch", toolInput: { url: "https://example.test/article" } },
+    ok: true,
+    output: { url: "https://example.test/article", text: "article body ".repeat(30) },
+    metadata: {
+      category: "tool_observation",
+      summary: "fetched article body",
+      retryable: false,
+      toolName: "web_fetch",
+    },
+  };
+
+  const judgment = judgeTaskCompletion(makeInput(message, []), fetchedArticle, message);
+
+  assert.equal(judgment.status, "ready");
+  assert.equal(judgment.completionScore?.ready, true);
+  assert.equal((judgment.completionScore?.score ?? 0) >= (judgment.completionScore?.threshold ?? 100), true);
+  assert.equal(judgment.recoveryPlan?.kind, "finalize");
+});
+
+test("judgeTaskCompletion refuses ready status when final audit blocks low-value evidence", () => {
+  const input = makeInput("continue", []);
+  input.workingMemory = {
+    step: 2,
+    phase: "summarize",
+    lastActionKind: "tool_call",
+    taskLoop: {
+      objective: "read online article",
+      mode: "web",
+      evidenceCount: 1,
+      completionGateCount: 0,
+      currentTaskId: "answer",
+      tasks: [
+        {
+          id: "answer",
+          title: "Answer",
+          status: "active",
+          criteria: [{ id: "final_feedback", description: "final", status: "pending" }],
+          attempts: 0,
+        },
+      ],
+      selfCheck: {
+        status: "passed",
+        summary: "Checklist passed.",
+        checkedAtStep: 2,
+      },
+      completionScore: {
+        score: 40,
+        threshold: 82,
+        coverage: 100,
+        evidence: 0,
+        verification: 100,
+        recoveryRisk: 70,
+        blockers: ["no_advancing_evidence"],
+        nextStep: "no_advancing_evidence",
+        ready: false,
+      },
+      finalAudit: {
+        passed: false,
+        summary: "Final audit blocked final feedback: no_advancing_evidence.",
+        issues: ["no_advancing_evidence"],
+        evidenceScore: 0,
+        completionScore: 40,
+        checkedAtStep: 2,
+      },
+    },
+  };
+
+  const judgment = judgeTaskCompletion(input, null, "continue");
+
+  assert.equal(judgment.status, "needs_more_evidence");
+  assert.equal(judgment.completionScore?.ready, false);
+  assert.match(judgment.reason, /Final audit blocked/);
 });

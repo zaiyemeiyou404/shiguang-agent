@@ -9,6 +9,7 @@ import { BasicEvaluator } from "../brain/evaluator.js";
 import type { ActionResult, BrainDecision, BrainInput, WorkingMemorySnapshot } from "../brain/types.js";
 import { applyActionResultToWorkingMemory, runLoop, type LoopState } from "../brain/loop.js";
 import { emptyRunTokenUsage, type LlmTokenUsage, type RunTokenUsage } from "../brain/usage.js";
+import { parseUserCommand } from "../brain/user-command.js";
 import {
   applyAgentProfileToolAllowlist,
   formatAgentProfileInstructions,
@@ -109,7 +110,7 @@ export class Agent {
       const { bundle, diagnostics } = await this.contextService.buildAndRender({
         userTurn: input.userMessage,
         ...input.contextInput,
-        systemInstructions: this.mergedSystemInstructions(input.contextInput.systemInstructions, input),
+        systemInstructions: this.mergedSystemInstructions(input.contextInput.systemInstructions, input, priorTurns),
       });
       await this.emitContextCompactionEvent(input.runId, diagnostics);
 
@@ -149,7 +150,7 @@ export class Agent {
           userMessage: input.userMessage,
           contextInput: input.contextInput,
           signal: input.signal,
-        }),
+        }, priorTurns),
       });
       await this.emitContextCompactionEvent(input.runId, diagnostics);
 
@@ -318,13 +319,16 @@ export class Agent {
     await this.options.turnRepository.create(makeTurn(sessionId, "user", input.userMessage));
   }
 
-  private mergedSystemInstructions(systemInstructions: string | undefined, input: AgentInput): string | undefined {
+  private mergedSystemInstructions(systemInstructions: string | undefined, input: AgentInput, priorTurns: Turn[] = []): string | undefined {
     const profileInstructions = formatAgentProfileInstructions(this.options.agentProfile ?? null);
+    const skillSelectionMessage = skillSelectionMessageForTurn(input.userMessage, priorTurns);
+    const taskKind = parseUserCommand(skillSelectionMessage).taskKind;
     const selectedSkillInstructions = this.options.customSkills
       ? formatCustomSkillInstructions(this.options.customSkills, {
-          userMessage: input.userMessage,
+          userMessage: skillSelectionMessage,
           availableTools: this.availableToolDescriptors(),
           workspaceRoot: this.options.workspaceRoot,
+          taskKind,
         })
       : this.options.customSkillInstructions?.trim();
     const merged = [profileInstructions, selectedSkillInstructions?.trim(), systemInstructions?.trim()].filter(Boolean).join("\n\n");
@@ -381,10 +385,12 @@ export class Agent {
     const taskLoop = workingMemory.taskLoop;
     const currentTask = taskLoop.tasks?.find((item) => item.id === taskLoop.currentTaskId);
     const currentCriterion = currentTask?.criteria.find((item) => item.status === "pending" || item.status === "failed");
+    const display = buildTaskLoopDisplay(taskLoop, currentTask, currentCriterion, event);
     await this.options.eventSink.record(runId, "tool_pipeline", {
       phase: "task_loop",
       step: event.step,
       status: event.phase,
+      display,
       objective: taskLoop.objective,
       mode: taskLoop.mode,
       currentStep: taskLoop.currentStep ?? null,
@@ -401,6 +407,8 @@ export class Agent {
           }
         : null,
       tasks: taskLoop.tasks ?? [],
+      completionScore: taskLoop.completionScore ?? null,
+      recoveryPlan: taskLoop.recoveryPlan ?? null,
       evidenceCount: taskLoop.evidenceCount,
       completionGateCount: taskLoop.completionGateCount,
       needsFinalAnswer: taskLoop.needsFinalAnswer === true,
@@ -438,6 +446,81 @@ export class Agent {
       usedLlmCompactor,
     });
   }
+}
+
+type TaskLoopState = NonNullable<WorkingMemorySnapshot["taskLoop"]>;
+type TaskLoopTask = NonNullable<TaskLoopState["tasks"]>[number];
+type TaskLoopCriterion = NonNullable<TaskLoopTask["criteria"]>[number];
+
+function buildTaskLoopDisplay(
+  taskLoop: TaskLoopState,
+  currentTask: TaskLoopTask | undefined,
+  currentCriterion: TaskLoopCriterion | undefined,
+  event: {
+    step: number;
+    phase: "initialized" | "advanced" | "checkpoint" | "finalized";
+    summary: string;
+    result?: ActionResult;
+  },
+): Record<string, unknown> {
+  const score = taskLoop.completionScore;
+  const toolName = event.result?.metadata?.toolName ?? event.result?.action.toolName ?? taskLoop.lastEvidenceTool;
+  const phaseTitle = taskLoopDisplayTitle(event.phase, toolName, currentTask?.title ?? taskLoop.objective);
+  const progress = score ? Math.max(0, Math.min(100, Math.round((score.score / Math.max(score.threshold, 1)) * 100))) : null;
+  const nextStep = currentCriterion?.description ?? score?.nextStep ?? taskLoop.lastProgressSummary ?? null;
+  return {
+    title: phaseTitle,
+    detail: event.summary,
+    status: event.phase,
+    step: event.step,
+    mode: taskLoop.mode,
+    tool: toolName ?? null,
+    progress,
+    score: score?.score ?? null,
+    threshold: score?.threshold ?? null,
+    nextStep,
+    blockers: score?.blockers ?? [],
+    recovery: taskLoop.recoveryPlan
+      ? {
+          kind: taskLoop.recoveryPlan.kind,
+          failedTool: taskLoop.recoveryPlan.failedTool ?? null,
+          nextTool: taskLoop.recoveryPlan.nextTool ?? null,
+          reason: taskLoop.recoveryPlan.reason,
+          shouldAskModel: taskLoop.recoveryPlan.shouldAskModel,
+        }
+      : null,
+  };
+}
+
+function taskLoopDisplayTitle(
+  phase: "initialized" | "advanced" | "checkpoint" | "finalized",
+  toolName: string | undefined,
+  fallback: string,
+): string {
+  if (phase === "initialized") return `Starting ${fallback}`;
+  if (phase === "checkpoint") return `Checking ${fallback}`;
+  if (phase === "finalized") return `Finished ${fallback}`;
+  if (!toolName) return `Working on ${fallback}`;
+  return `Ran ${friendlyToolName(toolName)}`;
+}
+
+function friendlyToolName(toolName: string): string {
+  const labels: Record<string, string> = {
+    web_search: "web search",
+    web_fetch: "web page fetch",
+    web_extract_links: "link extraction",
+    read_text_file: "file read",
+    read_many_files: "file batch read",
+    list_directory: "directory scan",
+    inspect_project: "project inspection",
+    search_workspace: "workspace search",
+    find_files: "file finder",
+    write_text_file: "file write",
+    patch_text_file: "file patch",
+    run_validation: "validation",
+    completion_check: "completion check",
+  };
+  return labels[toolName] ?? toolName;
 }
 
 function readUsageBudgetFromEnv(): {
@@ -545,6 +628,20 @@ function summarizeAssistantTurn(state: LoopState): string {
 function summarizeFailureTurn(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return `Run failed before completion: ${message}`;
+}
+
+function skillSelectionMessageForTurn(userMessage: string, priorTurns: Turn[]): string {
+  if (!isContinuationMessage(userMessage)) return userMessage;
+  const previousUserTurn = [...priorTurns]
+    .reverse()
+    .find((turn) => turn.role === "user" && !isContinuationMessage(turn.content));
+  return previousUserTurn?.content ?? userMessage;
+}
+
+function isContinuationMessage(message: string): boolean {
+  const text = message.trim().toLowerCase();
+  return /^(继续|接着|上次|继续上次|接着上次|从这里|继续刚才|继续之前|resume|continue)/i.test(text)
+    || /继续上次|接着上次|上次暂停|上一轮|从 checkpoint|from checkpoint/i.test(text);
 }
 
 function summarizeActionResultForEvent(result: ActionResult): string {

@@ -18,6 +18,9 @@ interface CreateCustomSkillInput {
   layer?: SkillLayer;
   scope?: string;
   triggers?: string[];
+  taskKinds?: string[];
+  allowedTools?: string[];
+  forbiddenTools?: string[];
   priority?: number;
   version?: number;
 }
@@ -52,6 +55,9 @@ export interface CustomSkill {
   layer: SkillLayer;
   scope?: string;
   triggers: string[];
+  taskKinds: string[];
+  allowedTools: string[];
+  forbiddenTools: string[];
   priority: number;
   version: number;
 }
@@ -71,6 +77,7 @@ export interface CustomSkillSelectionContext {
   availableTools?: Array<string | { name: string }>;
   workspaceRoot?: string;
   maxSkills?: number;
+  taskKind?: string;
 }
 
 interface ExtensionRoots {
@@ -136,6 +143,9 @@ function parseSkillMarkdown(content: string, path: string, fallbackName: string)
     layer: readSkillLayer(frontmatter.layer),
     ...(readString(frontmatter.scope) ? { scope: readString(frontmatter.scope) } : {}),
     triggers: readStringList(frontmatter.triggers),
+    taskKinds: readStringList(frontmatter.taskKinds).map((item) => item.toLowerCase()),
+    allowedTools: readStringList(frontmatter.allowedTools),
+    forbiddenTools: readStringList(frontmatter.forbiddenTools),
     priority: readInteger(frontmatter.priority, defaultSkillPriority(readSkillLayer(frontmatter.layer))),
     version: readInteger(frontmatter.version, 1),
   };
@@ -211,6 +221,9 @@ function renderSkillMarkdown(input: CreateCustomSkillInput, safeName: string): s
     `layer: ${layer}`,
     input.scope?.trim() ? `scope: ${input.scope.trim()}` : null,
     input.triggers && input.triggers.length > 0 ? `triggers: ${input.triggers.map((trigger) => trigger.trim()).filter(Boolean).join(", ")}` : null,
+    input.taskKinds && input.taskKinds.length > 0 ? `taskKinds: ${input.taskKinds.map((item) => item.trim()).filter(Boolean).join(", ")}` : null,
+    input.allowedTools && input.allowedTools.length > 0 ? `allowedTools: ${input.allowedTools.map((item) => item.trim()).filter(Boolean).join(", ")}` : null,
+    input.forbiddenTools && input.forbiddenTools.length > 0 ? `forbiddenTools: ${input.forbiddenTools.map((item) => item.trim()).filter(Boolean).join(", ")}` : null,
     `priority: ${priority}`,
     `version: ${typeof input.version === "number" ? Math.max(1, Math.trunc(input.version)) : 1}`,
     "---",
@@ -244,6 +257,9 @@ const DEFAULT_CUSTOM_SKILLS: CreateCustomSkillInput[] = [
       "正文",
       "抓取",
     ],
+    taskKinds: ["web_article", "web_search"],
+    allowedTools: ["web_fetch", "web_search", "web_extract_links"],
+    forbiddenTools: ["read_text_file", "read_many_files", "list_directory", "inspect_project", "search_workspace", "code_map"],
     priority: 85,
     version: 1,
     instructions: [
@@ -275,6 +291,57 @@ const DEFAULT_CUSTOM_SKILLS: CreateCustomSkillInput[] = [
       "## Stop Condition",
       "",
       "Stop once a credible article body has been found and the user's question has been answered. Do not keep reading local files, modifying projects, or searching unrelated topics.",
+    ].join("\n"),
+  },
+  {
+    name: "hermes_reflection_coach",
+    description: "Reflect on user corrections, separate evidence from assumptions, and persist reusable rules after approval.",
+    enabled: true,
+    layer: "global",
+    scope: "record_agent_rule",
+    triggers: [
+      "hermes",
+      "reflect",
+      "learn",
+      "rule",
+      "wrong",
+      "incorrect",
+      "why",
+      "反思",
+      "学习",
+      "规则",
+      "错",
+      "不对",
+      "为什么",
+      "降智",
+      "混乱",
+      "重复",
+    ],
+    taskKinds: ["chat", "web_search", "web_article", "workspace_overview", "file_read", "file_transform", "code_analysis", "edit", "debug", "validation", "release"],
+    allowedTools: ["record_agent_rule", "list_custom_extensions"],
+    priority: 78,
+    version: 1,
+    instructions: [
+      "# Hermes Reflection Coach",
+      "",
+      "Use this skill when the user questions a result, reports wrong behavior, asks why the agent acted a certain way, or asks Shiguang to learn from a mistake.",
+      "",
+      "## Reflection Loop",
+      "",
+      "1. Separate the latest user request from prior context, memories, skills, and tool observations.",
+      "2. State what was actually observed, what was inferred, and which inference may have been wrong.",
+      "3. Derive one small corrected operating rule that would prevent the same class of mistake.",
+      "4. If the rule is reusable and safe, call record_agent_rule so it can be approved and reused. Do not save secrets, large logs, one-off private content, or temporary task facts.",
+      "",
+      "## Route Hygiene",
+      "",
+      "1. If the correction is about a web task, ensure the new rule protects web_article/web_search from stale project skills and workspace file tools.",
+      "2. If the correction is about a workspace task, ensure the new rule prevents unnecessary web_search/web_fetch unless the latest user message explicitly asks for online information.",
+      "3. If the correction is about repeated tools or approval loops, the rule must include a stop condition and a different next action.",
+      "",
+      "## Answering",
+      "",
+      "After saving or proposing the rule, continue the current task when possible. Do not treat reflection as a substitute for solving the user's concrete problem.",
     ].join("\n"),
   },
 ];
@@ -318,6 +385,9 @@ function parseCreateSkillInput(input: unknown): CreateCustomSkillInput {
     ...(typeof obj.layer === "string" ? { layer: readSkillLayer(obj.layer) } : {}),
     ...(typeof obj.scope === "string" ? { scope: obj.scope } : {}),
     ...(Array.isArray(obj.triggers) ? { triggers: obj.triggers.filter((item): item is string => typeof item === "string").slice(0, 24) } : {}),
+    ...(Array.isArray(obj.taskKinds) ? { taskKinds: obj.taskKinds.filter((item): item is string => typeof item === "string").slice(0, 24) } : {}),
+    ...(Array.isArray(obj.allowedTools) ? { allowedTools: obj.allowedTools.filter((item): item is string => typeof item === "string").slice(0, 48) } : {}),
+    ...(Array.isArray(obj.forbiddenTools) ? { forbiddenTools: obj.forbiddenTools.filter((item): item is string => typeof item === "string").slice(0, 48) } : {}),
     ...(typeof obj.priority === "number" ? { priority: obj.priority } : {}),
     ...(typeof obj.version === "number" ? { version: obj.version } : {}),
   };
@@ -454,15 +524,17 @@ function scoreCustomSkill(skill: CustomSkill, context?: CustomSkillSelectionCont
   const messageText = (context?.userMessage ?? "").toLowerCase();
   const workspaceText = (context?.workspaceRoot ?? "").toLowerCase();
   const availableTools = normalizeAvailableToolNames(context?.availableTools);
-  const standaloneWebRequest = isStandaloneWebRequest(context?.userMessage ?? "");
-  if (skill.layer === "project" && standaloneWebRequest) return Number.NEGATIVE_INFINITY;
+  const standaloneWebRequest = isStandaloneWebRequest(context?.userMessage ?? "") || isWebTaskKind(context?.taskKind);
   const explicitNameMatch = isSkillExplicitlyMentioned(skill, messageText);
+  if (skill.layer === "project" && standaloneWebRequest) return Number.NEGATIVE_INFINITY;
+  if (standaloneWebRequest && !explicitNameMatch && skillLooksWorkspaceBound(skill)) return Number.NEGATIVE_INFINITY;
+  if (!skillSandboxAllows(skill, context, availableTools)) return Number.NEGATIVE_INFINITY;
 
   let score = skill.priority;
 
   if (skill.layer === "global") score += 8;
   if (skill.layer === "domain") score += 16;
-  if (skill.layer === "project" && context?.workspaceRoot && allowScopeWorkspaceBoost(skill, context?.userMessage ?? "")) score += 18;
+  if (skill.layer === "project" && context?.workspaceRoot && allowScopeWorkspaceBoost(skill, context?.userMessage ?? "", context?.taskKind)) score += 18;
   if (skill.layer === "session") score += 12;
   if (skill.layer === "task") score += 20;
 
@@ -472,7 +544,7 @@ function scoreCustomSkill(skill: CustomSkill, context?: CustomSkillSelectionCont
     const messageMatches = triggers.filter((trigger) => messageText.includes(trigger));
     const workspaceMatches = triggers.filter((trigger) => workspaceText.includes(trigger));
     const toolMatches = triggers.filter((trigger) => toolText.includes(trigger));
-    const allowWorkspaceTrigger = skill.layer === "project" && allowScopeWorkspaceBoost(skill, context?.userMessage ?? "");
+    const allowWorkspaceTrigger = skill.layer === "project" && allowScopeWorkspaceBoost(skill, context?.userMessage ?? "", context?.taskKind);
     const effectiveMatches = [
       ...messageMatches,
       ...(allowWorkspaceTrigger ? workspaceMatches : []),
@@ -484,8 +556,29 @@ function scoreCustomSkill(skill: CustomSkill, context?: CustomSkillSelectionCont
 
   if (explicitNameMatch) score += 420;
   if (skill.scope && availableTools.has(skill.scope)) score += 35;
-  if (skill.scope && `${messageText}\n${allowScopeWorkspaceBoost(skill, context?.userMessage ?? "") ? workspaceText : ""}`.includes(skill.scope.toLowerCase())) score += 24;
+  if (skill.scope && `${messageText}\n${allowScopeWorkspaceBoost(skill, context?.userMessage ?? "", context?.taskKind) ? workspaceText : ""}`.includes(skill.scope.toLowerCase())) score += 24;
   return score;
+}
+
+function skillSandboxAllows(
+  skill: CustomSkill,
+  context: CustomSkillSelectionContext | undefined,
+  availableTools: Set<string>,
+): boolean {
+  const taskKind = context?.taskKind?.toLowerCase();
+  if (skill.taskKinds.length > 0 && taskKind && !skill.taskKinds.includes(taskKind)) return false;
+
+  if (skill.allowedTools.length > 0 && availableTools.size > 0) {
+    const allowed = new Set(skill.allowedTools.map((tool) => tool.toLowerCase()));
+    if (![...availableTools].some((tool) => allowed.has(tool.toLowerCase()))) return false;
+  }
+
+  if (skill.forbiddenTools.length > 0 && availableTools.size > 0) {
+    const forbidden = new Set(skill.forbiddenTools.map((tool) => tool.toLowerCase()));
+    if ([...availableTools].every((tool) => forbidden.has(tool.toLowerCase()))) return false;
+  }
+
+  return true;
 }
 
 function isSkillExplicitlyMentioned(skill: CustomSkill, messageText: string): boolean {
@@ -510,8 +603,51 @@ function isStandaloneWebRequest(message: string): boolean {
   return !/项目|工程|仓库|代码|文件|目录|工作区|修改|修复|运行|测试|构建|project|repo|code|file|workspace|fix|edit|build|\btest\b/.test(textWithoutUrls);
 }
 
-function allowScopeWorkspaceBoost(skill: CustomSkill, message: string): boolean {
-  return skill.layer === "project" && !isStandaloneWebRequest(message);
+function isWebTaskKind(taskKind: string | undefined): boolean {
+  return taskKind === "web_search" || taskKind === "web_article";
+}
+
+function skillLooksWorkspaceBound(skill: CustomSkill): boolean {
+  if (skill.layer === "project") return true;
+  const taskKinds = new Set(skill.taskKinds.map((kind) => kind.toLowerCase()));
+  const hasWebTaskKind = taskKinds.has("web_search") || taskKinds.has("web_article");
+  const hasWorkspaceTaskKind = [...taskKinds].some((kind) => [
+    "workspace_overview",
+    "file_read",
+    "file_transform",
+    "code_analysis",
+    "edit",
+    "debug",
+    "validation",
+    "release",
+  ].includes(kind));
+  if (hasWorkspaceTaskKind && !hasWebTaskKind) return true;
+
+  const allowed = new Set(skill.allowedTools.map((tool) => tool.toLowerCase()));
+  const allowsWebTool = ["web_search", "web_fetch", "web_extract_links"].some((tool) => allowed.has(tool));
+  const allowsWorkspaceTool = [
+    "inspect_project",
+    "list_directory",
+    "find_files",
+    "read_text_file",
+    "read_many_files",
+    "search_workspace",
+    "code_map",
+    "symbol_search",
+    "dependency_graph",
+    "run_validation",
+    "write_text_file",
+    "patch_text_file",
+  ].some((tool) => allowed.has(tool));
+  if (allowsWorkspaceTool && !allowsWebTool) return true;
+
+  const haystack = `${skill.name}\n${skill.description ?? ""}\n${skill.scope ?? ""}\n${skill.triggers.join("\n")}`.toLowerCase();
+  return /workspace|codebase|project|repo|file|directory|工作区|项目|工程|代码|仓库|文件|目录/.test(haystack)
+    && !/web|url|article|网页|网址|链接|文章|正文|搜索/.test(haystack);
+}
+
+function allowScopeWorkspaceBoost(skill: CustomSkill, message: string, taskKind?: string): boolean {
+  return skill.layer === "project" && !isStandaloneWebRequest(message) && !isWebTaskKind(taskKind);
 }
 
 export function selectCustomSkills(skills: CustomSkill[], context?: CustomSkillSelectionContext): CustomSkill[] {
@@ -538,6 +674,9 @@ export function formatCustomSkillInstructions(skills: CustomSkill[], context?: C
       `Layer: ${skill.layer}`,
       skill.scope ? `Scope: ${skill.scope}` : null,
       skill.triggers.length > 0 ? `Triggers: ${skill.triggers.join(", ")}` : null,
+      skill.taskKinds.length > 0 ? `TaskKinds: ${skill.taskKinds.join(", ")}` : null,
+      skill.allowedTools.length > 0 ? `AllowedTools: ${skill.allowedTools.join(", ")}` : null,
+      skill.forbiddenTools.length > 0 ? `ForbiddenTools: ${skill.forbiddenTools.join(", ")}` : null,
       `Priority: ${skill.priority}`,
       skill.description ? `Description: ${skill.description}` : null,
       `Source: ${skill.path}`,

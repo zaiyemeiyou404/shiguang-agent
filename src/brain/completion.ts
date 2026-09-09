@@ -1,4 +1,5 @@
 import type { ActionResult, BrainDecision, BrainInput, TaskLoopMode } from "./types.js";
+import { parseUserCommand, stripToolRoutingDirectives } from "./user-command.js";
 
 export type CompletionStatus =
   | "ready"
@@ -13,6 +14,25 @@ export interface CompletionJudgment {
   reason: string;
   recommendedToolName?: string;
   recommendedToolInput?: unknown;
+  completionScore?: {
+    score: number;
+    threshold: number;
+    coverage: number;
+    evidence: number;
+    verification: number;
+    recoveryRisk: number;
+    blockers: string[];
+    nextStep?: string;
+    ready: boolean;
+  };
+  recoveryPlan?: {
+    kind: "retry" | "alternate_tool" | "model_replan" | "finalize";
+    failedTool?: string;
+    nextTool?: string;
+    nextInput?: unknown;
+    reason: string;
+    shouldAskModel: boolean;
+  };
 }
 
 export type ToolCallValueStatus = "allow" | "redirect" | "avoid";
@@ -27,6 +47,15 @@ export interface ToolCallValueJudgment {
 type TaskLoopTask = NonNullable<NonNullable<BrainInput["workingMemory"]>["taskLoop"]>["tasks"] extends Array<infer T> ? T : never;
 
 export function judgeTaskCompletion(
+  input: BrainInput,
+  lastResult: ActionResult | null,
+  message: string,
+): CompletionJudgment {
+  const judgment = judgeTaskCompletionCore(input, lastResult, message);
+  return enrichCompletionJudgment(input, lastResult, judgment);
+}
+
+function judgeTaskCompletionCore(
   input: BrainInput,
   lastResult: ActionResult | null,
   message: string,
@@ -81,12 +110,18 @@ export function judgeTaskCompletion(
   }
 
   if (toolName === "web_search") {
-    if (isUrlIntent(message) && hasTool(input, "web_fetch") && hasSearchResultUrl(lastResult.output)) {
+    if ((isUrlIntent(message) || isWebArticleTask(input, message)) && hasTool(input, "web_fetch") && hasSearchResultUrl(lastResult.output)) {
       return {
         status: "needs_more_evidence",
         reason: "Search found candidate URLs; fetch the best page before final web feedback.",
         recommendedToolName: "web_fetch",
         recommendedToolInput: { url: firstSearchResultUrl(lastResult.output) },
+      };
+    }
+    if (isWebArticleTask(input, message) && hasTool(input, "web_fetch")) {
+      return {
+        status: "needs_more_evidence",
+        reason: "The task is an article/page reading request; search snippets are not enough without fetched body evidence.",
       };
     }
     return { status: "ready", reason: "Web search returned answerable results." };
@@ -110,7 +145,7 @@ export function judgeTaskCompletion(
         status: "needs_more_evidence",
         reason: "Fetched web page did not expose stable body text; searching for alternate indexed copies.",
         recommendedToolName: "web_search",
-        recommendedToolInput: { query: buildWebSearchQuery(message), limit: 5 },
+        recommendedToolInput: { query: buildContractWebSearchQuery(input, message), limit: 5 },
       };
     }
     return { status: "needs_more_evidence", reason: "Fetched web page did not expose stable body text." };
@@ -131,7 +166,7 @@ export function judgeTaskCompletion(
         status: "needs_recovery",
         reason: "No usable article link was extracted; search for an alternate indexed source.",
         recommendedToolName: "web_search",
-        recommendedToolInput: { query: buildWebSearchQuery(message), limit: 5 },
+        recommendedToolInput: { query: buildContractWebSearchQuery(input, message), limit: 5 },
       };
     }
     return { status: "needs_more_evidence", reason: "Extracted links did not include a usable article URL." };
@@ -180,6 +215,139 @@ export function judgeTaskCompletion(
   return { status: "not_ready", reason: "No completion signal matched the latest result." };
 }
 
+function enrichCompletionJudgment(
+  input: BrainInput,
+  lastResult: ActionResult | null,
+  judgment: CompletionJudgment,
+): CompletionJudgment {
+  const completionScore = judgment.completionScore ?? scoreCompletionJudgment(input, lastResult, judgment);
+  const recoveryPlan = judgment.recoveryPlan ?? inferCompletionRecoveryPlan(lastResult, judgment);
+  return {
+    ...judgment,
+    completionScore,
+    ...(recoveryPlan ? { recoveryPlan } : {}),
+  };
+}
+
+function scoreCompletionJudgment(
+  input: BrainInput,
+  lastResult: ActionResult | null,
+  judgment: CompletionJudgment,
+): NonNullable<CompletionJudgment["completionScore"]> {
+  const loopScore = input.workingMemory?.taskLoop?.completionScore;
+  if (loopScore) {
+    return {
+      score: loopScore.score,
+      threshold: loopScore.threshold,
+      coverage: loopScore.coverage,
+      evidence: loopScore.evidence,
+      verification: loopScore.verification,
+      recoveryRisk: loopScore.recoveryRisk,
+      blockers: loopScore.blockers,
+      ...(loopScore.nextStep ? { nextStep: loopScore.nextStep } : {}),
+      ready: loopScore.ready && judgment.status === "ready",
+    };
+  }
+
+  const ready = judgment.status === "ready";
+  const statusScore = ready ? 100 : judgment.status === "needs_verification" ? 70 : judgment.status === "needs_more_evidence" ? 55 : 35;
+  const evidence = scoreLatestResultEvidence(lastResult);
+  const verification = scoreLatestResultVerification(lastResult, judgment);
+  const recoveryRisk = scoreLatestResultRecoveryRisk(lastResult, judgment);
+  const score = Math.max(0, Math.min(100, Math.round(statusScore * 0.45 + evidence * 0.3 + verification * 0.15 + recoveryRisk * 0.1)));
+  const threshold = inferCompletionThreshold(input);
+  const blockers = completionBlockers(judgment, lastResult);
+  return {
+    score,
+    threshold,
+    coverage: ready ? 100 : Math.min(statusScore, 80),
+    evidence,
+    verification,
+    recoveryRisk,
+    blockers,
+    ...(blockers[0] ? { nextStep: blockers[0] } : {}),
+    ready: ready && score >= threshold,
+  };
+}
+
+function inferCompletionThreshold(input: BrainInput): number {
+  const mode = input.workingMemory?.taskLoop?.mode;
+  if (mode === "edit" || mode === "validation") return 88;
+  if (mode === "web" || mode === "workspace") return 82;
+  return 75;
+}
+
+function scoreLatestResultEvidence(lastResult: ActionResult | null): number {
+  if (!lastResult) return 0;
+  if (!lastResult.ok) return 10;
+  const toolName = lastResult.metadata?.toolName ?? lastResult.action.toolName;
+  if (toolName === "web_fetch") return hasWebBodyEvidence(lastResult.output) ? 100 : 45;
+  if (toolName === "web_search") return hasSearchResultUrl(lastResult.output) ? 60 : 35;
+  if (toolName === "read_text_file" || toolName === "read_many_files") return 100;
+  if (toolName === "run_validation" || toolName === "completion_check") return validationDidFail(lastResult) ? 35 : 100;
+  if (lastResult.action.kind === "respond" || lastResult.action.kind === "finish") return 100;
+  return lastResult.output == null ? 40 : 70;
+}
+
+function scoreLatestResultVerification(lastResult: ActionResult | null, judgment: CompletionJudgment): number {
+  if (judgment.status === "needs_verification") return 35;
+  if (!lastResult) return 0;
+  const toolName = lastResult.metadata?.toolName ?? lastResult.action.toolName;
+  if (toolName === "run_validation" || toolName === "completion_check") return validationDidFail(lastResult) ? 25 : 100;
+  if (judgment.status === "ready") return 85;
+  return 45;
+}
+
+function scoreLatestResultRecoveryRisk(lastResult: ActionResult | null, judgment: CompletionJudgment): number {
+  if (!lastResult) return 70;
+  if (!lastResult.ok) return judgment.recommendedToolName ? 45 : 15;
+  if (judgment.status === "needs_repair") return 30;
+  if (judgment.status === "needs_recovery") return 45;
+  return 100;
+}
+
+function completionBlockers(judgment: CompletionJudgment, lastResult: ActionResult | null): string[] {
+  if (judgment.status === "ready") return [];
+  const blockers: string[] = [judgment.status];
+  if (judgment.recommendedToolName) blockers.push(`next_tool:${judgment.recommendedToolName}`);
+  const failedTool = lastResult?.ok === false ? (lastResult.metadata?.toolName ?? lastResult.action.toolName) : null;
+  if (failedTool) blockers.push(`failed_tool:${failedTool}`);
+  return blockers;
+}
+
+function inferCompletionRecoveryPlan(
+  lastResult: ActionResult | null,
+  judgment: CompletionJudgment,
+): CompletionJudgment["recoveryPlan"] | null {
+  if (judgment.status === "ready") {
+    return { kind: "finalize", reason: judgment.reason, shouldAskModel: false };
+  }
+
+  if (judgment.recommendedToolName) {
+    const failedTool = lastResult?.ok === false ? (lastResult.metadata?.toolName ?? lastResult.action.toolName) : undefined;
+    return {
+      kind: judgment.status === "needs_recovery" ? "alternate_tool" : "retry",
+      ...(failedTool ? { failedTool } : {}),
+      nextTool: judgment.recommendedToolName,
+      nextInput: judgment.recommendedToolInput,
+      reason: judgment.reason,
+      shouldAskModel: false,
+    };
+  }
+
+  if (lastResult?.ok === false || judgment.status === "needs_repair" || judgment.status === "needs_recovery") {
+    const failedTool = lastResult?.metadata?.toolName ?? lastResult?.action.toolName;
+    return {
+      kind: "model_replan",
+      ...(failedTool ? { failedTool } : {}),
+      reason: judgment.reason,
+      shouldAskModel: true,
+    };
+  }
+
+  return null;
+}
+
 function judgeTaskLoopChecklist(
   input: BrainInput,
   lastResult: ActionResult | null,
@@ -205,19 +373,31 @@ function judgeTaskLoopChecklist(
     }
     return { status: "needs_more_evidence", reason: selfCheck.summary };
   }
+  if (taskLoop?.finalAudit && taskLoop.finalAudit.passed !== true) {
+    const criterionId = taskLoop.finalAudit.issues.find((issue) => !issue.startsWith("score:")) ?? taskLoop.finalAudit.issues[0];
+    const recovery = criterionId
+      ? recommendToolForCriterion(input, criterionId.replace(/^self_check:/, ""), message, lastResult, false)
+      : null;
+    if (recovery) return recovery;
+    return {
+      status: "needs_more_evidence",
+      reason: taskLoop.finalAudit.summary,
+      completionScore: taskLoop.completionScore,
+    };
+  }
 
   const activeTask = tasks.find((task) => task.id === taskLoop?.currentTaskId)
     ?? tasks.find((task) => task.status === "active" || task.status === "blocked")
     ?? null;
   if (!activeTask) {
     return tasks.every((task) => task.status === "done")
-      ? { status: "ready", reason: "All task-loop criteria are satisfied." }
+      ? { status: "ready", reason: "All task-loop criteria are satisfied.", completionScore: taskLoop?.completionScore }
       : null;
   }
 
   if (activeTask.id === "answer") {
-    if (selfCheck?.status === "passed") {
-      return { status: "ready", reason: selfCheck.summary };
+    if (selfCheck?.status === "passed" && taskLoop?.finalAudit?.passed !== false) {
+      return { status: "ready", reason: selfCheck.summary, completionScore: taskLoop?.completionScore };
     }
     if (lastResult?.ok && hasAnswerStepEvidence(input, lastResult)) {
       return { status: "ready", reason: "Task-loop answer step is active and evidence is available." };
@@ -248,16 +428,17 @@ function recommendToolForCriterion(
   lastResult: ActionResult | null,
   recovering: boolean,
 ): CompletionJudgment | null {
-  const explicitUrl = extractFirstHttpUrl(message);
+  const contractMessage = commandObjectiveMessage(input, message);
+  const explicitUrl = commandUrlTarget(input, message);
   if (criterionId === "source_located") {
     if (recovering && hasTool(input, "web_search")) {
-      return recommended("needs_recovery", "Task-loop source lookup is blocked; searching for an alternate accessible source.", "web_search", { query: buildWebSearchQuery(message), limit: 5 });
+      return recommended("needs_recovery", "Task-loop source lookup is blocked; searching for an alternate accessible source.", "web_search", { query: buildContractWebSearchQuery(input, message), limit: 5 });
     }
     if (explicitUrl && hasTool(input, "web_fetch") && !hasFetchedUrl(input.history, explicitUrl)) {
       return recommended("needs_more_evidence", "Task-loop needs the explicit URL fetched before answering.", "web_fetch", { url: explicitUrl });
     }
     if (hasTool(input, "web_search")) {
-      return recommended(recovering ? "needs_recovery" : "needs_more_evidence", "Task-loop needs a web source located.", "web_search", { query: buildWebSearchQuery(message), limit: 5 });
+      return recommended(recovering ? "needs_recovery" : "needs_more_evidence", "Task-loop needs a web source located.", "web_search", { query: buildWebSearchQuery(contractMessage), limit: 5 });
     }
   }
 
@@ -276,7 +457,7 @@ function recommendToolForCriterion(
       return recommended("needs_more_evidence", "Task-loop needs readable page body evidence from the best candidate URL.", "web_fetch", { url: fetchUrl });
     }
     if (hasTool(input, "web_search")) {
-      return recommended(recovering ? "needs_recovery" : "needs_more_evidence", "Task-loop needs an alternate source because body evidence is missing.", "web_search", { query: buildWebSearchQuery(message), limit: 5 });
+      return recommended(recovering ? "needs_recovery" : "needs_more_evidence", "Task-loop needs an alternate source because body evidence is missing.", "web_search", { query: buildContractWebSearchQuery(input, message), limit: 5 });
     }
   }
 
@@ -290,7 +471,7 @@ function recommendToolForCriterion(
   }
 
   if (criterionId === "target_evidence") {
-    const path = extractPathFromMessage(message);
+    const path = commandPathTarget(input, message);
     if (recovering && path && hasFailedReadPath(input.history, path)) {
       if (hasTool(input, "find_files")) {
         return recommended("needs_recovery", `Reading ${path} failed; finding matching filenames can recover the correct target path.`, "find_files", { query: inferPathSearchQuery(path, message), maxResults: 20 });
@@ -314,7 +495,7 @@ function recommendToolForCriterion(
   }
 
   if (criterionId === "key_file_evidence") {
-    const path = extractPathFromMessage(message);
+    const path = commandPathTarget(input, message);
     if (path && hasTool(input, "read_text_file") && !hasReadPath(input.history, path)) {
       return recommended("needs_more_evidence", `Task-loop needs the requested key file ${path}.`, "read_text_file", { path });
     }
@@ -375,7 +556,7 @@ function recommendAnswerStepEvidence(
 ): CompletionJudgment | null {
   const mode = input.workingMemory?.taskLoop?.mode;
   if (mode === "web") {
-    const explicitUrl = extractFirstHttpUrl(message);
+    const explicitUrl = commandUrlTarget(input, message);
     if (explicitUrl && hasTool(input, "web_fetch") && !hasFetchedUrl(input.history, explicitUrl)) {
       return recommended("needs_more_evidence", "Task-loop answer step still needs readable web body evidence.", "web_fetch", { url: explicitUrl });
     }
@@ -388,12 +569,12 @@ function recommendAnswerStepEvidence(
       return recommended("needs_more_evidence", "Task-loop answer step needs candidate article links extracted from the fetched shell page.", "web_extract_links", linkInput);
     }
     if (hasTool(input, "web_search")) {
-      return recommended("needs_more_evidence", "Task-loop answer step needs an accessible web source with body text.", "web_search", { query: buildWebSearchQuery(message), limit: 5 });
+      return recommended("needs_more_evidence", "Task-loop answer step needs an accessible web source with body text.", "web_search", { query: buildContractWebSearchQuery(input, message), limit: 5 });
     }
   }
 
   if (mode === "workspace") {
-    const path = extractPathFromMessage(message) ?? firstEntrypointPath(lastResult?.output);
+    const path = commandPathTarget(input, message) ?? firstEntrypointPath(lastResult?.output);
     if (path && hasTool(input, "read_text_file") && !hasReadPath(input.history, path)) {
       return recommended("needs_more_evidence", "Task-loop answer step needs a key file read before project feedback.", "read_text_file", { path });
     }
@@ -439,12 +620,12 @@ function inferFailedToolRecovery(
       status: "needs_recovery",
       reason: `${toolName} failed; retrying through web_search may find an alternate accessible source.`,
       recommendedToolName: "web_search",
-      recommendedToolInput: { query: buildWebSearchQuery(message), limit: 5 },
+      recommendedToolInput: { query: buildContractWebSearchQuery(input, message), limit: 5 },
     };
   }
 
   if ((toolName === "read_text_file" || toolName === "read_many_files" || toolName === "stat_path") && hasTool(input, "search_workspace")) {
-    const target = extractPathFromToolInput(failedResult.action.toolInput) ?? extractPathFromMessage(message);
+    const target = extractPathFromToolInput(failedResult.action.toolInput) ?? commandPathTarget(input, message);
     if (hasTool(input, "find_files")) {
       return {
         status: "needs_recovery",
@@ -503,7 +684,7 @@ export function judgeToolCallValue(
 
   const toolName = decision.action.toolName ?? "";
   const taskMode = input.workingMemory?.taskLoop?.mode;
-  const explicitUrl = extractFirstHttpUrl(message);
+  const explicitUrl = commandUrlTarget(input, message);
   const webIntent = taskMode === "web" || isUrlIntent(message);
 
   const modeLockJudgment = judgeToolAgainstTaskModeLock(input, toolName, message, lastResult, explicitUrl);
@@ -534,16 +715,13 @@ export function judgeToolCallValue(
         status: "redirect",
         reason: `The latest user request is web-oriented; ${toolName} would inspect unrelated local files.`,
         recommendedToolName: "web_search",
-        recommendedToolInput: { query: buildWebSearchQuery(message), limit: 5 },
+        recommendedToolInput: { query: buildContractWebSearchQuery(input, message), limit: 5 },
       };
     }
   }
 
   if (!webIntent && isWorkspaceIntent(message, taskMode) && isRemoteLookupTool(toolName)) {
-    return {
-      status: "avoid",
-      reason: `The latest user request is about the workspace; ${toolName} would spend network/tool budget without local evidence.`,
-    };
+    return recommendWorkspaceEvidenceInstead(input, message, toolName);
   }
 
   if (isWorkspaceMutationTool(toolName) && !hasRecentReadEvidence(input, decision.action.toolInput)) {
@@ -652,7 +830,7 @@ function judgeToolAgainstTaskModeLock(
         status: "redirect",
         reason: `Task-loop mode is locked to web; ${proposedToolName} would inspect or mutate the local workspace.`,
         recommendedToolName: "web_search",
-        recommendedToolInput: { query: buildWebSearchQuery(message), limit: 5 },
+        recommendedToolInput: { query: buildContractWebSearchQuery(input, message), limit: 5 },
       };
     }
 
@@ -663,13 +841,59 @@ function judgeToolAgainstTaskModeLock(
   }
 
   if ((mode === "workspace" || mode === "edit" || mode === "validation") && isRemoteLookupTool(proposedToolName) && !isUrlIntent(message)) {
-    return {
-      status: "avoid",
-      reason: `Task-loop mode is locked to ${mode}; ${proposedToolName} would leave the local task without an explicit web request.`,
-    };
+    return recommendWorkspaceEvidenceInstead(input, message, proposedToolName);
   }
 
   return null;
+}
+
+function recommendWorkspaceEvidenceInstead(
+  input: BrainInput,
+  message: string,
+  proposedToolName: string,
+): ToolCallValueJudgment {
+  const path = commandPathTarget(input, message);
+  if (path && hasTool(input, "read_text_file") && !hasReadPath(input.history, path)) {
+    return {
+      status: "redirect",
+      reason: `Workspace route lock: ${proposedToolName} would leave the local file task; reading ${path} first.`,
+      recommendedToolName: "read_text_file",
+      recommendedToolInput: { path },
+    };
+  }
+
+  const query = buildContractWorkspaceEvidenceQuery(input, message);
+  if (hasTool(input, "find_files")) {
+    return {
+      status: "redirect",
+      reason: `Workspace route lock: ${proposedToolName} is not allowed without explicit web intent; locating relevant workspace files first.`,
+      recommendedToolName: "find_files",
+      recommendedToolInput: { query, includeDirectories: true, maxResults: 40 },
+    };
+  }
+
+  if (hasTool(input, "search_workspace")) {
+    return {
+      status: "redirect",
+      reason: `Workspace route lock: ${proposedToolName} is not allowed without explicit web intent; searching the workspace first.`,
+      recommendedToolName: "search_workspace",
+      recommendedToolInput: { query },
+    };
+  }
+
+  if (hasTool(input, "inspect_project")) {
+    return {
+      status: "redirect",
+      reason: `Workspace route lock: ${proposedToolName} is not allowed without explicit web intent; inspecting the workspace first.`,
+      recommendedToolName: "inspect_project",
+      recommendedToolInput: {},
+    };
+  }
+
+  return {
+    status: "avoid",
+    reason: `Workspace route lock: ${proposedToolName} would leave the local task, and no workspace evidence tool is available.`,
+  };
 }
 
 function hasTool(input: BrainInput, name: string): boolean {
@@ -697,7 +921,18 @@ function isBroadWorkspaceAnalysis(message: string): boolean {
 }
 
 function isWorkspaceIntent(message: string, taskMode?: TaskLoopMode): boolean {
-  return taskMode === "workspace" || taskMode === "edit" || taskMode === "validation" || isBroadWorkspaceAnalysis(message);
+  return taskMode === "workspace"
+    || taskMode === "edit"
+    || taskMode === "validation"
+    || isBroadWorkspaceAnalysis(message)
+    || isLocalFileTaskIntent(message);
+}
+
+function isLocalFileTaskIntent(message: string): boolean {
+  const text = message.toLowerCase();
+  const localIntent = /工作区|本地|目录|文件|项目|代码|工程|仓库|workspace|local|repo|codebase|file|directory/.test(text);
+  const fileActionIntent = /翻译|总结|改写|润色|读取|查看|分析|处理|保存|修改|编辑|translate|summari[sz]e|rewrite|polish/.test(text);
+  return localIntent && fileActionIntent;
 }
 
 function isLocalWorkspaceTool(toolName: string): boolean {
@@ -814,12 +1049,53 @@ function extractPathLikeUrl(value: unknown): string | null {
 }
 
 function buildWebSearchQuery(message: string): string {
+  const parsed = parseUserCommand(message);
+  if (parsed.normalizedSearchQuery) return parsed.normalizedSearchQuery;
   const withoutUrls = message.replace(/https?:\/\/[^\s"'<>，。！？、]+/gi, " ");
   const cleaned = withoutUrls
     .replace(/联网搜索|网页搜索|搜索|搜一下|查一下|看一下|帮我|能不能|可以|吗/g, " ")
     .replace(/\s+/g, " ")
     .trim();
   return cleaned || message.trim() || "latest web information";
+}
+
+function buildWorkspaceEvidenceQuery(message: string): string {
+  const path = extractPathFromMessage(message);
+  if (path) return inferPathSearchQuery(path, message);
+  const cleaned = stripToolRoutingDirectives(message)
+    .replace(/翻译|总结|改写|润色|读取|查看|看一下|一下|分析|处理|工作区|本地|目录|文件|项目|代码|工程|仓库|帮我|请/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned || "*";
+}
+
+function buildContractWebSearchQuery(input: BrainInput, message: string): string {
+  return buildWebSearchQuery(commandObjectiveMessage(input, message));
+}
+
+function buildContractWorkspaceEvidenceQuery(input: BrainInput, message: string): string {
+  const path = commandPathTarget(input, message);
+  if (path) return inferPathSearchQuery(path, commandObjectiveMessage(input, message));
+  return buildWorkspaceEvidenceQuery(commandObjectiveMessage(input, message));
+}
+
+function commandObjectiveMessage(input: BrainInput, message: string): string {
+  return input.workingMemory?.taskLoop?.userCommand?.commandContract?.objective
+    ?? input.workingMemory?.taskLoop?.userCommand?.objective
+    ?? input.workingMemory?.taskLoop?.objective
+    ?? message;
+}
+
+function commandUrlTarget(input: BrainInput, message: string): string | null {
+  const contractUrl = input.workingMemory?.taskLoop?.userCommand?.commandContract?.targets.urls[0]
+    ?? input.workingMemory?.taskLoop?.userCommand?.explicitUrls?.[0];
+  return contractUrl ?? extractFirstHttpUrl(message) ?? extractFirstHttpUrl(commandObjectiveMessage(input, message));
+}
+
+function commandPathTarget(input: BrainInput, message: string): string | null {
+  const contractPath = input.workingMemory?.taskLoop?.userCommand?.commandContract?.targets.paths[0];
+  if (contractPath) return contractPath;
+  return extractPathFromMessage(message) ?? extractPathFromMessage(commandObjectiveMessage(input, message));
 }
 
 function inferParentDirectory(path: string | null): string {
@@ -843,6 +1119,13 @@ function inferPathSearchQuery(path: string | null, message: string): string {
 
 function hasSearchResultUrl(output: unknown): boolean {
   return firstSearchResultUrl(output) !== null;
+}
+
+function isWebArticleTask(input: BrainInput, message: string): boolean {
+  const taskKind = input.workingMemory?.taskLoop?.taskKind ?? input.workingMemory?.taskLoop?.userCommand?.taskKind;
+  if (taskKind === "web_article") return true;
+  const text = message.toLowerCase();
+  return /https?:\/\/|网页|网址|链接|正文|文章|新闻|博客|抓取|读取网页|看这个网页|web\s*page|article|url|link/.test(text);
 }
 
 function firstSearchResultUrl(output: unknown): string | null {

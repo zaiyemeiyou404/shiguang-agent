@@ -3,8 +3,8 @@ import type { ToolDescriptor, ValidationModeHint } from "../tools/types.js";
 import type { LlmPlannerModel, LlmPlannerModelRequest, PlannerContext } from "./model-types.js";
 import { renderPrompt, type RenderedPrompt } from "../context/render.js";
 import { selectToolsForPlanner } from "./tool-selection.js";
-import { judgeTaskCompletion, judgeToolCallValue } from "./completion.js";
-import { parseUserCommand, stripToolRoutingDirectives } from "./user-command.js";
+import { judgeTaskCompletion, judgeToolCallValue, type CompletionJudgment } from "./completion.js";
+import { parseUserCommand, stripToolRoutingDirectives, type UserCommandContract } from "./user-command.js";
 
 export interface Planner {
   decide(input: BrainInput, context?: PlannerContext): Promise<BrainDecision>;
@@ -59,7 +59,7 @@ export class LlmPlanner implements Planner {
 
     const request = this.buildRequest(input);
     const response = await this.model.generateDecision(request, context);
-    const decision = sanitizeToolRoutingDecision({ action: response.action, reasoning: response.reasoning }, message);
+    const decision = sanitizeToolRoutingDecision(input, { action: response.action, reasoning: response.reasoning }, message);
     const preflight = inferToolPreflightDecision(input, decision, lastResult, message);
     if (preflight) return preflight;
     const fallback = await inferDeterministicToolFallback(input, decision, context);
@@ -135,6 +135,7 @@ function inferCompletionJudgmentDecision(
   message: string,
 ): BrainDecision | null {
   const judgment = judgeTaskCompletion(input, lastResult, message);
+  const reasoning = formatCompletionJudgmentReason(judgment);
   if (judgment.status === "needs_verification" && judgment.recommendedToolName) {
     return {
       action: {
@@ -142,7 +143,7 @@ function inferCompletionJudgmentDecision(
         toolName: judgment.recommendedToolName,
         toolInput: judgment.recommendedToolInput,
       },
-      reasoning: `Completion evaluator: ${judgment.reason}`,
+      reasoning,
     };
   }
 
@@ -153,7 +154,7 @@ function inferCompletionJudgmentDecision(
         toolName: judgment.recommendedToolName,
         toolInput: judgment.recommendedToolInput,
       },
-      reasoning: `Completion evaluator: ${judgment.reason}`,
+      reasoning,
     };
   }
 
@@ -163,8 +164,23 @@ function inferCompletionJudgmentDecision(
 
   return {
     action: { kind: "respond", content },
-    reasoning: `Completion evaluator: ${judgment.reason}`,
+    reasoning,
   };
+}
+
+function formatCompletionJudgmentReason(judgment: CompletionJudgment): string {
+  const score = judgment.completionScore
+    ? `score ${judgment.completionScore.score}/${judgment.completionScore.threshold}`
+    : "score unavailable";
+  const recovery = judgment.recoveryPlan?.nextTool
+    ? `next tool ${judgment.recoveryPlan.nextTool}`
+    : judgment.recoveryPlan?.kind
+      ? `recovery ${judgment.recoveryPlan.kind}`
+      : "no recovery needed";
+  const blockers = judgment.completionScore?.blockers.length
+    ? `blockers: ${judgment.completionScore.blockers.join(", ")}`
+    : "no blockers";
+  return `Completion evaluator (${score}; ${recovery}; ${blockers}): ${judgment.reason}`;
 }
 
 function inferToolPreflightDecision(
@@ -175,7 +191,8 @@ function inferToolPreflightDecision(
 ): BrainDecision | null {
   if (decision.action.kind !== "tool_call") return null;
 
-  const explicitUrl = inferInitialWebFetchUrl(message, input.availableTools);
+  const contract = currentCommandContract(input, message);
+  const explicitUrl = contract.targets.urls[0] ?? inferInitialWebFetchUrl(message, input.availableTools);
   if (explicitUrl && !hasFetchedUrl(input.history, explicitUrl)) {
     const proposedTool = decision.action.toolName;
     if (proposedTool !== "web_fetch") {
@@ -184,6 +201,31 @@ function inferToolPreflightDecision(
         reasoning: [
           decision.reasoning,
           `Tool preflight: latest user message has an explicit URL, so web_fetch must run before ${proposedTool ?? "another tool"}.`,
+        ].filter(Boolean).join(" "),
+      };
+    }
+
+    const proposedUrl = readStringToolInput(decision.action.toolInput, "url");
+    if (proposedUrl && normalizeUrlForCompare(proposedUrl) !== normalizeUrlForCompare(explicitUrl)) {
+      return {
+        action: { kind: "tool_call", toolName: "web_fetch", toolInput: { url: explicitUrl } },
+        reasoning: [
+          decision.reasoning,
+          `Command contract: web_fetch must use the user's explicit URL (${explicitUrl}), not ${proposedUrl}.`,
+        ].filter(Boolean).join(" "),
+      };
+    }
+  }
+
+  const readyJudgment = judgeTaskCompletion(input, lastResult, message);
+  if (readyJudgment.status === "ready") {
+    const content = summarizeObservation(lastResult, message);
+    if (content) {
+      return {
+        action: { kind: "respond", content },
+        reasoning: [
+          decision.reasoning,
+          `Tool preflight: completion evaluator says the task is ready (${readyJudgment.reason}); refusing an unnecessary ${decision.action.toolName ?? "tool"} call.`,
         ].filter(Boolean).join(" "),
       };
     }
@@ -217,31 +259,36 @@ function inferToolPreflightDecision(
     }
   }
 
-  const judgment = judgeTaskCompletion(input, lastResult, message);
-  if (judgment.status !== "ready") return null;
-  const content = summarizeObservation(lastResult, message);
-  if (!content) return null;
-
-  return {
-    action: { kind: "respond", content },
-    reasoning: [
-      decision.reasoning,
-      `Tool preflight: completion evaluator says the task is ready (${judgment.reason}); refusing an unnecessary ${decision.action.toolName ?? "tool"} call.`,
-    ].filter(Boolean).join(" "),
-  };
+  return null;
 }
 
-function sanitizeToolRoutingDecision(decision: BrainDecision, message: string): BrainDecision {
+function sanitizeToolRoutingDecision(input: BrainInput, decision: BrainDecision, message: string): BrainDecision {
   if (decision.action.kind !== "tool_call") return decision;
   const toolName = decision.action.toolName;
   if (toolName !== "web_search" && toolName !== "search_workspace") return decision;
   if (!decision.action.toolInput || typeof decision.action.toolInput !== "object" || Array.isArray(decision.action.toolInput)) return decision;
 
+  const contract = currentCommandContract(input, message);
+  const explicitUrl = contract.targets.urls[0];
+  if (toolName === "web_search" && explicitUrl && hasTool(input.availableTools, "web_fetch") && !hasFetchedUrl(input.history, explicitUrl)) {
+    return {
+      ...decision,
+      action: { kind: "tool_call", toolName: "web_fetch", toolInput: { url: explicitUrl } },
+      reasoning: [
+        decision.reasoning,
+        `Command contract: latest user target is an explicit URL, so fetch it directly instead of searching.`,
+      ].filter(Boolean).join(" "),
+    };
+  }
+
   const inputRecord = decision.action.toolInput as Record<string, unknown>;
   const rawQuery = typeof inputRecord.query === "string" ? inputRecord.query : "";
-  const cleaned = toolName === "web_search"
+  const cleanedFromRaw = toolName === "web_search"
     ? parseUserCommand(rawQuery || message).normalizedSearchQuery
     : cleanWorkspaceSearchQuery(rawQuery || message);
+  const contractQuery = contractQueryForTool(toolName, contract, message);
+  const shouldUseContract = shouldPreferContractToolQuery(rawQuery, contract, toolName);
+  const cleaned = shouldUseContract ? (contractQuery || cleanedFromRaw) : cleanedFromRaw;
   if (!cleaned || cleaned === rawQuery) return decision;
 
   return {
@@ -255,9 +302,68 @@ function sanitizeToolRoutingDecision(decision: BrainDecision, message: string): 
     },
     reasoning: [
       decision.reasoning,
-      `Tool input sanitizer: removed routing/tool instructions from ${toolName} query.`,
+      shouldUseContract
+        ? `Tool input sanitizer + Command contract: rebuilt ${toolName} query from the immutable user objective instead of the raw instruction.`
+        : `Tool input sanitizer: removed routing/tool instructions from ${toolName} query.`,
     ].filter(Boolean).join(" "),
   };
+}
+
+function currentCommandContract(input: BrainInput, message: string): UserCommandContract {
+  return input.workingMemory?.taskLoop?.userCommand?.commandContract ?? parseUserCommand(message).commandContract;
+}
+
+function contractQueryForTool(toolName: string, contract: UserCommandContract, message: string): string {
+  if (toolName === "web_search") {
+    return parseUserCommand(contract.objective || message).normalizedSearchQuery;
+  }
+
+  const pathTarget = contract.targets.paths[0];
+  if (pathTarget) return cleanWorkspaceSearchQuery(pathTarget);
+  return cleanWorkspaceSearchQuery(contract.objective || message);
+}
+
+function shouldPreferContractToolQuery(rawQuery: string, contract: UserCommandContract, toolName: string): boolean {
+  const trimmed = rawQuery.trim();
+  if (!trimmed) return true;
+
+  if (toolName === "web_search") {
+    const parsedRaw = parseUserCommand(trimmed);
+    if (parsedRaw.hasExplicitToolRouting) return true;
+    if (containsAnyIgnoreCase(trimmed, contract.directives.tools)) return true;
+    if (containsAnyIgnoreCase(trimmed, contract.directives.skills)) return true;
+    if (containsAnyIgnoreCase(trimmed, contract.targets.urls)) return true;
+    return normalizedComparable(trimmed) === normalizedComparable(contract.original)
+      && normalizedComparable(contract.objective) !== normalizedComparable(contract.original);
+  }
+
+  if (containsAnyIgnoreCase(trimmed, contract.directives.tools)) return true;
+  if (containsAnyIgnoreCase(trimmed, contract.directives.skills)) return true;
+  return normalizedComparable(trimmed) === normalizedComparable(contract.original)
+    && normalizedComparable(contract.objective) !== normalizedComparable(contract.original);
+}
+
+function containsAnyIgnoreCase(value: string, needles: string[]): boolean {
+  const lower = value.toLowerCase();
+  return needles.some((needle) => needle.trim().length > 0 && lower.includes(needle.toLowerCase()));
+}
+
+function normalizedComparable(value: string): string {
+  return value.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function readStringToolInput(toolInput: unknown, key: string): string | null {
+  if (!toolInput || typeof toolInput !== "object" || Array.isArray(toolInput)) return null;
+  const value = (toolInput as Record<string, unknown>)[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function normalizeUrlForCompare(value: string): string {
+  try {
+    return new URL(value).toString();
+  } catch {
+    return value.trim();
+  }
 }
 
 function inferTaskLoopReadyResponse(
@@ -265,7 +371,9 @@ function inferTaskLoopReadyResponse(
   lastResult: ActionResult | null,
   message: string,
 ): BrainDecision | null {
-  if (input.workingMemory?.taskLoop?.needsFinalAnswer !== true) return null;
+  const taskLoop = input.workingMemory?.taskLoop;
+  if (taskLoop?.needsFinalAnswer !== true) return null;
+  if (taskLoop.finalAudit?.passed === false) return null;
   if (!lastResult || !lastResult.ok || lastResult.action.kind !== "tool_call") return null;
 
   const toolName = lastResult.metadata?.toolName ?? lastResult.action.toolName;
@@ -297,7 +405,7 @@ function inferAdaptiveLearningDecision(input: BrainInput, message: string): Brai
       toolInput: {
         scope: reflection.scope,
         rule: reflection.rule,
-        evidence: reflection.evidence,
+        evidence: reflection.evidence.join("\n"),
         enabled: true,
       },
     },
@@ -306,7 +414,7 @@ function inferAdaptiveLearningDecision(input: BrainInput, message: string): Brai
 }
 
 function isAdaptiveLearningRequest(message: string): boolean {
-  return /错|不对|不是|为什么|反思|总结|保存|记住|规则|学一下|学习|降智|混乱|重复|没用|hermes|wrong|incorrect|reflect|learn|rule|remember/i.test(message);
+  return /错|不对|不是|为什么|为啥|怎么回事|咋|不该|不应该|应该|反思|总结|保存|记住|规则|学一下|学习|降智|混乱|重复|没用|还是|又|hermes|wrong|incorrect|reflect|learn|rule|remember/i.test(message);
 }
 
 function buildAdaptiveReflection(history: ActionResult[], message: string): { scope: string; rule: string; evidence: string[] } | null {
@@ -326,6 +434,38 @@ function buildAdaptiveReflection(history: ActionResult[], message: string): { sc
     return {
       scope: "task-loop/repetition",
       rule: "If the same tool with the same input repeats without new evidence, stop the loop: summarize the collected evidence or switch to a different higher-signal tool before continuing.",
+      evidence,
+    };
+  }
+
+  if (hasToolDirectiveInSearchQuery(recent)) {
+    return {
+      scope: "user-command/tool-routing",
+      rule: "When the user mentions a tool or skill name, treat that phrase as a routing directive, not as part of the search query or file query. Preserve the user's real topic separately, then call the requested capability when available.",
+      evidence,
+    };
+  }
+
+  if (hasWebTaskWorkspaceDrift(recent, message)) {
+    return {
+      scope: "route-lock/web-workspace",
+      rule: "For web_search or web_article tasks, do not pivot into local workspace reads only because prior context or project skills mention files. Fetch/search web evidence until the web request is answered, unless the latest user message explicitly asks for local workspace files.",
+      evidence,
+    };
+  }
+
+  if (hasFailedTool(recent)) {
+    return {
+      scope: "tool/error-recovery",
+      rule: "When a tool fails, feed the failure details back into the next decision: choose a corrected input, an alternate tool, or a concise failure explanation. Do not repeat the same failing tool/input unless new evidence changes the recovery path.",
+      evidence,
+    };
+  }
+
+  if (hasSearchOnlyArticleAttempt(recent, message)) {
+    return {
+      scope: "web/article-evidence",
+      rule: "For article or page-reading tasks, web_search only locates candidates. Fetch the selected result and judge body quality before answering; snippets alone are not completion evidence.",
       evidence,
     };
   }
@@ -355,6 +495,50 @@ function buildAdaptiveReflection(history: ActionResult[], message: string): { sc
   }
 
   return null;
+}
+
+function hasToolDirectiveInSearchQuery(history: ActionResult[]): boolean {
+  return history.some((result) => {
+    if ((result.metadata?.toolName ?? result.action.toolName) !== "web_search") return false;
+    const input = result.action.kind === "tool_call" && result.action.toolInput && typeof result.action.toolInput === "object" && !Array.isArray(result.action.toolInput)
+      ? result.action.toolInput as Record<string, unknown>
+      : {};
+    const query = typeof input.query === "string" ? input.query : "";
+    return /调用|使用|use\s+|call\s+|web_article_reader|web_fetch|web_search|read_text_file|list_directory|工具|skill/i.test(query);
+  });
+}
+
+function hasWebTaskWorkspaceDrift(history: ActionResult[], message: string): boolean {
+  const text = message.toLowerCase();
+  const correctionMentionsRoute = /网页|联网|搜索|网址|链接|文章|正文|web|url|article|search|工作区|文件|目录|workspace|file/.test(text);
+  if (!correctionMentionsRoute) return false;
+  const sawWeb = history.some((result) => {
+    const toolName = result.metadata?.toolName ?? result.action.toolName;
+    return toolName === "web_search" || toolName === "web_fetch" || toolName === "web_extract_links";
+  });
+  const sawWorkspaceAfterWeb = history.some((result) => {
+    const toolName = result.metadata?.toolName ?? result.action.toolName;
+    return toolName === "read_text_file"
+      || toolName === "read_many_files"
+      || toolName === "list_directory"
+      || toolName === "inspect_project"
+      || toolName === "search_workspace"
+      || toolName === "code_map";
+  });
+  return sawWeb && sawWorkspaceAfterWeb;
+}
+
+function hasFailedTool(history: ActionResult[]): boolean {
+  return history.some((result) => result.action.kind === "tool_call" && !result.ok);
+}
+
+function hasSearchOnlyArticleAttempt(history: ActionResult[], message: string): boolean {
+  const text = message.toLowerCase();
+  const asksForArticleBody = /正文|文章|网页|网址|链接|抓取|读取|article|body|page|url|link/.test(text);
+  if (!asksForArticleBody) return false;
+  const sawSearch = history.some((result) => (result.metadata?.toolName ?? result.action.toolName) === "web_search");
+  const sawFetch = history.some((result) => (result.metadata?.toolName ?? result.action.toolName) === "web_fetch");
+  return sawSearch && !sawFetch;
 }
 
 function hasRepeatedToolSignature(history: ActionResult[]): boolean {

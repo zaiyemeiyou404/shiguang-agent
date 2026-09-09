@@ -56,8 +56,13 @@ export function selectToolsForPlanner(
   const text = buildIntentText(input);
   const intentText = latestText || text;
   const intent = classifyIntent(intentText, input.history);
+  const route = classifyToolRoute(
+    latestText || intentText,
+    input.workingMemory?.taskLoop?.mode,
+    input.workingMemory?.taskLoop?.taskKind ?? input.workingMemory?.taskLoop?.userCommand?.taskKind,
+  );
   if (tools.length <= maxSelected) {
-    const selected = narrowToolsForDominantIntent(tools, intent, intentText, input);
+    const selected = narrowToolsForDominantIntent(applyHardRouteGate(tools, route), intent, intentText, input);
     return { selected, total: tools.length, omitted: Math.max(0, tools.length - selected.length) };
   }
   const recentToolNames = new Set(
@@ -93,9 +98,12 @@ export function selectToolsForPlanner(
     score: scoreTool(tool, intent, recentToolNames, recentSignatures, recentFailedToolNames, recommendedNextTools, taskLoopRecommendedTools, recentEvidenceLog, taskLoopCostPressure, input.history, intentText),
   }));
 
+  const gatedTools = applyHardRouteGate(tools, route);
+  const gatedNames = new Set(gatedTools.map((tool) => tool.name));
   const selected = narrowToolsForDominantIntent(ensurePinnedTools(
     scored,
     scored
+      .filter((item) => gatedNames.has(item.tool.name))
       .sort((left, right) => right.score - left.score || left.index - right.index)
       .slice(0, Math.max(1, maxSelected))
       .sort((left, right) => left.index - right.index)
@@ -109,6 +117,46 @@ export function selectToolsForPlanner(
     total: tools.length,
     omitted: Math.max(0, tools.length - selected.length),
   };
+}
+
+type ToolRoute = "web" | "workspace" | "open";
+
+function classifyToolRoute(text: string, taskMode?: string, taskKind?: string): ToolRoute {
+  if (taskKind === "web_search" || taskKind === "web_article") return "web";
+  if (
+    taskKind === "file_transform"
+    || taskKind === "file_read"
+    || taskKind === "workspace_overview"
+    || taskKind === "code_analysis"
+    || taskKind === "debug"
+    || taskKind === "edit"
+    || taskKind === "validation"
+  ) return "workspace";
+  if (taskMode === "web") return "web";
+  if (taskMode === "workspace" || taskMode === "edit" || taskMode === "validation") return "workspace";
+  if (isExplicitUrlText(text)) return "web";
+
+  const normalized = text.toLowerCase();
+  const localIntent = /工作区|本地|目录|文件|项目|代码|工程|仓库|workspace|local|repo|codebase|file|directory/.test(normalized);
+  const localFileTask = localIntent && /翻译|总结|改写|润色|读取|查看|分析|处理|保存|修改|编辑|translate|summari[sz]e|rewrite|polish/.test(normalized);
+  const explicitWeb = /联网|上网|网上|网页|网址|链接|抓取网页|网页搜索|网络搜索|搜索网页|官网|新闻|最新|最近|当前|url|online|web|latest|current/.test(normalized);
+  const searchIntent = /搜|搜索|查一下|查询|查找|检索|look up|search|find/.test(normalized);
+
+  if (localFileTask || (localIntent && !explicitWeb)) return "workspace";
+  if (explicitWeb || (searchIntent && !localIntent)) return "web";
+  return "open";
+}
+
+function applyHardRouteGate(tools: ToolDescriptor[], route: ToolRoute): ToolDescriptor[] {
+  if (route === "web") {
+    const webTools = tools.filter((tool) => isWebToolForTask(tool));
+    return webTools.length > 0 ? webTools : tools;
+  }
+  if (route === "workspace") {
+    const localTools = tools.filter((tool) => !isWebToolForTask(tool));
+    return localTools.length > 0 ? localTools : tools;
+  }
+  return tools;
 }
 
 function narrowToolsForDominantIntent(

@@ -215,6 +215,77 @@ test("Agent injects custom skills into prompts without persisting them as visibl
   assert.equal(persistedTurns.some((turn) => turn.content.includes("Relevant Shiguang skills are active")), false);
 });
 
+test("Agent selects skills from the previous real task when the current turn only continues", async () => {
+  let skillPrompt = "";
+  const planner: Planner = {
+    async decide(input): Promise<BrainDecision> {
+      skillPrompt = input.context.stable
+        .filter((item) => item.kind === "system_instruction")
+        .map((item) => item.content)
+        .join("\n");
+      return {
+        action: { kind: "respond", content: "continued" },
+        reasoning: "Verified continuation skill selection.",
+      };
+    },
+  };
+
+  const turns = new InMemoryTurnRepository();
+  await turns.create({
+    id: "turn_previous_web_article",
+    sessionId: "sess_continue_skills",
+    role: "user",
+    content: "看一下 https://example.test/article 的正文",
+    createdAt: new Date("2026-01-01T00:00:00.000Z"),
+  });
+  const sink = new InMemoryEventSink();
+  const webSkill = {
+    ...testSkill("web_article_reader", "Fetch explicit URLs before answering article questions."),
+    taskKinds: ["web_article", "web_search"],
+    allowedTools: ["web_fetch", "web_search"],
+  };
+  const projectSkill: CustomSkill = {
+    ...testSkill("xdyou-maintainer", "Maintain XDYou project files."),
+    layer: "project",
+    triggers: ["traintime_pda-main", "xdyou"],
+    taskKinds: ["code_analysis", "edit"],
+    allowedTools: ["read_text_file", "patch_text_file"],
+  };
+  const agent = new Agent({
+    eventSink: sink,
+    planner,
+    turnRepository: turns,
+    workspaceRoot: "G:\\projects\\agent-test\\shiguang-agent-feature-bootstrap\\shiguang-agent-feature-bootstrap\\worktest\\traintime_pda-main",
+    tools: [testTool("web_fetch"), testTool("web_search"), testTool("read_text_file"), testTool("patch_text_file")],
+    customSkills: [projectSkill, webSkill],
+  });
+  const now = new Date("2026-01-01T00:00:00.000Z");
+
+  await agent.run({
+    runId: "run_continue_skills",
+    userMessage: "继续",
+    contextInput: {
+      task: {
+        id: "task_continue_skills",
+        sessionId: "sess_continue_skills",
+        parentTaskId: null,
+        title: "Continue skills",
+        description: null,
+        status: "in_progress",
+        priority: 0,
+        createdAt: now,
+        updatedAt: now,
+      },
+      recentRuns: [],
+      linkedArtifacts: [],
+      memories: [],
+    },
+  });
+
+  assert.match(skillPrompt, /Skill: web_article_reader/);
+  assert.doesNotMatch(skillPrompt, /Skill: xdyou-maintainer/);
+});
+
 test("Agent emits task-loop progress events for the desktop run readout", async () => {
   const planner: Planner = {
     async decide(): Promise<BrainDecision> {
@@ -262,6 +333,8 @@ test("Agent emits task-loop progress events for the desktop run readout", async 
   assert.equal(taskLoopEvents.length >= 2, true);
   assert.equal((taskLoopEvents[0]?.payload as { status?: unknown }).status, "initialized");
   assert.equal((taskLoopEvents.at(-1)?.payload as { currentStep?: unknown }).currentStep, "answer");
+  assert.equal(typeof (taskLoopEvents.at(-1)?.payload as { display?: { title?: unknown } }).display?.title, "string");
+  assert.equal(typeof (taskLoopEvents.at(-1)?.payload as { completionScore?: { score?: unknown } }).completionScore?.score, "number");
 });
 
 function testTool(name: string): Tool {
@@ -286,6 +359,9 @@ function testSkill(name: string, instructions: string): CustomSkill {
     contract: "shiguang.skill.v1",
     layer: "global",
     triggers: ["https://", "网页", "文章"],
+    taskKinds: [],
+    allowedTools: [],
+    forbiddenTools: [],
     priority: 50,
     version: 1,
   };

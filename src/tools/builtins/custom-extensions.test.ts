@@ -83,6 +83,9 @@ test("custom skills support layered trigger-based selection", async () => {
     layer: "domain",
     scope: "web_fetch",
     triggers: ["http", "网页", "文章", "新闻", "正文"],
+    taskKinds: ["web_article", "web_search"],
+    allowedTools: ["web_fetch", "web_search"],
+    forbiddenTools: ["read_text_file"],
     priority: 85,
     instructions: "Explicit URLs must be fetched directly and summarized from the real article body.",
   });
@@ -110,8 +113,50 @@ test("custom skills support layered trigger-based selection", async () => {
   assert.ok(prompt);
   assert.match(prompt, /Layer: domain/);
   assert.match(prompt, /Scope: web_fetch/);
+  assert.match(prompt, /TaskKinds: web_article, web_search/);
+  assert.match(prompt, /AllowedTools: web_fetch, web_search/);
   assert.match(prompt, /Explicit URLs must be fetched directly/);
   assert.doesNotMatch(prompt, /Focus on Python code quality/);
+});
+
+test("custom skill sandbox filters by task kind and available tools", async () => {
+  const {
+    createCustomExtensionTools,
+    loadCustomSkills,
+    selectCustomSkills,
+  } = await loadModule();
+  const extensionRoot = await makeExtensionRoot();
+  const createSkill = createCustomExtensionTools(extensionRoot).find((tool) => tool.descriptor.name === "create_custom_skill");
+  assert.ok(createSkill);
+
+  await createSkill.execute({
+    name: "release helper",
+    description: "Release workflow",
+    layer: "domain",
+    triggers: ["release", "发布"],
+    taskKinds: ["release"],
+    allowedTools: ["github_repo"],
+    instructions: "Only apply to release publication tasks.",
+  });
+
+  const skills = loadCustomSkills(extensionRoot);
+  assert.deepEqual(selectCustomSkills(skills, {
+    userMessage: "发布 release",
+    taskKind: "release",
+    availableTools: ["github_repo"],
+  }).map((skill) => skill.name), ["release_helper"]);
+
+  assert.deepEqual(selectCustomSkills(skills, {
+    userMessage: "发布 release",
+    taskKind: "web_search",
+    availableTools: ["github_repo"],
+  }).map((skill) => skill.name), []);
+
+  assert.deepEqual(selectCustomSkills(skills, {
+    userMessage: "发布 release",
+    taskKind: "release",
+    availableTools: ["web_search"],
+  }).map((skill) => skill.name), []);
 });
 
 test("custom skill selection honors explicit skill names in the user request", async () => {
@@ -176,6 +221,51 @@ test("custom skill selection does not leak project skills into standalone web re
     availableTools: ["web_fetch", "web_search"],
   });
   assert.deepEqual(selectedForWeb.map((skill) => skill.name), []);
+
+  const selectedForWebContinuation = selectCustomSkills(skills, {
+    userMessage: "继续",
+    taskKind: "web_article",
+    workspaceRoot: "G:/projects/worktest/traintime_pda-main",
+    availableTools: ["web_fetch", "web_search"],
+  });
+  assert.deepEqual(selectedForWebContinuation.map((skill) => skill.name), []);
+});
+
+test("custom skill sandbox blocks workspace-like non-project skills from web routes", async () => {
+  const {
+    createCustomExtensionTools,
+    loadCustomSkills,
+    selectCustomSkills,
+  } = await loadModule();
+  const extensionRoot = await makeExtensionRoot();
+  const createSkill = createCustomExtensionTools(extensionRoot).find((tool) => tool.descriptor.name === "create_custom_skill");
+  assert.ok(createSkill);
+
+  await createSkill.execute({
+    name: "workspace diagnostics",
+    description: "Workspace and codebase troubleshooting habits",
+    layer: "domain",
+    triggers: ["workspace", "codebase", "项目"],
+    taskKinds: ["debug", "code_analysis"],
+    allowedTools: ["read_text_file", "search_workspace"],
+    priority: 80,
+    instructions: "Inspect local files and diagnostics before answering.",
+  });
+
+  const skills = loadCustomSkills(extensionRoot);
+  const selectedForWeb = selectCustomSkills(skills, {
+    userMessage: "联网搜索网络搜索的概念",
+    taskKind: "web_search",
+    availableTools: ["web_search", "web_fetch"],
+  });
+  assert.deepEqual(selectedForWeb.map((skill) => skill.name), []);
+
+  const selectedWhenExplicit = selectCustomSkills(skills, {
+    userMessage: "联网搜索网络搜索的概念，并使用 workspace_diagnostics",
+    taskKind: "web_search",
+    availableTools: ["web_search", "web_fetch"],
+  });
+  assert.deepEqual(selectedWhenExplicit.map((skill) => skill.name), []);
 });
 
 test("project custom skills without triggers are still excluded from standalone web requests", async () => {
@@ -215,13 +305,17 @@ test("default web article reader skill is seeded and selected for URLs", async (
   const extensionRoot = await makeExtensionRoot();
 
   const created = ensureDefaultCustomSkills(extensionRoot);
-  assert.equal(created.length, 1);
+  assert.equal(created.length, 2);
 
   const skills = loadCustomSkills(extensionRoot);
   const webSkill = skills.find((skill) => skill.name === "web_article_reader");
   assert.ok(webSkill);
   assert.equal(webSkill.layer, "domain");
   assert.equal(webSkill.scope, "web_fetch");
+  const reflectionSkill = skills.find((skill) => skill.name === "hermes_reflection_coach");
+  assert.ok(reflectionSkill);
+  assert.equal(reflectionSkill.layer, "global");
+  assert.equal(reflectionSkill.scope, "record_agent_rule");
 
   const prompt = formatCustomSkillInstructions(skills, {
     userMessage: "Please read https://example.test/story.html and summarize the article.",

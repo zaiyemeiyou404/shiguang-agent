@@ -133,8 +133,109 @@ test("runLoop initializes task-loop from parsed user command objective", async (
 
   assert.equal(state.workingMemory.taskLoop?.objective, "查一下网络搜索的概念");
   assert.equal(state.workingMemory.taskLoop?.mode, "web");
+  assert.equal(state.workingMemory.taskLoop?.taskKind, "web_search");
   assert.equal(state.workingMemory.taskLoop?.userCommand?.normalizedSearchQuery, "网络搜索的概念");
   assert.deepEqual(state.workingMemory.taskLoop?.userCommand?.skillDirectives, ["web_article_reader"]);
+  assert.equal(state.workingMemory.taskLoop?.userCommand?.commandContract?.version, "shiguang.command.v1");
+  assert.equal(state.workingMemory.taskLoop?.userCommand?.commandContract?.objective, "查一下网络搜索的概念");
+  assert.deepEqual(state.workingMemory.taskLoop?.userCommand?.commandContract?.directives.skills, ["web_article_reader"]);
+});
+
+test("runLoop initializes fine-grained task kinds and task-specific plans", async () => {
+  const noopDeps = {
+    planner: {
+      async decide(): Promise<BrainDecision> {
+        return { action: { kind: "respond", content: "noop" } };
+      },
+    },
+    policy: {
+      async check(next: BrainDecision): Promise<BrainDecision> {
+        return next;
+      },
+    },
+    dispatcher: {
+      async dispatch(next: BrainDecision): Promise<ActionResult> {
+        return { action: next.action, ok: true, output: next.action.content ?? "" };
+      },
+    },
+    evaluator: {
+      async evaluate() {
+        return { kind: "stop", reason: "respond", summary: "ok" } as const;
+      },
+    },
+  };
+
+  const fileState = await runLoop({
+    context: makeContext("翻译一下工作区文件"),
+    runId: "run_file_transform_kind",
+    priorTurns: [],
+    history: [],
+    availableTools: [],
+  }, noopDeps, 0);
+
+  assert.equal(fileState.workingMemory.taskLoop?.mode, "workspace");
+  assert.equal(fileState.workingMemory.taskLoop?.taskKind, "file_transform");
+  assert.deepEqual(fileState.workingMemory.taskLoop?.plan?.map((item) => item.title), [
+    "定位目标文件",
+    "读取文件内容",
+    "输出处理结果",
+  ]);
+
+  const articleState = await runLoop({
+    context: makeContext("看一下 https://example.test/article 的正文"),
+    runId: "run_web_article_kind",
+    priorTurns: [],
+    history: [],
+    availableTools: [],
+  }, noopDeps, 0);
+
+  assert.equal(articleState.workingMemory.taskLoop?.mode, "web");
+  assert.equal(articleState.workingMemory.taskLoop?.taskKind, "web_article");
+  assert.deepEqual(articleState.workingMemory.taskLoop?.tasks?.[0]?.toolHints, ["web_fetch"]);
+});
+
+test("runLoop keeps the previous real user command when a new run only says continue", async () => {
+  const noopDeps = {
+    planner: {
+      async decide(): Promise<BrainDecision> {
+        return { action: { kind: "respond", content: "noop" } };
+      },
+    },
+    policy: {
+      async check(next: BrainDecision): Promise<BrainDecision> {
+        return next;
+      },
+    },
+    dispatcher: {
+      async dispatch(next: BrainDecision): Promise<ActionResult> {
+        return { action: next.action, ok: true, output: next.action.content ?? "" };
+      },
+    },
+    evaluator: {
+      async evaluate() {
+        return { kind: "stop", reason: "respond", summary: "ok" } as const;
+      },
+    },
+  };
+
+  const state = await runLoop({
+    context: makeContext("继续"),
+    runId: "run_continue_contract",
+    priorTurns: [{
+      id: "turn_prev_user",
+      sessionId: "sess_continue_contract",
+      role: "user",
+      content: "看一下 https://example.test/article 的正文",
+      createdAt: new Date("2026-01-01T00:00:00.000Z"),
+    }],
+    history: [],
+    availableTools: [],
+  }, noopDeps, 0);
+
+  assert.equal(state.workingMemory.taskLoop?.objective, "看一下 https://example.test/article 的正文");
+  assert.equal(state.workingMemory.taskLoop?.mode, "web");
+  assert.equal(state.workingMemory.taskLoop?.taskKind, "web_article");
+  assert.deepEqual(state.workingMemory.taskLoop?.userCommand?.explicitUrls, ["https://example.test/article"]);
 });
 
 test("runLoop finalizes at the step boundary when task-loop evidence is ready", async () => {
@@ -330,13 +431,55 @@ test("applyActionResultToWorkingMemory records a compact task-loop evidence ledg
 
   assert.deepEqual(next.taskLoop?.evidenceLog, [{
     step: 1,
-    toolName: "read_text_file",
-    kind: "file",
-    quality: "strong",
-    target: "README.md",
-    summary: "read README.md",
-  }]);
-  assert.equal(next.taskLoop?.lastEvidenceTool, "read_text_file");
+   toolName: "read_text_file",
+   kind: "file",
+   quality: "strong",
+   valueScore: 85,
+   advancesTask: true,
+   taskAlignment: "aligned",
+   target: "README.md",
+   summary: "read README.md",
+ }]);
+ assert.equal(next.taskLoop?.lastEvidenceTool, "read_text_file");
+});
+
+test("applyActionResultToWorkingMemory blocks final readiness when evidence drifts away from the task route", () => {
+  const previous = {
+    step: 0,
+    phase: "investigate" as const,
+    lastActionKind: null,
+    taskLoop: {
+      objective: "read an online article",
+      mode: "web" as const,
+      evidenceCount: 0,
+      completionGateCount: 0,
+      currentTaskId: "collect_evidence",
+      tasks: [{
+        id: "collect_evidence",
+        title: "Collect web evidence",
+        status: "active" as const,
+        criteria: [{ id: "source_located", description: "source", status: "pending" as const }],
+        attempts: 0,
+      }],
+    },
+  };
+
+  const next = applyActionResultToWorkingMemory(previous, 1, {
+    action: { kind: "tool_call", toolName: "read_text_file", toolInput: { path: "README.md" } },
+    ok: true,
+    output: { path: "README.md", content: "# Local Project\n" },
+    metadata: {
+      category: "tool_observation",
+      summary: "read README.md",
+      retryable: false,
+      toolName: "read_text_file",
+    },
+  });
+
+  assert.equal(next.taskLoop?.evidenceLog?.[0]?.taskAlignment, "misaligned");
+  assert.equal(next.taskLoop?.evidenceLog?.[0]?.advancesTask, false);
+  assert.equal(next.taskLoop?.finalAudit?.passed, false);
+  assert.equal(next.taskLoop?.needsFinalAnswer, false);
 });
 
 test("applyActionResultToWorkingMemory marks final readiness only after self-check passes", () => {

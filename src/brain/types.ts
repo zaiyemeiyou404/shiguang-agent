@@ -18,6 +18,18 @@ export type BrainActionKind = "respond" | "tool_call" | "finish" | "fail" | "nee
 
 export type PlannerPhase = "investigate" | "edit" | "validate" | "summarize";
 export type TaskLoopMode = "chat" | "web" | "workspace" | "edit" | "validation";
+export type TaskIntentKind =
+  | "chat"
+  | "web_search"
+  | "web_article"
+  | "workspace_overview"
+  | "file_read"
+  | "file_transform"
+  | "code_analysis"
+  | "edit"
+  | "debug"
+  | "validation"
+  | "release";
 export type TaskLoopEvidenceKind = "web" | "workspace" | "file" | "code" | "validation" | "terminal" | "unknown";
 export type TaskLoopEvidenceQuality = "strong" | "weak" | "failed";
 export type TaskLoopPlanStatus = "pending" | "active" | "done" | "blocked";
@@ -55,8 +67,28 @@ export interface WorkingMemorySnapshot {
       outputDirectives?: string[];
       constraints?: string[];
       modeHint?: TaskLoopMode | null;
+      taskKind?: TaskIntentKind;
+      commandContract?: {
+        version: "shiguang.command.v1";
+        original: string;
+        objective: string;
+        route: TaskLoopMode;
+        taskKind: TaskIntentKind;
+        targets: {
+          urls: string[];
+          paths: string[];
+        };
+        directives: {
+          tools: string[];
+          skills: string[];
+          output: string[];
+          constraints: string[];
+        };
+        immutable: true;
+      };
     };
     mode: TaskLoopMode;
+    taskKind?: TaskIntentKind;
     evidenceCount: number;
     completionGateCount: number;
     currentStep?: string;
@@ -90,6 +122,9 @@ export interface WorkingMemorySnapshot {
       toolName: string;
       kind: TaskLoopEvidenceKind;
       quality: TaskLoopEvidenceQuality;
+      valueScore?: number;
+      advancesTask?: boolean;
+      taskAlignment?: "aligned" | "weak" | "misaligned";
       target?: string;
       summary: string;
     }>;
@@ -99,6 +134,33 @@ export interface WorkingMemorySnapshot {
       checkedAtStep: number;
       missingCriteria?: string[];
       latestEvidenceQuality?: TaskLoopEvidenceQuality;
+    };
+    completionScore?: {
+      score: number;
+      threshold: number;
+      coverage: number;
+      evidence: number;
+      verification: number;
+      recoveryRisk: number;
+      blockers: string[];
+      nextStep?: string;
+      ready: boolean;
+    };
+    recoveryPlan?: {
+      kind: "retry" | "alternate_tool" | "model_replan" | "finalize";
+      failedTool?: string;
+      nextTool?: string;
+      nextInput?: unknown;
+      reason: string;
+      shouldAskModel: boolean;
+    };
+    finalAudit?: {
+      passed: boolean;
+      summary: string;
+      issues: string[];
+      evidenceScore: number;
+      completionScore: number;
+      checkedAtStep: number;
     };
     needsFinalAnswer?: boolean;
   };

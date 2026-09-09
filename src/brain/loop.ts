@@ -3,6 +3,7 @@ import type {
   BrainDecision,
   ActionResult,
   ActionResultCategory,
+  TaskIntentKind,
   TaskLoopCriterionStatus,
   PlannerPhase,
   TaskLoopPlanStatus,
@@ -67,6 +68,8 @@ const MAX_TASK_LOOP_EVIDENCE_LOG = 12;
 
 type TaskLoopEvidenceLogEntry = NonNullable<NonNullable<WorkingMemorySnapshot["taskLoop"]>["evidenceLog"]>[number];
 type TaskLoopSelfCheck = NonNullable<NonNullable<WorkingMemorySnapshot["taskLoop"]>["selfCheck"]>;
+type TaskLoopCompletionScore = NonNullable<NonNullable<WorkingMemorySnapshot["taskLoop"]>["completionScore"]>;
+type TaskLoopFinalAudit = NonNullable<NonNullable<WorkingMemorySnapshot["taskLoop"]>["finalAudit"]>;
 
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
@@ -91,9 +94,10 @@ function createInitialWorkingMemory(input: BrainInput, resetForNewTask = shouldS
 }
 
 function createInitialTaskLoop(input: BrainInput): NonNullable<WorkingMemorySnapshot["taskLoop"]> {
-  const parsedCommand = parseUserCommand(latestUserMessage(input));
+  const parsedCommand = parseUserCommand(initialTaskCommandMessage(input));
   const objective = parsedCommand.objective.trim();
   const mode = parsedCommand.modeHint ?? inferTaskLoopMode(parsedCommand.raw || objective);
+  const taskKind = parsedCommand.taskKind;
   return {
     objective: objective || "Continue the current task.",
     userCommand: {
@@ -106,16 +110,28 @@ function createInitialTaskLoop(input: BrainInput): NonNullable<WorkingMemorySnap
       outputDirectives: parsedCommand.outputDirectives,
       constraints: parsedCommand.constraints,
       modeHint: parsedCommand.modeHint,
+      taskKind,
+      commandContract: parsedCommand.commandContract,
     },
     mode,
+    taskKind,
     evidenceCount: 0,
     completionGateCount: 0,
     currentStep: "collect_evidence",
-    plan: createTaskLoopPlan(mode),
+    plan: createTaskLoopPlan(mode, taskKind),
     currentTaskId: "collect_evidence",
-    tasks: createTaskLoopTasks(mode),
+    tasks: createTaskLoopTasks(mode, taskKind),
     needsFinalAnswer: false,
   };
+}
+
+function initialTaskCommandMessage(input: BrainInput): string {
+  const latest = latestUserMessage(input);
+  if (!isContinuationTaskMessage(latest)) return latest;
+  const previousUserTurn = [...input.priorTurns]
+    .reverse()
+    .find((turn) => turn.role === "user" && !isContinuationTaskMessage(turn.content));
+  return previousUserTurn?.content ?? latest;
 }
 
 function shouldStartFreshTaskLoop(input: BrainInput): boolean {
@@ -166,16 +182,43 @@ function extractTaskAnchor(message: string): string | null {
 
 function createTaskLoopPlan(
   mode: NonNullable<WorkingMemorySnapshot["taskLoop"]>["mode"],
+  taskKind: TaskIntentKind = "chat",
 ): NonNullable<WorkingMemorySnapshot["taskLoop"]>["plan"] {
-  if (mode === "web") {
+  if (taskKind === "web_article") {
     return [
-      { id: "collect_evidence", title: "定位网页来源", status: "active" },
-      { id: "analyze_evidence", title: "提取正文证据", status: "pending" },
+      { id: "collect_evidence", title: "确认网页地址", status: "active" },
+      { id: "analyze_evidence", title: "抓取并提取正文", status: "pending" },
+      { id: "answer", title: "基于正文回答", status: "pending" },
+    ];
+  }
+
+  if (taskKind === "web_search") {
+    return [
+      { id: "collect_evidence", title: "搜索候选来源", status: "active" },
+      { id: "analyze_evidence", title: "抓取最相关网页", status: "pending" },
       { id: "answer", title: "基于网页证据回答", status: "pending" },
     ];
   }
 
-  if (mode === "edit" || mode === "validation") {
+  if (taskKind === "file_transform" || taskKind === "file_read") {
+    return [
+      { id: "collect_evidence", title: "定位目标文件", status: "active" },
+      { id: "analyze_evidence", title: "读取文件内容", status: "pending" },
+      { id: "answer", title: taskKind === "file_transform" ? "输出处理结果" : "说明文件内容", status: "pending" },
+    ];
+  }
+
+  if (taskKind === "debug") {
+    return [
+      { id: "collect_evidence", title: "收集错误和上下文", status: "active" },
+      { id: "analyze_evidence", title: "定位可疑文件", status: "pending" },
+      { id: "apply_change", title: "修复问题", status: "pending" },
+      { id: "verify", title: "验证修复", status: "pending" },
+      { id: "answer", title: "汇报原因和结果", status: "pending" },
+    ];
+  }
+
+  if (taskKind === "edit" || taskKind === "validation" || taskKind === "release" || mode === "edit" || mode === "validation") {
     return [
       { id: "collect_evidence", title: "确认目标和诊断", status: "active" },
       { id: "apply_change", title: "执行一次聚焦修改", status: "pending" },
@@ -184,7 +227,7 @@ function createTaskLoopPlan(
     ];
   }
 
-  if (mode === "workspace") {
+  if (taskKind === "code_analysis" || taskKind === "workspace_overview" || mode === "workspace") {
     return [
       { id: "collect_evidence", title: "查看项目结构", status: "active" },
       { id: "analyze_evidence", title: "读取关键文件", status: "pending" },
@@ -200,16 +243,51 @@ function createTaskLoopPlan(
 
 function createTaskLoopTasks(
   mode: NonNullable<WorkingMemorySnapshot["taskLoop"]>["mode"],
+  taskKind: TaskIntentKind = "chat",
 ): NonNullable<WorkingMemorySnapshot["taskLoop"]>["tasks"] {
-  if (mode === "web") {
+  if (taskKind === "web_article") {
     return [
-      taskLoopTask("collect_evidence", "定位网页来源", ["source_located"], ["web_fetch", "web_search", "web_extract_links"], "active"),
+      taskLoopTask("collect_evidence", "确认用户指定的网页来源", ["source_located"], ["web_fetch"], "active"),
+      taskLoopTask("analyze_evidence", "提取可读正文或候选内容", ["body_evidence"], ["web_fetch", "web_extract_links", "web_search"], "pending", ["collect_evidence"]),
+      taskLoopTask("answer", "基于网页正文回答", ["final_feedback"], [], "pending", ["analyze_evidence"]),
+    ];
+  }
+
+  if (taskKind === "web_search") {
+    return [
+      taskLoopTask("collect_evidence", "搜索候选网页来源", ["source_located"], ["web_search"], "active"),
       taskLoopTask("analyze_evidence", "提取可读正文或候选内容", ["body_evidence"], ["web_fetch", "web_extract_links"], "pending", ["collect_evidence"]),
       taskLoopTask("answer", "基于搜索或抓取证据回答", ["final_feedback"], [], "pending", ["analyze_evidence"]),
     ];
   }
 
-  if (mode === "edit" || mode === "validation") {
+  if (taskKind === "file_transform") {
+    return [
+      taskLoopTask("collect_evidence", "定位需要处理的工作区文件", ["target_evidence"], ["find_files", "search_workspace", "list_directory"], "active"),
+      taskLoopTask("analyze_evidence", "读取目标文件内容", ["key_file_evidence"], ["read_text_file", "read_many_files"], "pending", ["collect_evidence"]),
+      taskLoopTask("answer", "按用户要求输出翻译、总结或整理结果", ["final_feedback"], [], "pending", ["analyze_evidence"]),
+    ];
+  }
+
+  if (taskKind === "file_read") {
+    return [
+      taskLoopTask("collect_evidence", "定位用户要查看的文件", ["target_evidence"], ["find_files", "search_workspace", "list_directory"], "active"),
+      taskLoopTask("analyze_evidence", "读取文件内容", ["key_file_evidence"], ["read_text_file", "read_many_files"], "pending", ["collect_evidence"]),
+      taskLoopTask("answer", "说明实际读取到的内容", ["final_feedback"], [], "pending", ["analyze_evidence"]),
+    ];
+  }
+
+  if (taskKind === "debug") {
+    return [
+      taskLoopTask("collect_evidence", "收集错误输出、诊断和相关文件", ["target_evidence"], ["collect_diagnostics", "run_validation", "find_files", "read_text_file", "search_workspace"], "active"),
+      taskLoopTask("analyze_evidence", "分析失败原因和可疑代码", ["key_file_evidence"], ["read_text_file", "read_many_files", "code_map"], "pending", ["collect_evidence"]),
+      taskLoopTask("apply_change", "执行一次聚焦修复", ["workspace_mutated"], ["patch_text_file", "write_text_file"], "pending", ["analyze_evidence"]),
+      taskLoopTask("verify", "验证修复后的结果", ["validation_passed"], ["run_validation", "collect_diagnostics"], "pending", ["apply_change"]),
+      taskLoopTask("answer", "汇报原因、改动和验证结果", ["final_feedback"], [], "pending", ["verify"]),
+    ];
+  }
+
+  if (taskKind === "edit" || taskKind === "validation" || taskKind === "release" || mode === "edit" || mode === "validation") {
     return [
       taskLoopTask("collect_evidence", "检查目标文件或失败诊断", ["target_evidence"], ["find_files", "read_text_file", "read_many_files", "search_workspace", "collect_diagnostics"], "active"),
       taskLoopTask("apply_change", "执行一次聚焦的工作区修改", ["workspace_mutated"], ["patch_text_file", "write_text_file"], "pending", ["collect_evidence"]),
@@ -218,7 +296,7 @@ function createTaskLoopTasks(
     ];
   }
 
-  if (mode === "workspace") {
+  if (taskKind === "code_analysis" || taskKind === "workspace_overview" || mode === "workspace") {
     return [
       taskLoopTask("collect_evidence", "检查项目结构和相关路径", ["structure_evidence"], ["inspect_project", "find_files", "list_directory", "search_workspace"], "active"),
       taskLoopTask("analyze_evidence", "读取关键文件或生成代码地图", ["key_file_evidence"], ["find_files", "read_many_files", "read_text_file", "code_map"], "pending", ["collect_evidence"]),
@@ -307,20 +385,25 @@ function updateTaskLoop(
     ? current.completionGateCount + 1
     : current.completionGateCount;
   const nextMode = inferTaskLoopModeFromResult(current.mode, result, toolName);
+  const taskKind = current.taskKind ?? current.userCommand?.taskKind ?? taskKindFromMode(nextMode);
   const basePlan = nextMode === current.mode
-    ? current.plan ?? createTaskLoopPlan(nextMode)
-    : createTaskLoopPlan(nextMode);
+    ? current.plan ?? createTaskLoopPlan(nextMode, taskKind)
+    : createTaskLoopPlan(nextMode, taskKind);
   const nextPlan = updateTaskLoopPlan(basePlan, result, toolName);
   const baseTasks = nextMode === current.mode
-    ? current.tasks ?? createTaskLoopTasks(nextMode)
-    : createTaskLoopTasks(nextMode);
+    ? current.tasks ?? createTaskLoopTasks(nextMode, taskKind)
+    : createTaskLoopTasks(nextMode, taskKind);
   const nextTasks = updateTaskLoopTasks(baseTasks, result, toolName);
-  const evidenceLog = appendTaskLoopEvidenceLog(current.evidenceLog, evidenceLogEntry);
+  const evidenceLog = appendTaskLoopEvidenceLog(current.evidenceLog, evidenceLogEntry, nextMode);
   const selfCheck = buildTaskLoopSelfCheck(nextMode, nextTasks, result, evidenceLog, step);
+  const completionScore = buildTaskLoopCompletionScore(nextMode, nextTasks, evidenceLog, selfCheck);
+  const recoveryPlan = buildTaskLoopRecoveryPlan(result, toolName, selfCheck);
+  const finalAudit = buildTaskLoopFinalAudit(nextMode, evidenceLog, selfCheck, completionScore, step);
 
   return {
     ...current,
     mode: nextMode,
+    taskKind,
     evidenceCount,
     completionGateCount,
     plan: nextPlan,
@@ -329,12 +412,23 @@ function updateTaskLoop(
     currentTaskId: inferCurrentTaskLoopTask(nextTasks),
     evidenceLog,
     selfCheck,
+    completionScore,
+    ...(recoveryPlan ? { recoveryPlan } : {}),
+    finalAudit,
     ...(evidence?.kind ? { lastEvidenceKind: evidence.kind } : {}),
     ...(evidence?.tool ? { lastEvidenceTool: evidence.tool } : {}),
     ...(evidence?.target ? { lastEvidenceTarget: evidence.target } : {}),
     ...(evidence?.summary ? { lastProgressSummary: evidence.summary } : {}),
-    needsFinalAnswer: isFinalAction ? false : selfCheck.status === "passed",
+    needsFinalAnswer: isFinalAction ? false : finalAudit.passed,
   };
+}
+
+function taskKindFromMode(mode: NonNullable<WorkingMemorySnapshot["taskLoop"]>["mode"]): TaskIntentKind {
+  if (mode === "web") return "web_search";
+  if (mode === "edit") return "edit";
+  if (mode === "validation") return "validation";
+  if (mode === "workspace") return "workspace_overview";
+  return "chat";
 }
 
 type TaskLoopTask = NonNullable<NonNullable<WorkingMemorySnapshot["taskLoop"]>["tasks"]>[number];
@@ -627,9 +721,57 @@ function inferTaskLoopEvidenceLogEntry(
 function appendTaskLoopEvidenceLog(
   current: TaskLoopEvidenceLogEntry[] | undefined,
   entry: TaskLoopEvidenceLogEntry | null,
+  mode: NonNullable<WorkingMemorySnapshot["taskLoop"]>["mode"],
 ): TaskLoopEvidenceLogEntry[] | undefined {
   if (!entry) return current;
-  return [...(current ?? []), entry].slice(-MAX_TASK_LOOP_EVIDENCE_LOG);
+  const enriched = enrichTaskLoopEvidenceLogEntry(current ?? [], entry, mode);
+  return [...(current ?? []), enriched].slice(-MAX_TASK_LOOP_EVIDENCE_LOG);
+}
+
+function enrichTaskLoopEvidenceLogEntry(
+  current: TaskLoopEvidenceLogEntry[],
+  entry: TaskLoopEvidenceLogEntry,
+  mode: NonNullable<WorkingMemorySnapshot["taskLoop"]>["mode"],
+): TaskLoopEvidenceLogEntry {
+  const taskAlignment = inferTaskLoopEvidenceAlignment(mode, entry);
+  const duplicate = current.some((item) =>
+    item.toolName === entry.toolName
+    && normalizeEvidenceTarget(item.target) === normalizeEvidenceTarget(entry.target)
+    && normalizeEvidenceTarget(entry.target).length > 0
+  );
+  const qualityScore = entry.quality === "strong" ? 85 : entry.quality === "weak" ? 35 : 0;
+  const alignmentPenalty = taskAlignment === "misaligned" ? 60 : taskAlignment === "weak" ? 20 : 0;
+  const duplicatePenalty = duplicate ? 35 : 0;
+  const valueScore = Math.max(0, Math.min(100, qualityScore - alignmentPenalty - duplicatePenalty));
+  return {
+    ...entry,
+    taskAlignment,
+    valueScore,
+    advancesTask: valueScore >= 55,
+  };
+}
+
+function inferTaskLoopEvidenceAlignment(
+  mode: NonNullable<WorkingMemorySnapshot["taskLoop"]>["mode"],
+  entry: TaskLoopEvidenceLogEntry,
+): NonNullable<TaskLoopEvidenceLogEntry["taskAlignment"]> {
+  if (mode === "web") {
+    if (entry.kind === "web") return "aligned";
+    return entry.kind === "unknown" ? "weak" : "misaligned";
+  }
+  if (mode === "workspace") {
+    if (entry.kind === "workspace" || entry.kind === "file" || entry.kind === "code") return "aligned";
+    return entry.kind === "unknown" ? "weak" : "misaligned";
+  }
+  if (mode === "edit" || mode === "validation") {
+    if (entry.kind === "file" || entry.kind === "code" || entry.kind === "validation" || entry.kind === "terminal") return "aligned";
+    return entry.kind === "unknown" ? "weak" : "misaligned";
+  }
+  return "aligned";
+}
+
+function normalizeEvidenceTarget(value: string | undefined): string {
+  return (value ?? "").replace(/[\\/]+/g, "/").trim().toLowerCase();
 }
 
 function buildTaskLoopSelfCheck(
@@ -678,6 +820,140 @@ function buildTaskLoopSelfCheck(
     summary: `Task checklist and evidence quality passed for ${mode} final feedback.`,
     checkedAtStep: step,
     ...(latestEvidence?.quality ? { latestEvidenceQuality: latestEvidence.quality } : {}),
+  };
+}
+
+function buildTaskLoopCompletionScore(
+  mode: NonNullable<WorkingMemorySnapshot["taskLoop"]>["mode"],
+  tasks: TaskLoopTask[] | undefined,
+  evidenceLog: TaskLoopEvidenceLogEntry[] | undefined,
+  selfCheck: TaskLoopSelfCheck,
+): TaskLoopCompletionScore {
+  const allCriteria = (tasks ?? []).flatMap((task) => task.id === "answer" ? [] : task.criteria);
+  const satisfiedCriteria = allCriteria.filter((criterion) => criterion.status === "satisfied").length;
+  const coverage = allCriteria.length === 0 ? 100 : Math.round((satisfiedCriteria / allCriteria.length) * 100);
+  const evidence = scoreEvidenceForMode(mode, evidenceLog);
+  const verification = scoreVerificationForMode(mode, evidenceLog);
+  const recoveryRisk = scoreRecoveryRisk(evidenceLog);
+  const blockers = [
+    ...(selfCheck.missingCriteria ?? []),
+    ...(selfCheck.status === "needs_repair" ? ["repair_required"] : []),
+  ];
+  const score = Math.max(0, Math.min(100, Math.round(
+    coverage * 0.4
+    + evidence * 0.35
+    + verification * 0.15
+    + recoveryRisk * 0.1,
+  )));
+  const threshold = mode === "edit" || mode === "validation" ? 88 : 82;
+  return {
+    score,
+    threshold,
+    coverage,
+    evidence,
+    verification,
+    recoveryRisk,
+    blockers,
+    ...(blockers[0] ? { nextStep: blockers[0] } : {}),
+    ready: selfCheck.status === "passed" && score >= threshold,
+  };
+}
+
+function buildTaskLoopFinalAudit(
+  mode: NonNullable<WorkingMemorySnapshot["taskLoop"]>["mode"],
+  evidenceLog: TaskLoopEvidenceLogEntry[] | undefined,
+  selfCheck: TaskLoopSelfCheck,
+  completionScore: TaskLoopCompletionScore,
+  step: number,
+): TaskLoopFinalAudit {
+  const issues = [
+    ...(selfCheck.status === "passed" ? [] : [`self_check:${selfCheck.status}`]),
+    ...(completionScore.score >= completionScore.threshold ? [] : [`score:${completionScore.score}/${completionScore.threshold}`]),
+    ...(hasMisalignedRecentEvidence(evidenceLog) ? ["recent_evidence_misaligned"] : []),
+    ...(hasAdvancingEvidenceForMode(mode, evidenceLog) ? [] : ["no_advancing_evidence"]),
+  ];
+  return {
+    passed: issues.length === 0,
+    summary: issues.length === 0
+      ? "Final audit passed: intent, evidence, and completion score are aligned."
+      : `Final audit blocked final feedback: ${issues.join(", ")}.`,
+    issues,
+    evidenceScore: completionScore.evidence,
+    completionScore: completionScore.score,
+    checkedAtStep: step,
+  };
+}
+
+function hasMisalignedRecentEvidence(evidenceLog: TaskLoopEvidenceLogEntry[] | undefined): boolean {
+  return (evidenceLog ?? []).slice(-3).some((entry) => entry.taskAlignment === "misaligned" && entry.advancesTask !== true);
+}
+
+function hasAdvancingEvidenceForMode(
+  mode: NonNullable<WorkingMemorySnapshot["taskLoop"]>["mode"],
+  evidenceLog: TaskLoopEvidenceLogEntry[] | undefined,
+): boolean {
+  if (mode === "chat") return true;
+  return (evidenceLog ?? []).some((entry) => entry.advancesTask === true);
+}
+
+function scoreEvidenceForMode(
+  mode: NonNullable<WorkingMemorySnapshot["taskLoop"]>["mode"],
+  evidenceLog: TaskLoopEvidenceLogEntry[] | undefined,
+): number {
+  const evidence = evidenceLog ?? [];
+  const valueWeightedStrong = evidence.some((entry) => entry.quality === "strong" && (entry.valueScore ?? 100) >= 55);
+  if (mode === "chat") return 100;
+  if (mode === "web") {
+    if (evidence.some((entry) => entry.toolName === "web_fetch" && entry.quality === "strong" && (entry.valueScore ?? 100) >= 55)) return 100;
+    if (evidence.some((entry) => entry.toolName === "web_extract_links" && entry.quality === "strong" && (entry.valueScore ?? 100) >= 55)) return 65;
+    if (evidence.some((entry) => entry.toolName === "web_search" && entry.quality === "strong" && (entry.valueScore ?? 100) >= 55)) return 45;
+    return 0;
+  }
+  if (mode === "workspace") {
+    if (evidence.some((entry) => (entry.kind === "file" || entry.kind === "code") && entry.quality === "strong" && (entry.valueScore ?? 100) >= 55)) return 100;
+    if (evidence.some((entry) => entry.kind === "workspace" && entry.quality === "strong" && (entry.valueScore ?? 100) >= 55)) return 60;
+    return 0;
+  }
+  if (mode === "edit" || mode === "validation") {
+    if (evidence.some((entry) => entry.toolName === "run_validation" && entry.quality === "strong" && (entry.valueScore ?? 100) >= 55)) return 100;
+    if (evidence.some((entry) => entry.kind === "validation" && entry.quality === "strong" && (entry.valueScore ?? 100) >= 55)) return 90;
+    if (valueWeightedStrong) return 65;
+    return 0;
+  }
+  return valueWeightedStrong ? 100 : 0;
+}
+
+function scoreVerificationForMode(
+  mode: NonNullable<WorkingMemorySnapshot["taskLoop"]>["mode"],
+  evidenceLog: TaskLoopEvidenceLogEntry[] | undefined,
+): number {
+  if (mode !== "edit" && mode !== "validation") return 100;
+  const evidence = evidenceLog ?? [];
+  if (evidence.some((entry) => entry.toolName === "run_validation" && entry.quality === "strong")) return 100;
+  if (evidence.some((entry) => entry.toolName === "completion_check" && entry.quality === "strong")) return 90;
+  if (evidence.some((entry) => entry.quality === "failed")) return 20;
+  return 45;
+}
+
+function scoreRecoveryRisk(evidenceLog: TaskLoopEvidenceLogEntry[] | undefined): number {
+  const recent = (evidenceLog ?? []).slice(-5);
+  const failures = recent.filter((entry) => entry.quality === "failed").length;
+  const weak = recent.filter((entry) => entry.quality === "weak").length;
+  return Math.max(0, 100 - failures * 35 - weak * 12);
+}
+
+function buildTaskLoopRecoveryPlan(
+  result: ActionResult,
+  toolName: string | undefined,
+  selfCheck: TaskLoopSelfCheck,
+): NonNullable<WorkingMemorySnapshot["taskLoop"]>["recoveryPlan"] | null {
+  if (result.ok && selfCheck.status !== "needs_repair") return null;
+  const failedTool = toolName ?? result.action.toolName;
+  return {
+    kind: "model_replan",
+    ...(failedTool ? { failedTool } : {}),
+    reason: selfCheck.summary,
+    shouldAskModel: true,
   };
 }
 

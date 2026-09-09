@@ -341,6 +341,138 @@ test("LlmPlanner sanitizes tool routing directives out of model web_search queri
   assert.match(decision.reasoning ?? "", /Tool input sanitizer/);
 });
 
+test("LlmPlanner rebuilds polluted search queries from the command contract", async () => {
+  const model = new RecordingModel({
+    kind: "tool_call",
+    toolName: "web_search",
+    toolInput: { query: "network search concept and call web_article_reader", limit: 5 },
+  });
+  const planner = new LlmPlanner(model);
+  const availableTools: ToolDescriptor[] = [
+    {
+      name: "web_search",
+      description: "Searches the public web",
+      inputSchema: { type: "object" },
+      capability: "web.search",
+    },
+  ];
+
+  const decision = await planner.decide(makeInput([], availableTools, "search network search concept and call web_article_reader"));
+
+  assert.deepEqual(decision.action, {
+    kind: "tool_call",
+    toolName: "web_search",
+    toolInput: { query: "search network search concept", limit: 5 },
+  });
+  assert.match(decision.reasoning ?? "", /Command contract/);
+});
+
+test("LlmPlanner redirects wrong continued web_fetch URLs back to the command contract target", async () => {
+  const model = new RecordingModel({
+    kind: "tool_call",
+    toolName: "web_fetch",
+    toolInput: { url: "https://wrong.example/article" },
+  });
+  const planner = new LlmPlanner(model);
+  const availableTools: ToolDescriptor[] = [
+    {
+      name: "web_fetch",
+      description: "Fetches a public web page",
+      inputSchema: { type: "object" },
+      capability: "web.fetch",
+    },
+  ];
+  const workingMemory: WorkingMemorySnapshot = {
+    step: 2,
+    phase: "investigate",
+    lastActionKind: "tool_call",
+    lastToolName: "web_search",
+    taskLoop: {
+      objective: "read the requested article",
+      mode: "web",
+      taskKind: "web_article",
+      evidenceCount: 0,
+      completionGateCount: 0,
+      userCommand: {
+        raw: "read https://example.test/article.html",
+        objective: "read https://example.test/article.html",
+        normalizedSearchQuery: "read https://example.test/article.html",
+        explicitUrls: ["https://example.test/article.html"],
+        toolDirectives: [],
+        skillDirectives: [],
+        outputDirectives: [],
+        constraints: [],
+        modeHint: "web",
+        taskKind: "web_article",
+        commandContract: {
+          version: "shiguang.command.v1",
+          original: "read https://example.test/article.html",
+          objective: "read https://example.test/article.html",
+          route: "web",
+          taskKind: "web_article",
+          targets: {
+            urls: ["https://example.test/article.html"],
+            paths: [],
+          },
+          directives: {
+            tools: [],
+            skills: [],
+            output: [],
+            constraints: [],
+          },
+          immutable: true,
+        },
+      },
+    },
+  };
+
+  const decision = await planner.decide(makeInput([], availableTools, "continue", workingMemory));
+
+  assert.equal(model.calls, 1);
+  assert.deepEqual(decision.action, {
+    kind: "tool_call",
+    toolName: "web_fetch",
+    toolInput: { url: "https://example.test/article.html" },
+  });
+  assert.match(decision.reasoning ?? "", /Command contract/);
+});
+
+test("LlmPlanner redirects model web drift back to workspace evidence for local file tasks", async () => {
+  const model = new RecordingModel({
+    kind: "tool_call",
+    toolName: "web_search",
+    toolInput: { query: "翻译工作区文件" },
+  });
+  const planner = new LlmPlanner(model);
+  const availableTools: ToolDescriptor[] = [
+    {
+      name: "find_files",
+      description: "Find workspace files",
+      inputSchema: { type: "object" },
+    },
+    {
+      name: "read_text_file",
+      description: "Read workspace files",
+      inputSchema: { type: "object" },
+    },
+    {
+      name: "web_search",
+      description: "Searches the public web",
+      inputSchema: { type: "object" },
+      capability: "web.search",
+    },
+  ];
+
+  const decision = await planner.decide(makeInput([], availableTools, "翻译一下工作区文件"));
+
+  assert.deepEqual(decision.action, {
+    kind: "tool_call",
+    toolName: "find_files",
+    toolInput: { query: "*", includeDirectories: true, maxResults: 40 },
+  });
+  assert.match(decision.reasoning ?? "", /Workspace route lock/);
+});
+
 test("RulePlanner fetches explicit URLs before searching", async () => {
   const planner = new RulePlanner();
   const availableTools: ToolDescriptor[] = [
@@ -917,6 +1049,70 @@ test("LlmPlanner records a reusable reflection rule before repeating a bad patte
   assert.equal(decision.action.kind, "tool_call");
   assert.equal(decision.action.toolName, "record_agent_rule");
   assert.match(JSON.stringify(decision.action.toolInput), /same tool/i);
+});
+
+test("LlmPlanner records a Hermes rule when tool names leak into a search query", async () => {
+  const model = new RecordingModel({ kind: "respond", content: "fallback" });
+  const planner = new LlmPlanner(model);
+  const availableTools: ToolDescriptor[] = [
+    {
+      name: "record_agent_rule",
+      description: "Record reusable agent rule",
+      inputSchema: { type: "object" },
+      requiresApproval: true,
+    },
+  ];
+  const history: ActionResult[] = [
+    {
+      action: { kind: "tool_call", toolName: "web_search", toolInput: { query: "网络搜索的概念，并调用web_article_reader" } },
+      ok: true,
+      output: { results: [{ title: "网络搜索", url: "https://example.test/search" }] },
+      metadata: { category: "tool_observation", summary: "searched full user command", retryable: false, toolName: "web_search" },
+    },
+  ];
+
+  const decision = await planner.decide(makeInput(history, availableTools, "用户的问题怎么能随便更改呢？学Hermes"));
+
+  assert.equal(model.calls, 0);
+  assert.equal(decision.action.kind, "tool_call");
+  assert.equal(decision.action.toolName, "record_agent_rule");
+  assert.match(JSON.stringify(decision.action.toolInput), /user-command\/tool-routing/);
+  assert.match(JSON.stringify(decision.action.toolInput), /routing directive/i);
+});
+
+test("LlmPlanner records a Hermes rule when web tasks drift into workspace tools", async () => {
+  const model = new RecordingModel({ kind: "respond", content: "fallback" });
+  const planner = new LlmPlanner(model);
+  const availableTools: ToolDescriptor[] = [
+    {
+      name: "record_agent_rule",
+      description: "Record reusable agent rule",
+      inputSchema: { type: "object" },
+      requiresApproval: true,
+    },
+  ];
+  const history: ActionResult[] = [
+    {
+      action: { kind: "tool_call", toolName: "web_search", toolInput: { query: "红色书籍" } },
+      ok: true,
+      output: { results: [{ title: "红色书籍", url: "https://example.test/red-books" }] },
+      metadata: { category: "tool_observation", summary: "found web candidates", retryable: false, toolName: "web_search" },
+    },
+    {
+      action: { kind: "tool_call", toolName: "read_text_file", toolInput: { path: "pubspec.yaml" } },
+      ok: true,
+      output: { path: "pubspec.yaml", content: "name: watermeter" },
+      metadata: { category: "tool_observation", summary: "read workspace config", retryable: false, toolName: "read_text_file" },
+    },
+  ];
+
+  const decision = await planner.decide(makeInput(history, availableTools, "我让它看网页，怎么去读工作区了？学Hermes"));
+
+  assert.equal(model.calls, 0);
+  assert.equal(decision.action.kind, "tool_call");
+  assert.equal(decision.action.toolName, "record_agent_rule");
+  assert.match(JSON.stringify(decision.action.toolInput), /route-lock\/web-workspace/);
+  assert.match(JSON.stringify(decision.action.toolInput), /local workspace reads/i);
 });
 
 test("RulePlanner reports saved reflection rule after record_agent_rule completes", async () => {

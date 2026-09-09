@@ -77,6 +77,61 @@ test("selectToolsForPlanner keeps web tools for Chinese web-search requests", ()
   assert.ok(selected.includes("web_fetch"));
 });
 
+test("selectToolsForPlanner hard-gates local file translation away from web tools", () => {
+  const tools = [
+    makeTool("find_files"),
+    makeTool("read_text_file"),
+    makeTool("read_many_files"),
+    makeTool("search_workspace"),
+    makeTool("web_search", "Search web pages"),
+    makeTool("web_fetch", "Fetch a web page"),
+  ];
+
+  const selected = selectToolsForPlanner(makeInput("翻译一下工作区文件", tools), 6).selected.map((tool) => tool.name);
+
+  assert.ok(selected.includes("find_files") || selected.includes("search_workspace"), `selected tools: ${selected.join(", ")}`);
+  assert.ok(!selected.includes("web_search"), `selected tools: ${selected.join(", ")}`);
+  assert.ok(!selected.includes("web_fetch"), `selected tools: ${selected.join(", ")}`);
+});
+
+test("selectToolsForPlanner preserves taskKind route lock on continue messages", () => {
+  const tools = [
+    makeTool("find_files"),
+    makeTool("read_text_file"),
+    makeTool("search_workspace"),
+    makeTool("web_search", "Search web pages"),
+    makeTool("web_fetch", "Fetch a web page"),
+  ];
+  const input = makeInput("继续", tools);
+  input.workingMemory = {
+    step: 2,
+    phase: "investigate",
+    lastActionKind: "tool_call",
+    taskLoop: {
+      objective: "翻译一下工作区文件",
+      mode: "workspace",
+      taskKind: "file_transform",
+      evidenceCount: 1,
+      completionGateCount: 0,
+      currentTaskId: "analyze_evidence",
+      tasks: [{
+        id: "analyze_evidence",
+        title: "读取目标文件内容",
+        status: "active",
+        criteria: [{ id: "key_file_evidence", description: "read file", status: "pending" }],
+        toolHints: ["read_text_file", "read_many_files"],
+        attempts: 0,
+      }],
+    },
+  };
+
+  const selected = selectToolsForPlanner(input, 5).selected.map((tool) => tool.name);
+
+  assert.ok(selected.includes("read_text_file"), `selected tools: ${selected.join(", ")}`);
+  assert.ok(!selected.includes("web_search"), `selected tools: ${selected.join(", ")}`);
+  assert.ok(!selected.includes("web_fetch"), `selected tools: ${selected.join(", ")}`);
+});
+
 test("selectToolsForPlanner narrows small tool sets when task-loop mode is web", () => {
   const input = makeInput("继续", [
     makeTool("read_text_file"),

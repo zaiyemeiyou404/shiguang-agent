@@ -100,6 +100,9 @@ $env:GEMINI_API_KEY="你的 key"
 - 工具调用：支持读写文件、搜索工作区、运行终端命令、校验项目等内置工具。
 - 扩展工具：支持 GitHub 仓库读取、网页搜索/抓取、轻量代码诊断、后台进程管理和记忆管理；“联网搜一下/查最新/官网/URL”等表达会优先触发网页搜索工具。
 - 联网工具选择：中文搜索意图会在精简工具清单时强制保留 `web_search` / `web_fetch`，避免只显示“可联网搜索”但当前 run 实际没有网页工具。
+- 工具路由锁：翻译、总结、读取、分析工作区文件时会锁定本地工具链，不会把本地文件任务误转成网页搜索；只有明确 URL、联网、官网、新闻、最新等意图才进入联网工具链。
+- 任务分类器：任务循环会记录粗粒度 `mode` 和细粒度 `taskKind`。当前细分包括 `web_search`、`web_article`、`file_read`、`file_transform`、`workspace_overview`、`code_analysis`、`debug`、`validation`、`edit`、`release`、`chat`，用于决定计划步骤、工具候选和完成判定。
+- Command Contract：每轮会把用户原话拆成不可变的 `shiguang.command.v1` 合同，分离目标、URL/路径、工具/Skill 指令、输出要求和约束；续跑/继续时也会沿用该合同，避免把“调用某工具”误当成搜索词、把“继续”误当成查询，或把旧路径误当成新目标。
 - URL 直抓：消息中出现明确 `http/https` 链接时，首轮会优先调用 `web_fetch`，不会把 URL 和“看一下这个”等中文补充一起丢给搜索引擎；HTML 页面会返回标题、清洗正文和短 HTML 预览。
 - 自定义扩展：支持 `create_custom_skill`、`create_custom_tool`、`list_custom_extensions`、`run_custom_tool`。Agent 可以自己创建可复用 skill 和声明式模板工具，经过审批后写入专门扩展目录，并在后续运行中自动加载。
 - 终端边界：`run_terminal_command` 支持在工作区外运行明显只读命令，例如 `dir`、`ls`、`Get-ChildItem`、`Get-Content`、`rg`、`git status`；但写入、删除、安装、构建、移动和重命名等命令必须在当前工作区内执行。
@@ -148,7 +151,7 @@ $env:GEMINI_API_KEY="你的 key"
 | 工具 | 用途 |
 |---|---|
 | `github_repo` | 读取仓库信息、issue、PR、Actions run、latest release |
-| `web_search` / `web_fetch` | 搜索网页、抓取网页正文 |
+| `web_search` / `web_fetch` | 搜索网页、抓取网页正文；`web_search` 支持 `TAVILY_API_KEY`、`BRAVE_SEARCH_API_KEY` 和 `SHIGUANG_WEB_SEARCH_PROVIDER=auto/tavily/brave/duckduckgo/bing` |
 | `collect_diagnostics` | 收集 TypeScript、JavaScript、Python、JSON 诊断 |
 | `code_map` / `symbol_search` / `dependency_graph` | 生成工程地图、查找符号、分析 import/use 依赖 |
 | `start_background_process` / `stop_background_process` | 启动或停止 dev server 等后台进程，需要审批 |
@@ -228,11 +231,19 @@ contract: shiguang.skill.v1
 layer: domain
 scope: web_fetch
 triggers: http, https, url, article, news, 正文, 网页
+taskKinds: web_article, web_search
+allowedTools: web_fetch, web_search, web_extract_links
+forbiddenTools: read_text_file, list_directory, inspect_project
 priority: 85
 version: 1
 ```
 
-启动时会自动补齐默认 `web_article_reader` skill。它会要求 Agent 在用户给出明确 URL 时优先直接调用 `web_fetch`，不要先搜索 URL 字符串，也不要被旧会话里的本地项目上下文带偏；只有直接抓取失败、内容不完整或需要交叉验证时才进入 `web_search`。
+`taskKinds`、`allowedTools` 和 `forbiddenTools` 构成 Skill 沙箱。声明了沙箱的 Skill 只有在当前任务类型和工具候选匹配时才会注入；未声明这些字段的旧 Skill 仍按旧规则选择，避免升级后用户已有扩展突然失效。
+
+启动时会自动补齐默认 skill：
+
+- `web_article_reader`：用户给出明确 URL 时优先直接调用 `web_fetch`，不要先搜索 URL 字符串，也不要被旧会话里的本地项目上下文带偏；只有直接抓取失败、内容不完整或需要交叉验证时才进入 `web_search`。
+- `hermes_reflection_coach`：当用户指出错误、质疑结果、要求学习 Hermes 或出现重复/混乱工具调用时，先区分“实际观察”和“错误推断”，再把可复用做法通过 `record_agent_rule` 写入 `agent_rules`。写入需要审批，避免 Agent 自动保存一次性任务内容、隐私或密钥。
 
 ## 常见问题
 
