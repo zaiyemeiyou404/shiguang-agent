@@ -70,3 +70,15 @@ test("copy_path rejects destination paths outside the workspace root", async () 
     /workspace root/i,
   );
 });
+
+test("copy_path can read an absolute source outside the workspace while keeping the destination inside", async () => {
+  const { createCopyPathTool } = await loadModule();
+  const workspaceRoot = await makeWorkspace();
+  const outsideRoot = await makeWorkspace();
+  const sourcePath = join(outsideRoot, "shared.txt");
+  await writeFile(sourcePath, "shared input\n", "utf8");
+
+  await createCopyPathTool(workspaceRoot).execute({ sourcePath, destinationPath: "imports/shared.txt" });
+
+  assert.equal(await readFile(join(workspaceRoot, "imports", "shared.txt"), "utf8"), "shared input\n");
+});

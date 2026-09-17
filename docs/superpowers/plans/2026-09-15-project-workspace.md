@@ -36,7 +36,7 @@
 
 **Interfaces:**
 - Produces: `Project`, `Workspace`, `ProjectRepository`, `WorkspaceRepository` and workspace-aware `SessionRepository`.
-- Produces: schema migration 002 adding `projects`, `workspaces`, and `sessions.workspace_id`.
+- Produces: schema migration 002 adding `projects`, `workspaces`, and `sessions.workspace_id`, plus migration 003 enforcing required immutable session binding.
 
 - [ ] Write integration tests that open a version-1 database, run migrations, and assert old sessions receive the default workspace.
 - [ ] Run `npm test -- project-workspace` and verify the new tests fail because schema version 2 and repositories do not exist.

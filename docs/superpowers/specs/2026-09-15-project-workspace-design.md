@@ -40,7 +40,7 @@
 
 ## 启动与迁移
 
-- 数据库升级到 schema version 2。
+- 数据库升级到 schema version 3（version 2 建立层级，version 3 在数据库层锁定会话工作区）。
 - 首次迁移创建一个“默认项目”。
 - 使用原设置中的 `workspaceRoot` 创建“默认工作区”。
 - 所有旧会话迁移到该默认工作区。

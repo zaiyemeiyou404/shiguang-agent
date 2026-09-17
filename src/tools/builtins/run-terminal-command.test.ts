@@ -95,6 +95,22 @@ test("run_terminal_command rejects mutating commands outside the workspace", asy
   );
 });
 
+test("run_terminal_command rejects a Windows absolute cwd on another drive", async (context) => {
+  if (process.platform !== "win32") {
+    context.skip("Windows drive-letter behavior");
+    return;
+  }
+  const { createRunTerminalCommandTool } = await loadModule();
+  const workspaceRoot = await makeWorkspace();
+  const currentDrive = workspaceRoot.slice(0, 1).toUpperCase();
+  const otherDrive = currentDrive === "Z" ? "Y" : "Z";
+
+  await assert.rejects(
+    () => createRunTerminalCommandTool(workspaceRoot).execute({ command: "echo no", cwd: `${otherDrive}:\\outside` }),
+    /workspace root/i,
+  );
+});
+
 test("run_terminal_command reports timeout state", async () => {
   const { createRunTerminalCommandTool } = await loadModule();
   const workspaceRoot = await makeWorkspace();

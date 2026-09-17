@@ -420,6 +420,9 @@ export class DesktopAppService {
   async createSession(req: CreateSessionRequest): Promise<DesktopSession> {
     const workspace = await this.workspaceRepository.get(req.workspaceId);
     if (!workspace) throw new Error(`工作区不存在：${req.workspaceId}`);
+    if (!isDirectoryAvailable(workspace.rootPath)) {
+      throw new Error(`工作区目录不可用：${workspace.rootPath}`);
+    }
     const now = new Date().toISOString();
     const id = nextId("sess");
     const workspaceRoot = resolve(normalize(workspace.rootPath));
@@ -1327,6 +1330,9 @@ export class DesktopAppService {
   private async requireWorkspace(workspaceId: string): Promise<Workspace> {
     const workspace = await this.workspaceRepository.get(workspaceId);
     if (!workspace) throw new Error(`工作区不存在：${workspaceId}`);
+    if (!isDirectoryAvailable(workspace.rootPath)) {
+      throw new Error(`工作区目录不可用：${workspace.rootPath}`);
+    }
     return workspace;
   }
 
@@ -2078,19 +2084,23 @@ function coreProjectToDesktop(project: Project): DesktopProject {
 }
 
 function coreWorkspaceToDesktop(workspace: Workspace): DesktopWorkspace {
-  let available = false;
-  try {
-    available = statSync(workspace.rootPath).isDirectory();
-  } catch {}
   return {
     id: workspace.id,
     projectId: workspace.projectId,
     name: workspace.name,
     rootPath: workspace.rootPath,
-    available,
+    available: isDirectoryAvailable(workspace.rootPath),
     createdAt: workspace.createdAt.toISOString(),
     updatedAt: workspace.updatedAt.toISOString(),
   };
+}
+
+function isDirectoryAvailable(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 function coreRunToDesktop(run: Run): DesktopRun {

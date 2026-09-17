@@ -23,6 +23,13 @@ export function initializeStateDatabase(db: DatabaseSync): void {
   }
 
   for (let index = currentVersion; index < ALL_MIGRATIONS.length; index += 1) {
-    db.exec(ALL_MIGRATIONS[index]!);
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.exec(ALL_MIGRATIONS[index]!);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
   }
 }

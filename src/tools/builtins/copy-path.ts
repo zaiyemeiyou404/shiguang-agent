@@ -1,7 +1,8 @@
 import { copyFileSync, mkdirSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Tool, ToolExecutionContext } from "../types.js";
-import { resolveWorkspacePath, toPortablePath } from "./path-format.js";
+import { toPortablePath } from "./path-format.js";
+import { resolveReadablePath, resolveWritablePath } from "./path-policy.js";
 
 export interface CopyPathInput {
   sourcePath: string;
@@ -55,8 +56,8 @@ export function createCopyPathTool(workspaceRoot: string): Tool {
     async execute(input: unknown, context?: ToolExecutionContext): Promise<CopyPathOutput> {
       throwIfAborted(context?.signal);
       const { sourcePath, destinationPath } = resolveInput(input);
-      const sourceFullPath = resolveWorkspacePath(workspaceRoot, sourcePath);
-      const destinationFullPath = resolveWorkspacePath(workspaceRoot, destinationPath, { forWrite: true });
+      const sourceFullPath = resolveReadablePath(workspaceRoot, sourcePath);
+      const destinationFullPath = resolveWritablePath(workspaceRoot, destinationPath);
       const sourceStats = statSync(sourceFullPath);
       if (!sourceStats.isFile()) {
         throw new Error(`copy_path: source is not a file: ${sourcePath}`);

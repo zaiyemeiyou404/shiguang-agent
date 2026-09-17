@@ -41,6 +41,7 @@ worktest/
 # Local agent notes / prompts
 .codex-*.txt
 .opencode-*.txt
+.superpowers/
 
 # Tooling
 .DS_Store

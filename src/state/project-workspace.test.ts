@@ -68,5 +68,15 @@ test("repositories persist a session under its selected workspace", async () => 
   assert.equal((await projects.get("project_alpha"))?.name, "Alpha");
   assert.equal((await workspaces.listByProject("project_alpha"))[0]?.rootPath, "G:\\projects\\alpha");
   assert.equal((await sessions.get("session_alpha"))?.workspaceId, "workspace_alpha");
+  await assert.rejects(
+    () => sessions.update("session_alpha", { workspaceId: DEFAULT_WORKSPACE_ID }),
+    /cannot be changed/i,
+  );
+  assert.throws(() => {
+    db.prepare(`
+      INSERT INTO sessions (id, workspace_id, title, status, created_at, updated_at, summary)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run("session_without_workspace", null, "Invalid", "active", now.toISOString(), now.toISOString(), null);
+  }, /workspace/i);
   db.close();
 });

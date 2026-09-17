@@ -28,15 +28,21 @@ export function useDesktopSessions() {
       setWorkspaces(workspaceList);
       const preferredWorkspaceId = workspaceList.some((workspace) => workspace.id === activeWorkspaceId)
         ? activeWorkspaceId
-        : workspaceList[0]?.id ?? null;
+        : workspaceList.find((workspace) => workspace.available)?.id ?? workspaceList[0]?.id ?? null;
       setActiveWorkspaceId(preferredWorkspaceId);
       setSessions(list);
-      if (list.length === 0 && preferredWorkspaceId) {
-        const session = await bridge.createSession({ title: "Default Session", workspaceId: preferredWorkspaceId });
+      const availableWorkspaceId = workspaceList.find((workspace) => workspace.id === preferredWorkspaceId && workspace.available)?.id
+        ?? workspaceList.find((workspace) => workspace.available)?.id
+        ?? null;
+      if (list.length === 0 && availableWorkspaceId) {
+        const session = await bridge.createSession({ title: "Default Session", workspaceId: availableWorkspaceId });
         setSessions([session]);
+        setActiveWorkspaceId(session.workspaceId);
         setActiveSessionId(session.id);
       } else if (!activeSessionId || !list.some((session) => session.id === activeSessionId)) {
-        setActiveSessionId(list[0].id);
+        const nextSession = list.find((session) => session.workspaceId === preferredWorkspaceId) ?? list[0];
+        setActiveSessionId(nextSession?.id ?? null);
+        if (nextSession) setActiveWorkspaceId(nextSession.workspaceId);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -124,12 +130,17 @@ export function useDesktopSessions() {
     const workspace = await requireDesktopBridge().createWorkspace(req);
     await refreshSessions();
     setActiveWorkspaceId(workspace.id);
+    setActiveSessionId(null);
+    setDetail(null);
+    setWorkspaceSnapshot(null);
+    setActiveRunId(null);
     return workspace;
   }, [refreshSessions]);
 
   const branchSession = useCallback(async (runId: string, title?: string) => {
     const result = await requireDesktopBridge().branchSession({ runId, title });
     await refreshSessions();
+    setActiveWorkspaceId(result.session.workspaceId);
     setActiveSessionId(result.session.id);
     setActiveRunId(null);
     return result;
@@ -171,7 +182,16 @@ export function useDesktopSessions() {
     setActiveRunId(null);
   }, [sessions]);
 
-  return { projects, workspaces, activeWorkspaceId, setActiveWorkspaceId, sessions, activeSessionId, detail, workspaceSnapshot, activeRunId, setActiveRunId, loading, sessionError, detailError, createProject, createWorkspace, createSession, branchSession, renameSession, updateSessionStatus, deleteSession, selectSession, refreshSessions, refreshDetail };
+  const selectWorkspace = useCallback((workspaceId: string) => {
+    setActiveWorkspaceId(workspaceId);
+    const nextSession = sessions.find((session) => session.workspaceId === workspaceId) ?? null;
+    setActiveSessionId(nextSession?.id ?? null);
+    setDetail(null);
+    setWorkspaceSnapshot(null);
+    setActiveRunId(null);
+  }, [sessions]);
+
+  return { projects, workspaces, activeWorkspaceId, setActiveWorkspaceId, sessions, activeSessionId, detail, workspaceSnapshot, activeRunId, setActiveRunId, loading, sessionError, detailError, createProject, createWorkspace, createSession, branchSession, renameSession, updateSessionStatus, deleteSession, selectSession, selectWorkspace, refreshSessions, refreshDetail };
 }
 
 export function useRunEvents(runId: string | null) {

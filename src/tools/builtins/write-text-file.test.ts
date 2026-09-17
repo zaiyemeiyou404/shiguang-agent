@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -72,6 +72,19 @@ test("write_text_file rejects paths that escape the workspace root", async () =>
 
   await assert.rejects(
     () => tool.execute({ path: "../outside.ts", content: "nope\n" }),
+    /workspace root/i,
+  );
+});
+
+test("write_text_file rejects a workspace link that resolves outside the root", async () => {
+  const { createWriteTextFileTool } = await loadModule();
+  const workspaceRoot = await makeWorkspace();
+  const outsideRoot = await makeWorkspace();
+  await symlink(outsideRoot, join(workspaceRoot, "linked"), process.platform === "win32" ? "junction" : "dir");
+  const tool = createWriteTextFileTool(workspaceRoot);
+
+  await assert.rejects(
+    () => tool.execute({ path: "linked/escape.txt", content: "must stay inside\n" }),
     /workspace root/i,
   );
 });

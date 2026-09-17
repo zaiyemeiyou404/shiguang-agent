@@ -3,6 +3,7 @@ import { relative } from "node:path";
 import type { Tool, ToolExecutionContext } from "../types.js";
 import { resolveWorkspacePath, toPortablePath } from "./path-format.js";
 import { createTextDiffPreview } from "./approval-preview.js";
+import { resolveWritablePath } from "./path-policy.js";
 
 export interface PatchTextFileInput {
   path: string;
@@ -83,7 +84,7 @@ export function createPatchTextFileTool(workspaceRoot: string): Tool {
     },
     previewApproval(input: unknown): ReturnType<NonNullable<Tool["previewApproval"]>> {
       const { path, oldString, newString, replaceAll } = resolveInput(input);
-      const fullPath = resolveWorkspacePath(workspaceRoot, path);
+      const fullPath = resolveWritablePath(workspaceRoot, path);
       const relativePath = toPortablePath(relative(workspaceRoot, fullPath));
       const before = readFileSync(fullPath, "utf8");
       const occurrences = countOccurrences(before, oldString);
@@ -115,7 +116,7 @@ export function createPatchTextFileTool(workspaceRoot: string): Tool {
       // patch_text_file 强依赖“精确命中次数”，这样 planner 才能做可验证的最小补丁。
       const { path, oldString, newString, replaceAll } = resolveInput(input);
       throwIfAborted(context?.signal);
-      const fullPath = resolveWorkspacePath(workspaceRoot, path);
+      const fullPath = resolveWritablePath(workspaceRoot, path);
       const before = readFileSync(fullPath, "utf8");
       const occurrences = countOccurrences(before, oldString);
 

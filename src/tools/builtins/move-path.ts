@@ -1,7 +1,8 @@
 import { mkdirSync, renameSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Tool, ToolExecutionContext } from "../types.js";
-import { resolveWorkspacePath, toPortablePath } from "./path-format.js";
+import { toPortablePath } from "./path-format.js";
+import { resolveWritablePath } from "./path-policy.js";
 
 export interface MovePathInput {
   sourcePath: string;
@@ -55,8 +56,8 @@ export function createMovePathTool(workspaceRoot: string): Tool {
     async execute(input: unknown, context?: ToolExecutionContext): Promise<MovePathOutput> {
       throwIfAborted(context?.signal);
       const { sourcePath, destinationPath } = resolveInput(input);
-      const sourceFullPath = resolveWorkspacePath(workspaceRoot, sourcePath);
-      const destinationFullPath = resolveWorkspacePath(workspaceRoot, destinationPath, { forWrite: true });
+      const sourceFullPath = resolveWritablePath(workspaceRoot, sourcePath);
+      const destinationFullPath = resolveWritablePath(workspaceRoot, destinationPath);
       const sourceStats = statSync(sourceFullPath);
       mkdirSync(dirname(destinationFullPath), { recursive: true });
       renameSync(sourceFullPath, destinationFullPath);

@@ -5134,7 +5134,7 @@ function SettingsDrawer({
 export default function App() {
   const desktopBridge = getDesktopBridge();
   const hostMismatch = !desktopBridge;
-  const { projects, workspaces, activeWorkspaceId, setActiveWorkspaceId, sessions, activeSessionId, detail, workspaceSnapshot, activeRunId, setActiveRunId, loading, sessionError, detailError, createProject, createWorkspace, createSession, branchSession, renameSession, updateSessionStatus, deleteSession, selectSession, refreshSessions, refreshDetail } = useDesktopSessions();
+  const { projects, workspaces, activeWorkspaceId, setActiveWorkspaceId, sessions, activeSessionId, detail, workspaceSnapshot, activeRunId, setActiveRunId, loading, sessionError, detailError, createProject, createWorkspace, createSession, branchSession, renameSession, updateSessionStatus, deleteSession, selectSession, selectWorkspace, refreshSessions, refreshDetail } = useDesktopSessions();
   const [inputText, setInputText] = useState("");
   const [sessionDrafts, setSessionDrafts] = useState<Record<string, string>>(() => readSessionDrafts());
   const [sending, setSending] = useState(false);
@@ -5762,6 +5762,11 @@ export default function App() {
   const submitCreateWorkspace = async () => {
     setCreatingWorkspace(true);
     try {
+      if (!newWorkspaceProjectName.trim() && !newWorkspaceProjectId) {
+        throw new Error("请选择项目，或填写一个新项目名称。");
+      }
+      if (!newWorkspaceName.trim()) throw new Error("工作区名称不能为空。");
+      if (!newWorkspaceRoot.trim()) throw new Error("工作区目录不能为空。");
       const projectId = newWorkspaceProjectName.trim()
         ? (await createProject(newWorkspaceProjectName.trim())).id
         : newWorkspaceProjectId;
@@ -6208,7 +6213,7 @@ export default function App() {
                   <div className="project-group-title"><span>{project.name}</span><small>{projectWorkspaces.length}</small></div>
                   {projectWorkspaces.map(({ workspace, sessions: workspaceSessions }) => (
                     <div className={`workspace-group${workspace.id === activeWorkspaceId ? " active" : ""}`} key={workspace.id}>
-                      <button className="workspace-group-head" type="button" onClick={() => setActiveWorkspaceId(workspace.id)}>
+                      <button className="workspace-group-head" type="button" onClick={() => selectWorkspace(workspace.id)}>
                         <span className="workspace-group-icon">◇</span>
                         <span className="workspace-group-copy">
                           <strong>{workspace.name}</strong>
@@ -6232,7 +6237,7 @@ export default function App() {
                         ))}
                         {workspaceSessions.length === 0 && sessionQuery.trim() === "" && sessionView === "all" ? (
                           <button className="workspace-empty-task" type="button" onClick={() => {
-                            setActiveWorkspaceId(workspace.id);
+                            selectWorkspace(workspace.id);
                             setNewSessionTitle("新会话");
                             setNewSessionError(null);
                             setNewSessionOpen(true);

@@ -1,6 +1,6 @@
 import { existsSync, rmSync, statSync } from "node:fs";
 import type { Tool, ToolExecutionContext } from "../types.js";
-import { resolveWorkspacePath } from "./path-format.js";
+import { resolveWritablePath } from "./path-policy.js";
 
 export interface DeletePathInput {
   path: string;
@@ -56,7 +56,7 @@ export function createDeletePathTool(workspaceRoot: string): Tool {
     async execute(input: unknown, context?: ToolExecutionContext): Promise<DeletePathOutput> {
       throwIfAborted(context?.signal);
       const { path, recursive } = resolveInput(input);
-      const fullPath = resolveWorkspacePath(workspaceRoot, path);
+      const fullPath = resolveWritablePath(workspaceRoot, path);
       if (!existsSync(fullPath)) {
         throw new Error(`delete_path: path not found: ${path}`);
       }

@@ -3,6 +3,7 @@ import { dirname, relative } from "node:path";
 import type { Tool, ToolExecutionContext } from "../types.js";
 import { resolveWorkspacePath, toPortablePath } from "./path-format.js";
 import { createTextDiffPreview } from "./approval-preview.js";
+import { resolveWritablePath } from "./path-policy.js";
 
 export interface WriteTextFileInput {
   path: string;
@@ -56,7 +57,7 @@ export function createWriteTextFileTool(workspaceRoot: string): Tool {
     },
     previewApproval(input: unknown): ReturnType<NonNullable<Tool["previewApproval"]>> {
       const { path, content } = resolveInput(input);
-      const fullPath = resolveWorkspacePath(workspaceRoot, path, { forWrite: true });
+      const fullPath = resolveWritablePath(workspaceRoot, path);
       const relativePath = toPortablePath(relative(workspaceRoot, fullPath));
       const warnings: string[] = [];
       let before = "";
@@ -92,7 +93,7 @@ export function createWriteTextFileTool(workspaceRoot: string): Tool {
     async execute(input: unknown, context?: ToolExecutionContext): Promise<WriteTextFileOutput> {
       throwIfAborted(context?.signal);
       const { path, content } = resolveInput(input);
-      const fullPath = resolveWorkspacePath(workspaceRoot, path, { forWrite: true });
+      const fullPath = resolveWritablePath(workspaceRoot, path);
       mkdirSync(dirname(fullPath), { recursive: true });
       writeFileSync(fullPath, content, "utf8");
       return {

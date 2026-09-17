@@ -24,7 +24,6 @@ const SESSION_COLUMNS = `
 `;
 
 const PATCH_COLUMNS = {
-  workspaceId: "workspace_id",
   title: "title",
   status: "status",
   createdAt: "created_at",
@@ -72,6 +71,9 @@ export class SqliteSessionRepository implements SessionRepository {
   }
 
   async update(id: string, patch: Partial<Session>): Promise<void> {
+    if ("workspaceId" in patch) {
+      throw new Error("Session workspaceId cannot be changed after creation.");
+    }
     const assignments: string[] = [];
     const values: SQLInputValue[] = [];
 

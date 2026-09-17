@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 export const DEFAULT_PROJECT_ID = "project_default";
 export const DEFAULT_WORKSPACE_ID = "workspace_default";
 
@@ -170,4 +170,22 @@ CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_id, upda
 UPDATE schema_version SET version = 2;
 `;
 
-export const ALL_MIGRATIONS = [MIGRATION_001, MIGRATION_002];
+export const MIGRATION_003 = `
+CREATE TRIGGER IF NOT EXISTS sessions_workspace_required_insert
+BEFORE INSERT ON sessions
+WHEN NEW.workspace_id IS NULL OR trim(NEW.workspace_id) = ''
+BEGIN
+  SELECT RAISE(ABORT, 'session workspace_id is required');
+END;
+
+CREATE TRIGGER IF NOT EXISTS sessions_workspace_immutable
+BEFORE UPDATE OF workspace_id ON sessions
+WHEN NEW.workspace_id IS NOT OLD.workspace_id
+BEGIN
+  SELECT RAISE(ABORT, 'session workspace_id cannot be changed');
+END;
+
+UPDATE schema_version SET version = 3;
+`;
+
+export const ALL_MIGRATIONS = [MIGRATION_001, MIGRATION_002, MIGRATION_003];
