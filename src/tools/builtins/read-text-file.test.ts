@@ -87,3 +87,16 @@ test("read_text_file strips a repeated workspace directory prefix when the corre
   assert.match(result.path, /traintime_pda-main[\\/]pubspec\.yaml$/);
   assert.equal(result.content, "name: watermeter\n");
 });
+
+test("read_text_file reads an explicitly absolute path outside the workspace", async () => {
+  const { createReadTextFileTool } = await loadModule();
+  const workspaceRoot = await makeWorkspace();
+  const outsideRoot = await makeWorkspace();
+  const outsidePath = join(outsideRoot, "shared.txt");
+  await writeFile(outsidePath, "globally readable\n", "utf8");
+
+  const result = await createReadTextFileTool(workspaceRoot).execute({ path: outsidePath });
+  assertOutput(result);
+  assert.equal(result.path, outsidePath);
+  assert.equal(result.content, "globally readable\n");
+});

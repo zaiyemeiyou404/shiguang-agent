@@ -111,3 +111,16 @@ test("list_directory strips a repeated workspace prefix from absolute paths", as
     [{ name: "lib", kind: "directory" }],
   );
 });
+
+test("list_directory lists an explicitly absolute directory outside the workspace", async () => {
+  const { createListDirectoryTool } = await loadModule();
+  const workspaceRoot = await makeWorkspace();
+  const outsideRoot = await makeWorkspace();
+  await writeFile(join(outsideRoot, "shared.txt"), "shared", "utf8");
+
+  const result = await createListDirectoryTool(workspaceRoot).execute({ path: outsideRoot }) as {
+    entries: Array<{ name: string; path: string }>;
+  };
+  assert.equal(result.entries[0]?.name, "shared.txt");
+  assert.equal(result.entries[0]?.path, join(outsideRoot, "shared.txt"));
+});

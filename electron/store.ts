@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { DesktopSession, DesktopRun, DesktopEvent } from "./types.js";
 import { getShiguangWorkspacePolicy } from "./user-data.js";
+import { DEFAULT_WORKSPACE_ID } from "../dist/state/schema.js";
 
 interface StoreData {
   sessions: DesktopSession[];
@@ -26,7 +27,12 @@ export class DesktopStore {
     try {
       if (existsSync(this.filePath)) {
         const raw = readFileSync(this.filePath, "utf-8");
-        return JSON.parse(raw) as StoreData;
+        const parsed = JSON.parse(raw) as StoreData;
+        parsed.sessions = (parsed.sessions ?? []).map((session) => ({
+          ...session,
+          workspaceId: session.workspaceId || DEFAULT_WORKSPACE_ID,
+        }));
+        return parsed;
       }
     } catch {
     }

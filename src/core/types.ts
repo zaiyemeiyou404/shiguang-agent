@@ -2,11 +2,28 @@ export type SessionStatus = "active" | "paused" | "archived";
 
 export interface Session {
   id: string;
+  workspaceId: string;
   title: string;
   status: SessionStatus;
   createdAt: Date;
   updatedAt: Date;
   summary: string | null;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface Workspace {
+  id: string;
+  projectId: string;
+  name: string;
+  rootPath: string;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 export interface Turn {

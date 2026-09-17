@@ -1,4 +1,6 @@
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
+export const DEFAULT_PROJECT_ID = "project_default";
+export const DEFAULT_WORKSPACE_ID = "workspace_default";
 
 export const MIGRATION_001 = `
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -133,4 +135,39 @@ CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(scope, updated_at);
 CREATE INDEX IF NOT EXISTS idx_memory_links_target ON memory_links(target_type, target_id);
 `;
 
-export const ALL_MIGRATIONS = [MIGRATION_001];
+export const MIGRATION_002 = `
+CREATE TABLE IF NOT EXISTS projects (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS workspaces (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
+  name TEXT NOT NULL,
+  root_path TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+INSERT OR IGNORE INTO projects (id, name)
+VALUES ('${DEFAULT_PROJECT_ID}', '默认项目');
+
+INSERT OR IGNORE INTO workspaces (id, project_id, name, root_path)
+VALUES ('${DEFAULT_WORKSPACE_ID}', '${DEFAULT_PROJECT_ID}', '默认工作区', '');
+
+ALTER TABLE sessions ADD COLUMN workspace_id TEXT REFERENCES workspaces(id);
+
+UPDATE sessions
+SET workspace_id = '${DEFAULT_WORKSPACE_ID}'
+WHERE workspace_id IS NULL OR workspace_id = '';
+
+CREATE INDEX IF NOT EXISTS idx_workspaces_project ON workspaces(project_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_id, updated_at);
+
+UPDATE schema_version SET version = 2;
+`;
+
+export const ALL_MIGRATIONS = [MIGRATION_001, MIGRATION_002];

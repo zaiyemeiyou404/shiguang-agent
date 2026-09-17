@@ -18,10 +18,14 @@ import type {
   DesktopSessionBranchResult,
   DesktopTokenUsage,
   DesktopSessionLlmSettings,
+  DesktopProject,
+  DesktopWorkspace,
+  CreateWorkspaceRequest,
+  CreateSessionRequest,
 } from "./types.js";
 import { Agent } from "../dist/app/agent.js";
 import { RepositoryEventSink } from "../dist/runtime/event-sink.js";
-import type { Approval, Artifact, Memory, Run, RunEvent, Session, Task, Turn } from "../dist/core/types.js";
+import type { Approval, Artifact, Memory, Project, Run, RunEvent, Session, Task, Turn, Workspace } from "../dist/core/types.js";
 import { MemoryService } from "../dist/memory/service.js";
 import { openStateDatabase } from "../dist/state/sqlite.js";
 import { SqliteApprovalRepository } from "../dist/state/sqlite-approval-repository.js";
@@ -30,6 +34,9 @@ import { SqliteMemoryRepository } from "../dist/state/sqlite-memory-repository.j
 import { SqliteRunEventRepository } from "../dist/state/sqlite-run-event-repository.js";
 import { SqliteRunRepository } from "../dist/state/sqlite-run-repository.js";
 import { SqliteSessionRepository } from "../dist/state/sqlite-session-repository.js";
+import { SqliteProjectRepository } from "../dist/state/sqlite-project-repository.js";
+import { SqliteWorkspaceRepository } from "../dist/state/sqlite-workspace-repository.js";
+import { DEFAULT_PROJECT_ID, DEFAULT_WORKSPACE_ID } from "../dist/state/schema.js";
 import { SqliteTaskRepository } from "../dist/state/sqlite-task-repository.js";
 import { SqliteTurnRepository } from "../dist/state/sqlite-turn-repository.js";
 import { createReadTextFileTool } from "../dist/tools/builtins/read-text-file.js";
@@ -318,6 +325,8 @@ export class DesktopAppService {
   private listeners: Set<(event: DesktopEvent) => void> = new Set();
   private activeRunControllers: Map<string, AbortController> = new Map();
   private sessionRepository: SqliteSessionRepository;
+  private projectRepository: SqliteProjectRepository;
+  private workspaceRepository: SqliteWorkspaceRepository;
   private taskRepository: SqliteTaskRepository;
   private runRepository: SqliteRunRepository;
   private runEventRepository: SqliteRunEventRepository;
@@ -336,6 +345,13 @@ export class DesktopAppService {
     const db = openStateDatabase(stateDbPath);
     const memoryDb = openStateDatabase(resolveDedicatedMemoryDatabasePath(workspacePolicy));
     migrateLegacyMemoriesToDedicatedDatabase(stateDbPath, memoryDb);
+    const migratedRoot = resolve(normalize(loadDesktopConfig().workspaceRoot));
+    db.prepare(`
+      UPDATE workspaces SET root_path = ?, updated_at = ?
+      WHERE id = ? AND (root_path IS NULL OR root_path = '')
+    `).run(migratedRoot, new Date().toISOString(), DEFAULT_WORKSPACE_ID);
+    this.projectRepository = new SqliteProjectRepository(db);
+    this.workspaceRepository = new SqliteWorkspaceRepository(db);
     this.sessionRepository = new SqliteSessionRepository(db);
     this.taskRepository = new SqliteTaskRepository(db);
     this.runRepository = new SqliteRunRepository(db);
@@ -345,6 +361,43 @@ export class DesktopAppService {
     this.artifactRepository = new SqliteArtifactRepository(db);
     this.memoryRepository = new SqliteMemoryRepository(memoryDb);
     this.memoryService = new MemoryService(this.memoryRepository);
+  }
+
+  async listProjects(): Promise<DesktopProject[]> {
+    return (await this.projectRepository.list()).map(coreProjectToDesktop);
+  }
+
+  async createProject(name: string): Promise<DesktopProject> {
+    const trimmed = name.trim();
+    if (!trimmed) throw new Error("项目名称不能为空。");
+    const now = new Date();
+    const project: Project = { id: nextId("project"), name: trimmed, createdAt: now, updatedAt: now };
+    await this.projectRepository.create(project);
+    return coreProjectToDesktop(project);
+  }
+
+  async listWorkspaces(): Promise<DesktopWorkspace[]> {
+    return (await this.workspaceRepository.list()).map(coreWorkspaceToDesktop);
+  }
+
+  async createWorkspace(req: CreateWorkspaceRequest): Promise<DesktopWorkspace> {
+    const project = await this.projectRepository.get(req.projectId);
+    if (!project) throw new Error(`项目不存在：${req.projectId}`);
+    const name = req.name.trim();
+    const rootPath = req.rootPath.trim();
+    if (!name) throw new Error("工作区名称不能为空。");
+    if (!rootPath) throw new Error("工作区目录不能为空。");
+    const now = new Date();
+    const workspace: Workspace = {
+      id: nextId("workspace"),
+      projectId: project.id,
+      name,
+      rootPath: resolve(normalize(rootPath)),
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.workspaceRepository.create(workspace);
+    return coreWorkspaceToDesktop(workspace);
   }
 
   async listSessions(): Promise<DesktopSession[]> {
@@ -364,19 +417,17 @@ export class DesktopAppService {
     return testDesktopProviderConnection(req);
   }
 
-  async createSession(title?: string): Promise<DesktopSession> {
+  async createSession(req: CreateSessionRequest): Promise<DesktopSession> {
+    const workspace = await this.workspaceRepository.get(req.workspaceId);
+    if (!workspace) throw new Error(`工作区不存在：${req.workspaceId}`);
     const now = new Date().toISOString();
     const id = nextId("sess");
-    const desktopConfig = loadDesktopConfig();
-    const workspaceRoot = defaultSessionWorkspaceRoot({
-      baseWorkspaceRoot: desktopConfig.workspaceRoot,
-      defaultWorkspaceRoot: getShiguangWorkspacePolicy().defaultWorkspaceRoot,
-      sessionId: id,
-    });
+    const workspaceRoot = resolve(normalize(workspace.rootPath));
     mkdirSync(workspaceRoot, { recursive: true });
     const session: DesktopSession = {
       id,
-      title: title || "New Session",
+      workspaceId: workspace.id,
+      title: req.title?.trim() || "New Session",
       status: "active",
       createdAt: now,
       updatedAt: now,
@@ -404,7 +455,7 @@ export class DesktopAppService {
     await this.ensureSqliteSession(sourceSession);
     const sourceRun = coreRunToDesktop(run);
     const branchTitle = title?.trim() || `${sourceSession.title} · 分支`;
-    const branched = await this.createSession(branchTitle);
+    const branched = await this.createSession({ title: branchTitle, workspaceId: sourceSession.workspaceId });
     const summary = `分支自 ${sourceSession.title} · ${branchStatusLabel(sourceRun.status)}`;
     const updatedAt = new Date().toISOString();
     const branchSession = this.store.updateSession(branched.id, {
@@ -582,12 +633,13 @@ export class DesktopAppService {
   async sendUserMessage(sessionId: string, message: string, attachments: DesktopAttachment[] = []): Promise<DesktopRun> {
     let session = this.store.getSession(sessionId);
     if (!session) {
-      session = await this.createSession("Auto-created session");
+      session = await this.createSession({ title: "Auto-created session", workspaceId: DEFAULT_WORKSPACE_ID });
       sessionId = session.id;
     }
     session = this.ensureSessionWorkspace(session);
     await this.ensureSqliteSession(session);
     session = await this.maybeAutoTitleSession(session, message, attachments);
+    const workspace = await this.requireWorkspace(session.workspaceId);
 
     const runId = nextId("run");
     const now = new Date();
@@ -619,21 +671,9 @@ export class DesktopAppService {
     this.activeRunControllers.set(runId, controller);
 
     const sink = this.createRunEventSink();
-    const workspaceCommandTarget = parseWorkspaceRootCommand(message);
-    if (workspaceCommandTarget) {
-      void this.handleWorkspaceRootCommand({
-        sessionId,
-        task,
-        runId,
-        message,
-        targetPath: workspaceCommandTarget,
-        sink,
-      });
-      return coreRunToDesktop(run);
-    }
 
     (async () => {
-      const { agent, label, workspaceRoot } = await this.createAgentRuntime(sink, session.workspaceRoot ?? undefined, session.llm);
+      const { agent, label, workspaceRoot } = await this.createAgentRuntime(sink, workspace.rootPath, session.llm);
       const currentRunBeforeStart = await this.runRepository.get(runId);
       if (controller.signal.aborted || isRunStoppedByUser(currentRunBeforeStart?.status)) {
         return;
@@ -1071,13 +1111,13 @@ export class DesktopAppService {
     };
   }
 
-  private async createAgentRuntime(sink: RepositoryEventSink, workspaceRootOverride?: string, sessionLlm?: DesktopSessionLlmSettings | null): Promise<{
+  private async createAgentRuntime(sink: RepositoryEventSink, workspacePath: string, sessionLlm?: DesktopSessionLlmSettings | null): Promise<{
     agent: Agent;
     label: string;
     workspaceRoot: string;
   }> {
     const desktopConfig = loadDesktopConfig();
-    const workspaceRoot = resolve(normalize(workspaceRootOverride ?? desktopConfig.workspaceRoot));
+    const workspaceRoot = resolve(normalize(workspacePath));
     mkdirSync(workspaceRoot, { recursive: true });
     const agentProfile = loadProjectAgentProfile(workspaceRoot);
     const sessionLlmConfig = resolveSessionLlmConfig(sessionLlm);
@@ -1284,6 +1324,12 @@ export class DesktopAppService {
     }
   }
 
+  private async requireWorkspace(workspaceId: string): Promise<Workspace> {
+    const workspace = await this.workspaceRepository.get(workspaceId);
+    if (!workspace) throw new Error(`工作区不存在：${workspaceId}`);
+    return workspace;
+  }
+
   private async loadLatestUserMessage(sessionId: string, task: Task): Promise<string> {
     const turns = await this.turnRepository.listBySession(sessionId, 50);
     for (let i = turns.length - 1; i >= 0; i--) {
@@ -1336,9 +1382,10 @@ export class DesktopAppService {
 
     const sink = this.createRunEventSink();
     const session = this.store.getSession(run.sessionId);
-    const sessionWithWorkspace = session ? this.ensureSessionWorkspace(session) : null;
-    const sessionWorkspace = sessionWithWorkspace?.workspaceRoot ?? undefined;
-    const { agent, label, workspaceRoot } = await this.createAgentRuntime(sink, sessionWorkspace, sessionWithWorkspace?.llm);
+    if (!session) return;
+    const workspace = await this.requireWorkspace(session.workspaceId);
+    const sessionWithWorkspace = this.ensureSessionWorkspace(session);
+    const { agent, label, workspaceRoot } = await this.createAgentRuntime(sink, workspace.rootPath, sessionWithWorkspace.llm);
     const userMessage = await this.loadLatestUserMessage(run.sessionId, task);
     const controller = new AbortController();
     this.activeRunControllers.set(run.id, controller);
@@ -2012,11 +2059,37 @@ async function buildHttpError(response: Response, label: string): Promise<string
 function desktopSessionToCore(session: DesktopSession): Session {
   return {
     id: session.id,
+    workspaceId: session.workspaceId,
     title: session.title,
     status: session.status,
     createdAt: new Date(session.createdAt),
     updatedAt: new Date(session.updatedAt),
     summary: session.summary,
+  };
+}
+
+function coreProjectToDesktop(project: Project): DesktopProject {
+  return {
+    id: project.id,
+    name: project.name,
+    createdAt: project.createdAt.toISOString(),
+    updatedAt: project.updatedAt.toISOString(),
+  };
+}
+
+function coreWorkspaceToDesktop(workspace: Workspace): DesktopWorkspace {
+  let available = false;
+  try {
+    available = statSync(workspace.rootPath).isDirectory();
+  } catch {}
+  return {
+    id: workspace.id,
+    projectId: workspace.projectId,
+    name: workspace.name,
+    rootPath: workspace.rootPath,
+    available,
+    createdAt: workspace.createdAt.toISOString(),
+    updatedAt: workspace.updatedAt.toISOString(),
   };
 }
 

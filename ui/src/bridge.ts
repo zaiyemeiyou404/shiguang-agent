@@ -17,6 +17,7 @@ export interface DesktopTokenUsage {
 
 export interface DesktopSession {
   id: string;
+  workspaceId: string;
   title: string;
   status: "active" | "paused" | "archived";
   createdAt: string;
@@ -32,6 +33,38 @@ export interface DesktopSessionLlmSettings {
   provider?: string;
   model?: string;
   maxTokens?: number;
+}
+
+export interface DesktopProject {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DesktopWorkspace {
+  id: string;
+  projectId: string;
+  name: string;
+  rootPath: string;
+  available: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateProjectRequest {
+  name: string;
+}
+
+export interface CreateWorkspaceRequest {
+  projectId: string;
+  name: string;
+  rootPath: string;
+}
+
+export interface CreateSessionRequest {
+  title?: string;
+  workspaceId: string;
 }
 
 export interface DesktopRun {
@@ -229,11 +262,15 @@ export interface DesktopProviderConnectionResult {
 }
 
 export interface ShiguangBridge {
+  listProjects(): Promise<DesktopProject[]>;
+  createProject(req: CreateProjectRequest): Promise<DesktopProject>;
+  listWorkspaces(): Promise<DesktopWorkspace[]>;
+  createWorkspace(req: CreateWorkspaceRequest): Promise<DesktopWorkspace>;
   listSessions(): Promise<DesktopSession[]>;
   getSettings(): Promise<DesktopSettings>;
   saveSettings(settings: DesktopSettings): Promise<DesktopSettings>;
   testProviderConnection(req: DesktopProviderConnectionRequest): Promise<DesktopProviderConnectionResult>;
-  createSession(title?: string): Promise<DesktopSession>;
+  createSession(req: CreateSessionRequest): Promise<DesktopSession>;
   branchSession(req: SessionBranchRequest): Promise<DesktopSessionBranchResult>;
   renameSession(req: SessionRenameRequest): Promise<DesktopSession>;
   updateSessionStatus(req: SessionStatusRequest): Promise<DesktopSession>;

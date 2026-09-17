@@ -1,7 +1,8 @@
 import { readdirSync, statSync } from "node:fs";
 import { basename, relative, resolve } from "node:path";
 import type { Tool, ToolExecutionContext } from "../types.js";
-import { resolveWorkspacePath } from "./path-format.js";
+import { isPathInside, resolveReadablePath } from "./path-policy.js";
+import { toPortablePath } from "./path-format.js";
 
 export interface ListDirectoryInput {
   path?: string;
@@ -38,11 +39,11 @@ export function createListDirectoryTool(workspaceRoot: string): Tool {
   return {
     descriptor: {
       name: "list_directory",
-      description: "List files and subdirectories inside a workspace directory. Accepts a path string or { path }.",
+      description: "List a workspace-relative directory or an explicit absolute directory allowed by the operating system.",
       inputSchema: {
         type: "object",
         properties: {
-          path: { type: "string", description: "Relative or absolute directory path inside workspace root" },
+          path: { type: "string", description: "Workspace-relative directory or explicit absolute directory" },
         },
       },
       risk: "read",
@@ -52,7 +53,7 @@ export function createListDirectoryTool(workspaceRoot: string): Tool {
     async execute(input: unknown, context?: ToolExecutionContext): Promise<ListDirectoryOutput> {
       throwIfAborted(context?.signal);
       const requestedPath = resolveInput(input);
-      const fullPath = resolveWorkspacePath(workspaceRoot, requestedPath);
+      const fullPath = resolveReadablePath(workspaceRoot, requestedPath);
       const dirStat = statSync(fullPath);
       if (!dirStat.isDirectory()) {
         throw new Error(`list_directory: path is not a directory: ${requestedPath}`);
@@ -64,7 +65,9 @@ export function createListDirectoryTool(workspaceRoot: string): Tool {
           const stats = statSync(childPath);
           return {
             name,
-            path: relative(workspaceRoot, childPath) || basename(childPath),
+            path: isPathInside(workspaceRoot, childPath)
+              ? toPortablePath(relative(workspaceRoot, childPath) || basename(childPath))
+              : childPath,
             kind: stats.isDirectory() ? "directory" as const : "file" as const,
             size: stats.size,
           };

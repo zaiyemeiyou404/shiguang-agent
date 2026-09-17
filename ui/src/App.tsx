@@ -1,7 +1,7 @@
 import { type CSSProperties, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useDesktopSessions, useRunEvents } from "./hooks/useDesktopSessions";
 import { getDesktopBridge, getDesktopBridgeErrorMessage, requireDesktopBridge } from "./bridge";
-import type { DesktopSession, DesktopRun, DesktopConversationEntry, DesktopEvent, DesktopSettings, DesktopApproval, DesktopArtifact, DesktopProviderConnectionResult, DesktopAttachment, DesktopTokenUsage, DesktopSessionLlmSettings, ToolApprovalMode } from "./bridge";
+import type { DesktopSession, DesktopRun, DesktopConversationEntry, DesktopEvent, DesktopSettings, DesktopApproval, DesktopArtifact, DesktopProviderConnectionResult, DesktopAttachment, DesktopTokenUsage, DesktopSessionLlmSettings, DesktopProject, ToolApprovalMode } from "./bridge";
 
 type PillVariant = "progress" | "safe" | "auto" | "todo";
 type BannerVariant = "info" | "warn" | "danger" | "success";
@@ -215,6 +215,16 @@ function IconBtn({ label, children, onClick }: { label: string; children: React.
   return <button className="icon-btn" type="button" aria-label={label} onClick={onClick}>{children}</button>;
 }
 
+function BrandGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="3.5" y="5" width="14" height="13" rx="2.5" />
+      <path d="M3.5 9h14" />
+      <path className="brand-glyph-spark" d="m19.2 3 .7 1.8 2.1.7-2.1.8-.7 1.9-.8-1.9-2-.8 2-.7.8-1.8Z" />
+    </svg>
+  );
+}
+
 function ToolBtn({ primary, children, onClick }: { primary?: boolean; children: React.ReactNode; onClick?: () => void }) {
   return <button className={`tool-btn${primary ? " primary" : ""}`} type="button" onClick={onClick}>{children}</button>;
 }
@@ -354,6 +364,71 @@ function NewSessionDialog({
         <div className="dialog-actions">
           <ToolBtn onClick={onClose}>取消</ToolBtn>
           <ToolBtn primary onClick={onSubmit}>{saving ? "创建中..." : "创建会话"}</ToolBtn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NewWorkspaceDialog({
+  open,
+  projects,
+  projectId,
+  newProjectName,
+  name,
+  rootPath,
+  saving,
+  error,
+  onProjectChange,
+  onNewProjectNameChange,
+  onNameChange,
+  onRootPathChange,
+  onClose,
+  onSubmit,
+}: {
+  open: boolean;
+  projects: DesktopProject[];
+  projectId: string;
+  newProjectName: string;
+  name: string;
+  rootPath: string;
+  saving: boolean;
+  error: string | null;
+  onProjectChange: (value: string) => void;
+  onNewProjectNameChange: (value: string) => void;
+  onNameChange: (value: string) => void;
+  onRootPathChange: (value: string) => void;
+  onClose: () => void;
+  onSubmit: () => void;
+}) {
+  if (!open) return null;
+  return (
+    <div className="dialog-backdrop" onClick={onClose}>
+      <div className="dialog-card" onClick={(event) => event.stopPropagation()}>
+        <div className="dialog-head">
+          <div>
+            <h3>添加工作区</h3>
+            <p className="muted">这个目录将成为新任务的文件修改边界。</p>
+          </div>
+          <IconBtn label="关闭" onClick={onClose}>×</IconBtn>
+        </div>
+        <div className="dialog-body workspace-dialog-fields">
+          <label className="tiny">所属项目</label>
+          <select className="settings-input" value={projectId} onChange={(event) => onProjectChange(event.target.value)}>
+            {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+          </select>
+          <label className="tiny">或新建项目（可选）</label>
+          <input className="settings-input" value={newProjectName} onChange={(event) => onNewProjectNameChange(event.target.value)} placeholder="留空则使用上面选择的项目" />
+          <label className="tiny">工作区名称</label>
+          <input className="settings-input" value={name} onChange={(event) => onNameChange(event.target.value)} placeholder="例如：拾光桌面端" />
+          <label className="tiny">本地目录</label>
+          <input className="settings-input" value={rootPath} onChange={(event) => onRootPathChange(event.target.value)} placeholder="例如：G:\\projects\\shiguang-agent" />
+          <p className="muted">读取可使用系统允许的绝对路径；写入、移动和删除仍限制在这里。</p>
+          {error ? <GlobalBanner variant="danger" title="创建工作区失败" detail={error} /> : null}
+        </div>
+        <div className="dialog-actions">
+          <ToolBtn onClick={onClose}>取消</ToolBtn>
+          <ToolBtn primary onClick={onSubmit}>{saving ? "创建中..." : "创建工作区"}</ToolBtn>
         </div>
       </div>
     </div>
@@ -4495,7 +4570,7 @@ function SettingsDrawer({
     { label: "默认模型", current: formatSettingsValue(providerDraft.model), saved: formatSettingsValue(selectedSavedDraft.model) },
   ].filter((item) => item.current !== item.saved);
   const runtimeDiffItems = [
-    { label: "默认工作目录", current: formatSettingsValue(workspaceRoot), saved: formatSettingsValue(settings.workspaceRoot) },
+    { label: "旧版默认目录", current: formatSettingsValue(workspaceRoot), saved: formatSettingsValue(settings.workspaceRoot) },
     { label: "当前 Provider", current: activeProvider, saved: savedRuntimeProvider },
     { label: "运行模型", current: formatSettingsValue(activeModel), saved: formatSettingsValue(savedRuntimeModel) },
     { label: "运行 maxTokens", current: formatSettingsValue(maxTokens), saved: formatSettingsValue(savedRuntimeMaxTokens) },
@@ -4799,11 +4874,9 @@ function SettingsDrawer({
           <div className="section-title"><h3>当前配置</h3><span className="tiny">{settings.configPath}</span></div>
           <div className="settings-inline-grid">
             <div>
-              <label className="tiny">默认工作目录</label>
-              <input className="settings-input" value={workspaceRoot} onChange={(e) => setWorkspaceRoot(e.target.value)} />
-              <p className="muted" style={{ margin: "8px 0 0" }}>
-                新会话会从这里开始；当前会话如已切换项目目录，会优先使用自己的会话目录。
-              </p>
+              <label className="tiny">旧版默认目录（仅迁移兼容）</label>
+              <input className="settings-input" value={workspaceRoot} readOnly />
+              <p className="muted">实际修改范围由左侧当前工作区决定，不再由这里统一切换。</p>
             </div>
             <div>
               <label className="tiny">当前 Provider</label>
@@ -5061,7 +5134,7 @@ function SettingsDrawer({
 export default function App() {
   const desktopBridge = getDesktopBridge();
   const hostMismatch = !desktopBridge;
-  const { sessions, activeSessionId, detail, workspaceSnapshot, activeRunId, setActiveRunId, loading, sessionError, detailError, createSession, branchSession, renameSession, updateSessionStatus, deleteSession, selectSession, refreshSessions, refreshDetail } = useDesktopSessions();
+  const { projects, workspaces, activeWorkspaceId, setActiveWorkspaceId, sessions, activeSessionId, detail, workspaceSnapshot, activeRunId, setActiveRunId, loading, sessionError, detailError, createProject, createWorkspace, createSession, branchSession, renameSession, updateSessionStatus, deleteSession, selectSession, refreshSessions, refreshDetail } = useDesktopSessions();
   const [inputText, setInputText] = useState("");
   const [sessionDrafts, setSessionDrafts] = useState<Record<string, string>>(() => readSessionDrafts());
   const [sending, setSending] = useState(false);
@@ -5087,6 +5160,13 @@ export default function App() {
   const [newSessionTitle, setNewSessionTitle] = useState("新会话");
   const [newSessionError, setNewSessionError] = useState<string | null>(null);
   const [creatingSession, setCreatingSession] = useState(false);
+  const [newWorkspaceOpen, setNewWorkspaceOpen] = useState(false);
+  const [newWorkspaceProjectId, setNewWorkspaceProjectId] = useState("");
+  const [newWorkspaceProjectName, setNewWorkspaceProjectName] = useState("");
+  const [newWorkspaceName, setNewWorkspaceName] = useState("");
+  const [newWorkspaceRoot, setNewWorkspaceRoot] = useState("");
+  const [newWorkspaceError, setNewWorkspaceError] = useState<string | null>(null);
+  const [creatingWorkspace, setCreatingWorkspace] = useState(false);
   const [sessionQuery, setSessionQuery] = useState("");
   const [sessionView, setSessionView] = useState<"all" | "pinned" | "attention" | "active" | "archived">("all");
   const [pinnedSessionIds, setPinnedSessionIds] = useState<string[]>(() => readPinnedSessions());
@@ -5166,18 +5246,14 @@ export default function App() {
     return buildComposerModelOptions(settings, providerKey, modelLabel);
   }, [modelLabel, providerKey, settings]);
   const composerModelSelectValue = composerModelValue(providerKey, modelLabel);
-  const defaultWorkspaceLabel = settings?.workspaceRoot?.trim() || "未设置";
-  const sessionWorkspaceLabel = detail?.session.workspaceRoot?.trim() || defaultWorkspaceLabel;
-  const workspaceLabel = sessionWorkspaceLabel;
-  const hasWorkspace = workspaceLabel !== "未设置";
-  const sessionHasOwnWorkspace = Boolean(detail?.session.workspaceRoot?.trim())
-    && !sameDisplayPath(detail?.session.workspaceRoot, defaultWorkspaceLabel);
-  const workspaceModeLabel = sessionHasOwnWorkspace ? "当前会话目录" : "默认目录";
-  const workspaceStatusDetail = isHiddenSessionWorkspace(workspaceLabel)
-    ? `${workspaceLabel} · 旧版隐藏会话目录，重新打开后会自动纠正`
-    : sessionHasOwnWorkspace
-      ? `${workspaceLabel} · 本会话已单独切换`
-      : workspaceLabel;
+  const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null;
+  const activeProject = projects.find((project) => project.id === activeWorkspace?.projectId) ?? null;
+  const workspaceLabel = activeWorkspace?.rootPath || "未设置";
+  const hasWorkspace = Boolean(activeWorkspace?.available);
+  const workspaceModeLabel = "当前工作区";
+  const workspaceStatusDetail = activeWorkspace?.available
+    ? workspaceLabel
+    : `${workspaceLabel} · 目录不可用`;
   const runtimeLabel = activeRun ? formatRunStatus(activeRun.status) : (activeSessionId ? "就绪" : "无会话");
   const streamLabel = formatStreamStateLabel(activeRunId ? streamState : "idle");
   const streamDetail = !activeRunId
@@ -5210,6 +5286,15 @@ export default function App() {
       return true;
     });
   }, [pinnedSessionIds, sessionQuery, sessionView, sortedSessions]);
+  const workspaceGroups = useMemo(() => projects.map((project) => ({
+    project,
+    workspaces: workspaces
+      .filter((workspace) => workspace.projectId === project.id)
+      .map((workspace) => ({
+        workspace,
+        sessions: filteredSessions.filter((session) => session.workspaceId === workspace.id),
+      })),
+  })), [filteredSessions, projects, workspaces]);
   const latestSession = sortedSessions[0] ?? null;
   const pinnedSessions = sortedSessions.filter((session) => pinnedSessionIds.includes(session.id));
   const focusSessions = sortedSessions.filter((session) => session.attention?.hasPendingApproval || session.attention?.hasFailedRun || session.attention?.hasRunningRun);
@@ -5655,15 +5740,53 @@ export default function App() {
   };
 
   const handleCreateSession = () => {
+    if (!activeWorkspaceId) {
+      handleCreateWorkspace();
+      return;
+    }
     setNewSessionTitle("新会话");
     setNewSessionError(null);
     setNewSessionOpen(true);
   };
 
+  const handleCreateWorkspace = () => {
+    const projectId = activeProject?.id ?? projects[0]?.id ?? "";
+    setNewWorkspaceProjectId(projectId);
+    setNewWorkspaceProjectName("");
+    setNewWorkspaceName("");
+    setNewWorkspaceRoot("");
+    setNewWorkspaceError(null);
+    setNewWorkspaceOpen(true);
+  };
+
+  const submitCreateWorkspace = async () => {
+    setCreatingWorkspace(true);
+    try {
+      const projectId = newWorkspaceProjectName.trim()
+        ? (await createProject(newWorkspaceProjectName.trim())).id
+        : newWorkspaceProjectId;
+      const workspace = await createWorkspace({
+        projectId,
+        name: newWorkspaceName,
+        rootPath: newWorkspaceRoot,
+      });
+      setActiveWorkspaceId(workspace.id);
+      setNewWorkspaceOpen(false);
+      setNewWorkspaceError(null);
+      setActionError(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setNewWorkspaceError(message);
+      setActionError(`创建工作区失败：${message}`);
+    } finally {
+      setCreatingWorkspace(false);
+    }
+  };
+
   const submitCreateSession = async () => {
     setCreatingSession(true);
     try {
-      await createSession(newSessionTitle.trim() || undefined);
+      await createSession(newSessionTitle.trim() || undefined, activeWorkspaceId);
       setActionError(null);
       setNewSessionError(null);
       setNewSessionOpen(false);
@@ -5895,7 +6018,7 @@ export default function App() {
           <section className="panel" style={{ maxWidth: 760, margin: "0 auto", display: "grid", gap: 16 }}>
             <div className="brand" style={{ paddingBottom: 0 }}>
               <div className="brand-badge">
-                <div className="brand-mark">拾</div>
+                <div className="brand-mark"><BrandGlyph /></div>
                 <div>
                   <h1>拾光 Agent</h1>
                   <p>需要桌面宿主</p>
@@ -5950,6 +6073,25 @@ export default function App() {
         }}
         onSubmit={() => { void submitCreateSession(); }}
       />
+      <NewWorkspaceDialog
+        open={newWorkspaceOpen}
+        projects={projects}
+        projectId={newWorkspaceProjectId}
+        newProjectName={newWorkspaceProjectName}
+        name={newWorkspaceName}
+        rootPath={newWorkspaceRoot}
+        saving={creatingWorkspace}
+        error={newWorkspaceError}
+        onProjectChange={setNewWorkspaceProjectId}
+        onNewProjectNameChange={setNewWorkspaceProjectName}
+        onNameChange={setNewWorkspaceName}
+        onRootPathChange={setNewWorkspaceRoot}
+        onClose={() => {
+          if (creatingWorkspace) return;
+          setNewWorkspaceOpen(false);
+        }}
+        onSubmit={() => { void submitCreateWorkspace(); }}
+      />
       <SessionLifecycleDialog
         open={sessionLifecycleOpen}
         mode={sessionLifecycleMode}
@@ -5969,7 +6111,11 @@ export default function App() {
         <div className="app simple-layout" style={{ "--session-pane-w": `${sessionPaneWidth}px` } as CSSProperties}>
           <aside className="panel app-nav-panel">
             <div className="app-nav-top">
-              <div className="brand-mark">S</div>
+              <div className="brand-mark"><BrandGlyph /></div>
+              <div className="app-nav-copy">
+                <strong>拾光</strong>
+                <span>Agent</span>
+              </div>
             </div>
 
             <div className="app-nav-group">
@@ -5997,11 +6143,12 @@ export default function App() {
           <aside className="panel session-pane">
             <div className="session-pane-header">
               <div>
-                <span className="tiny">My Workspace</span>
-                <h2>拾光 Agent</h2>
-                <p>{providerLabel} · {modelLabel}</p>
+                <span className="tiny">{activeProject?.name ?? "项目"}</span>
+                <h2>{activeWorkspace?.name ?? "选择工作区"}</h2>
+                <p className={activeWorkspace?.available ? "" : "workspace-unavailable"}>{activeWorkspace?.available ? workspaceLabel : `${workspaceLabel} · 目录不可用`}</p>
               </div>
               <div className="session-pane-header-actions">
+                <IconBtn label="添加工作区" onClick={handleCreateWorkspace}>◇</IconBtn>
                 <IconBtn label="设置" onClick={openSettings}>⚙</IconBtn>
                 <IconBtn label="新建会话" onClick={handleCreateSession}>＋</IconBtn>
               </div>
@@ -6056,18 +6203,45 @@ export default function App() {
               {sessions.length > 0 && filteredSessions.length === 0 ? (
                 <p className="muted" style={{ padding: 16 }}>当前筛选下没有会话，换个关键词或视图试试。</p>
               ) : null}
-              {filteredSessions.map((session) => (
-                <SessionCard
-                  key={session.id}
-                  active={session.id === activeSessionId}
-                  pinned={pinnedSessionIds.includes(session.id)}
-                  session={session}
-                  onClick={() => {
-                    selectSession(session.id);
-                    setSurface("running");
-                  }}
-                  onTogglePin={() => toggleSessionPin(session.id)}
-                />
+              {workspaceGroups.map(({ project, workspaces: projectWorkspaces }) => (
+                <section className="project-group" key={project.id}>
+                  <div className="project-group-title"><span>{project.name}</span><small>{projectWorkspaces.length}</small></div>
+                  {projectWorkspaces.map(({ workspace, sessions: workspaceSessions }) => (
+                    <div className={`workspace-group${workspace.id === activeWorkspaceId ? " active" : ""}`} key={workspace.id}>
+                      <button className="workspace-group-head" type="button" onClick={() => setActiveWorkspaceId(workspace.id)}>
+                        <span className="workspace-group-icon">◇</span>
+                        <span className="workspace-group-copy">
+                          <strong>{workspace.name}</strong>
+                          <small>{workspace.available ? workspace.rootPath : "目录不可用"}</small>
+                        </span>
+                        <span className={`workspace-state-dot${workspace.available ? "" : " unavailable"}`} />
+                      </button>
+                      <div className="workspace-session-list">
+                        {workspaceSessions.map((session) => (
+                          <SessionCard
+                            key={session.id}
+                            active={session.id === activeSessionId}
+                            pinned={pinnedSessionIds.includes(session.id)}
+                            session={session}
+                            onClick={() => {
+                              selectSession(session.id);
+                              setSurface("running");
+                            }}
+                            onTogglePin={() => toggleSessionPin(session.id)}
+                          />
+                        ))}
+                        {workspaceSessions.length === 0 && sessionQuery.trim() === "" && sessionView === "all" ? (
+                          <button className="workspace-empty-task" type="button" onClick={() => {
+                            setActiveWorkspaceId(workspace.id);
+                            setNewSessionTitle("新会话");
+                            setNewSessionError(null);
+                            setNewSessionOpen(true);
+                          }}>＋ 新建任务</button>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                </section>
               ))}
             </div>
           </aside>
@@ -6083,7 +6257,7 @@ export default function App() {
           <main className="panel main chat-pane">
             <header className="chat-pane-header">
               <div className="chat-pane-title">
-                <span className="tiny">{showChatView ? "当前会话" : "会话中心"}</span>
+                <span className="tiny">{showChatView ? `${activeProject?.name ?? "项目"} / ${activeWorkspace?.name ?? "工作区"}` : "会话中心"}</span>
                 <h2>{surfaceTitle}</h2>
                 <p>{showChatView ? surfaceSubtitle : "保留会话、聊天和设置三件事，点开会话就能继续。"}</p>
               </div>

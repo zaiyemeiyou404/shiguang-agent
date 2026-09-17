@@ -73,3 +73,15 @@ test("stat_path rejects missing files with a clear error", async () => {
     /not found|not readable/i,
   );
 });
+
+test("stat_path inspects an explicitly absolute path outside the workspace", async () => {
+  const { createStatPathTool } = await loadModule();
+  const workspaceRoot = await makeWorkspace();
+  const outsideRoot = await makeWorkspace();
+  const outsidePath = join(outsideRoot, "shared.txt");
+  await writeFile(outsidePath, "shared", "utf8");
+
+  const result = await createStatPathTool(workspaceRoot).execute({ path: outsidePath }) as { path: string; name: string };
+  assert.equal(result.path.replaceAll("/", "\\"), outsidePath.replaceAll("/", "\\"));
+  assert.equal(result.name, "shared.txt");
+});

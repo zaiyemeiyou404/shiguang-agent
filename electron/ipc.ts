@@ -1,8 +1,13 @@
 import { ipcMain } from "electron";
 import type { DesktopAppService } from "./app-service.js";
-import type { SendMessageRequest, DesktopSettings, ApprovalDecisionRequest, RunActionRequest, DesktopProviderConnectionRequest, SessionRenameRequest, SessionStatusRequest, SessionWorkspaceRequest, SessionLlmRequest, SessionDeleteRequest, SessionBranchRequest, ArtifactActionRequest } from "./types.js";
+import type { SendMessageRequest, DesktopSettings, ApprovalDecisionRequest, RunActionRequest, DesktopProviderConnectionRequest, SessionRenameRequest, SessionStatusRequest, SessionWorkspaceRequest, SessionLlmRequest, SessionDeleteRequest, SessionBranchRequest, ArtifactActionRequest, CreateProjectRequest, CreateWorkspaceRequest, CreateSessionRequest } from "./types.js";
 
 export function registerIpcHandlers(service: DesktopAppService): void {
+  ipcMain.handle("listProjects", () => service.listProjects());
+  ipcMain.handle("createProject", (_event, req: CreateProjectRequest) => service.createProject(req.name));
+  ipcMain.handle("listWorkspaces", () => service.listWorkspaces());
+  ipcMain.handle("createWorkspace", (_event, req: CreateWorkspaceRequest) => service.createWorkspace(req));
+
   ipcMain.handle("listSessions", () => {
     return service.listSessions();
   });
@@ -19,8 +24,8 @@ export function registerIpcHandlers(service: DesktopAppService): void {
     return service.testProviderConnection(req);
   });
 
-  ipcMain.handle("createSession", (_event, title?: string) => {
-    return service.createSession(title);
+  ipcMain.handle("createSession", (_event, req: CreateSessionRequest) => {
+    return service.createSession(req);
   });
 
   ipcMain.handle("branchSession", (_event, req: SessionBranchRequest) => {

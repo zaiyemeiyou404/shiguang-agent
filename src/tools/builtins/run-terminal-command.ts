@@ -96,7 +96,7 @@ export function createRunTerminalCommandTool(workspaceRoot: string): Tool {
   return {
     descriptor: {
       name: "run_terminal_command",
-      description: "Run a shell command. Mutating commands must run inside the workspace; obvious read-only commands may use an external cwd. Accepts { command, cwd?, timeoutMs? } and returns exit code plus stdout/stderr.",
+      description: "Run a shell command. Mutating commands must run inside the workspace; obvious read-only commands may use an external cwd. This is not a filesystem sandbox: absolute paths may affect files outside it, so approval is always required. Accepts { command, cwd?, timeoutMs? } and returns exit code plus stdout/stderr.",
       inputSchema: {
         type: "object",
         properties: {

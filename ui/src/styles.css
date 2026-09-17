@@ -2925,6 +2925,193 @@ body::before {
   padding-right: 4px;
 }
 
+.brand-mark svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.65;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.brand-glyph-spark {
+  fill: #f3a35c;
+  stroke: #f3a35c;
+}
+
+.workspace-dialog-fields {
+  display: grid;
+  gap: 9px;
+}
+
+.project-group {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 11px;
+}
+
+.project-group-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 7px;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: .055em;
+  text-transform: uppercase;
+}
+
+.project-group-title small {
+  font-size: 10px;
+  opacity: .7;
+}
+
+.workspace-group {
+  display: grid;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+}
+
+.workspace-group.active {
+  border-color: rgba(243, 163, 92, .18);
+  background: rgba(243, 163, 92, .035);
+}
+
+.workspace-group-head {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 8px;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 7px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-soft);
+  text-align: left;
+  cursor: pointer;
+}
+
+.workspace-group-head:hover {
+  background: rgba(255, 255, 255, .035);
+}
+
+.workspace-group-icon {
+  color: #f3a35c;
+  font-size: 15px;
+}
+
+.workspace-group-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.workspace-group-copy strong {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-group-copy small {
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-state-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #54c98b;
+  box-shadow: 0 0 10px rgba(84, 201, 139, .5);
+}
+
+.workspace-state-dot.unavailable {
+  background: #e27b73;
+  box-shadow: none;
+}
+
+.workspace-unavailable {
+  color: #e27b73 !important;
+}
+
+.workspace-session-list {
+  display: grid;
+  gap: 2px;
+  padding-left: 20px;
+}
+
+.workspace-session-list .session-card {
+  min-height: 34px;
+  padding: 6px 8px;
+  border-color: transparent;
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.workspace-session-list .session-card:hover {
+  transform: none;
+  background: rgba(255, 255, 255, .04);
+}
+
+.workspace-session-list .session-card.active {
+  border-color: rgba(243, 163, 92, .18);
+  background: linear-gradient(90deg, rgba(243, 163, 92, .14), rgba(243, 163, 92, .025));
+  box-shadow: inset 2px 0 0 #f3a35c;
+}
+
+.workspace-session-list .session-preview,
+.workspace-session-list .session-card-meta {
+  display: none;
+}
+
+.workspace-session-list .session-name {
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.workspace-session-list .session-card-status {
+  font-size: 10px;
+}
+
+.workspace-session-list .session-pin-btn {
+  width: 18px;
+  height: 18px;
+  opacity: 0;
+}
+
+.workspace-session-list .session-card:hover .session-pin-btn,
+.workspace-session-list .session-pin-btn.active {
+  opacity: 1;
+}
+
+.workspace-empty-task {
+  height: 30px;
+  padding: 0 8px;
+  border: 1px dashed rgba(122, 141, 168, .12);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim);
+  text-align: left;
+  cursor: pointer;
+}
+
+.workspace-empty-task:hover {
+  color: #f3a35c;
+  border-color: rgba(243, 163, 92, .24);
+}
+
 .chat-pane {
   padding: 0;
   min-height: 0;

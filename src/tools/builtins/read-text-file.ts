@@ -1,6 +1,6 @@
 import { accessSync, readFileSync, constants } from "node:fs";
 import type { Tool, ToolExecutionContext } from "../types.js";
-import { resolveWorkspacePath } from "./path-format.js";
+import { resolveReadablePath } from "./path-policy.js";
 
 const MAX_BYTES = 16_384;
 
@@ -34,11 +34,11 @@ export function createReadTextFileTool(workspaceRoot: string): Tool {
   return {
     descriptor: {
       name: "read_text_file",
-      description: "Read text content from a file within the workspace. Accepts a path string or { path } object.",
+      description: "Read text content from a workspace-relative path or an explicit absolute path allowed by the operating system.",
       inputSchema: {
         type: "object",
         properties: {
-          path: { type: "string", description: "Relative or absolute path inside workspace root" },
+          path: { type: "string", description: "Workspace-relative path or explicit absolute path" },
         },
         required: ["path"],
       },
@@ -49,7 +49,7 @@ export function createReadTextFileTool(workspaceRoot: string): Tool {
     async execute(input: unknown, context?: ToolExecutionContext): Promise<ReadTextFileOutput> {
       throwIfAborted(context?.signal);
       const rawPath = resolveInput(input);
-      const fullPath = resolveWorkspacePath(workspaceRoot, rawPath);
+      const fullPath = resolveReadablePath(workspaceRoot, rawPath);
       throwIfAborted(context?.signal);
 
       try {

@@ -1,7 +1,8 @@
 import { accessSync, constants, statSync } from "node:fs";
 import { basename } from "node:path";
 import type { Tool, ToolExecutionContext } from "../types.js";
-import { resolveWorkspacePath, toPortablePath } from "./path-format.js";
+import { toPortablePath } from "./path-format.js";
+import { resolveReadablePath } from "./path-policy.js";
 
 export interface StatPathOutput {
   path: string;
@@ -29,11 +30,11 @@ export function createStatPathTool(workspaceRoot: string): Tool {
   return {
     descriptor: {
       name: "stat_path",
-      description: "Return basic metadata for a file or directory inside the workspace. Accepts a path string or { path }.",
+      description: "Return metadata for a workspace-relative path or an explicit absolute path allowed by the operating system.",
       inputSchema: {
         type: "object",
         properties: {
-          path: { type: "string", description: "Relative or absolute path inside workspace root" },
+          path: { type: "string", description: "Workspace-relative path or explicit absolute path" },
         },
         required: ["path"],
       },
@@ -44,7 +45,7 @@ export function createStatPathTool(workspaceRoot: string): Tool {
     async execute(input: unknown, context?: ToolExecutionContext): Promise<StatPathOutput> {
       throwIfAborted(context?.signal);
       const rawPath = resolveInput(input);
-      const fullPath = resolveWorkspacePath(workspaceRoot, rawPath);
+      const fullPath = resolveReadablePath(workspaceRoot, rawPath);
       try {
         accessSync(fullPath, constants.R_OK);
       } catch {

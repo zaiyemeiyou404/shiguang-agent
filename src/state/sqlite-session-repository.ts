@@ -5,6 +5,7 @@ import { openStateDatabase } from "./sqlite.js";
 
 type SessionRow = {
   id: string;
+  workspace_id: string;
   title: string;
   status: Session["status"];
   created_at: string;
@@ -14,6 +15,7 @@ type SessionRow = {
 
 const SESSION_COLUMNS = `
   id,
+  workspace_id,
   title,
   status,
   created_at,
@@ -22,6 +24,7 @@ const SESSION_COLUMNS = `
 `;
 
 const PATCH_COLUMNS = {
+  workspaceId: "workspace_id",
   title: "title",
   status: "status",
   createdAt: "created_at",
@@ -41,16 +44,18 @@ export class SqliteSessionRepository implements SessionRepository {
       .prepare(`
         INSERT INTO sessions (
           id,
+          workspace_id,
           title,
           status,
           created_at,
           updated_at,
           summary
         )
-        VALUES (?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         session.id,
+        session.workspaceId,
         session.title,
         session.status,
         toSqlDate(session.createdAt),
@@ -101,6 +106,7 @@ export class SqliteSessionRepository implements SessionRepository {
 function rowToSession(row: SessionRow): Session {
   return {
     id: row.id,
+    workspaceId: row.workspace_id,
     title: row.title,
     status: row.status,
     createdAt: new Date(row.created_at),

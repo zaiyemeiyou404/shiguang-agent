@@ -5,14 +5,21 @@ import type {
   DesktopSettings,
   DesktopProviderConnectionRequest,
   DesktopProviderConnectionResult,
+  CreateProjectRequest,
+  CreateWorkspaceRequest,
+  CreateSessionRequest,
 } from "./types.js";
 
 const bridge: ShiguangBridge = {
+  listProjects: () => ipcRenderer.invoke("listProjects"),
+  createProject: (req: CreateProjectRequest) => ipcRenderer.invoke("createProject", req),
+  listWorkspaces: () => ipcRenderer.invoke("listWorkspaces"),
+  createWorkspace: (req: CreateWorkspaceRequest) => ipcRenderer.invoke("createWorkspace", req),
   listSessions: () => ipcRenderer.invoke("listSessions"),
   getSettings: () => ipcRenderer.invoke("getSettings") as Promise<DesktopSettings>,
   saveSettings: (settings: DesktopSettings) => ipcRenderer.invoke("saveSettings", settings) as Promise<DesktopSettings>,
   testProviderConnection: (req: DesktopProviderConnectionRequest) => ipcRenderer.invoke("testProviderConnection", req) as Promise<DesktopProviderConnectionResult>,
-  createSession: (title?: string) => ipcRenderer.invoke("createSession", title),
+  createSession: (req: CreateSessionRequest) => ipcRenderer.invoke("createSession", req),
   branchSession: (req) => ipcRenderer.invoke("branchSession", req),
   renameSession: (req) => ipcRenderer.invoke("renameSession", req),
   updateSessionStatus: (req) => ipcRenderer.invoke("updateSessionStatus", req),

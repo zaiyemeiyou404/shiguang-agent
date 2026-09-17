@@ -7,6 +7,7 @@ import * as assert from "node:assert/strict";
 type TerminalTool = {
   descriptor: {
     name: string;
+    description: string;
     effects?: {
       validationMode?: string;
     };
@@ -54,6 +55,8 @@ test("run_terminal_command executes a workspace command", async () => {
   const { createRunTerminalCommandTool } = await loadModule();
   const workspaceRoot = await makeWorkspace();
   const tool = createRunTerminalCommandTool(workspaceRoot);
+  assert.equal(tool.descriptor.requiresApproval, true);
+  assert.match(tool.descriptor.description, /not a filesystem sandbox/i);
 
   assert.equal(tool.descriptor.name, "run_terminal_command");
   assert.equal(tool.descriptor.effects?.validationMode, "all");

@@ -1,7 +1,8 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { resolve, normalize, relative, join, extname } from "node:path";
+import { relative, join, extname } from "node:path";
 import type { Tool, ToolExecutionContext } from "../types.js";
 import { toPortablePath } from "./path-format.js";
+import { isPathInside, resolveReadablePath } from "./path-policy.js";
 
 const MAX_RESULTS = 15;
 const MAX_SNIPPET_BYTES = 512;
@@ -24,6 +25,7 @@ function isTextFile(name: string): boolean {
 
 export interface SearchWorkspaceInput {
   query: string;
+  path?: string;
 }
 
 export interface SearchWorkspaceResult {
@@ -39,13 +41,15 @@ export interface SearchWorkspaceOutput {
   filesScanned: number;
 }
 
-function resolveInput(input: unknown): string {
-  if (typeof input === "string") return input;
+function resolveInput(input: unknown): SearchWorkspaceInput {
+  if (typeof input === "string") return { query: input };
   if (input && typeof input === "object") {
     const obj = input as Record<string, unknown>;
-    if (typeof obj.query === "string") return obj.query;
+    if (typeof obj.query === "string" && (obj.path === undefined || typeof obj.path === "string")) {
+      return { query: obj.query, path: obj.path as string | undefined };
+    }
   }
-  throw new Error("search_workspace: input must be a string query or { query: string }");
+  throw new Error("search_workspace: input must be a string query or { query: string, path?: string }");
 }
 
 function walkDir(dirPath: string, results: SearchWorkspaceResult[], query: string, workspaceRoot: string, depth: number): number {
@@ -82,7 +86,9 @@ function walkDir(dirPath: string, results: SearchWorkspaceResult[], query: strin
         const lines = content.split("\n");
         for (let i = 0; i < lines.length; i++) {
           if (lines[i]!.toLowerCase().includes(query.toLowerCase())) {
-            const rel = toPortablePath(relative(workspaceRoot, full));
+            const rel = isPathInside(workspaceRoot, full)
+              ? toPortablePath(relative(workspaceRoot, full))
+              : full;
             const snippet = lines[i]!.slice(0, MAX_SNIPPET_BYTES);
             results.push({ file: rel, line: i + 1, snippet });
             if (results.length >= MAX_RESULTS) return scanned;
@@ -107,11 +113,12 @@ export function createSearchWorkspaceTool(workspaceRoot: string): Tool {
   return {
     descriptor: {
       name: "search_workspace",
-      description: "Recursively search workspace text files for a substring. Returns file paths with line snippets.",
+      description: "Search text files under the workspace or an explicit absolute directory allowed by the operating system.",
       inputSchema: {
         type: "object",
         properties: {
           query: { type: "string", description: "Substring to search for" },
+          path: { type: "string", description: "Optional workspace-relative or explicit absolute directory" },
         },
         required: ["query"],
       },
@@ -120,12 +127,12 @@ export function createSearchWorkspaceTool(workspaceRoot: string): Tool {
       capability: "fs.search",
     },
     async execute(input: unknown, context?: ToolExecutionContext): Promise<SearchWorkspaceOutput> {
-      const query = resolveInput(input);
-      const root = resolve(normalize(workspaceRoot));
+      const { query, path = "." } = resolveInput(input);
+      const root = resolveReadablePath(workspaceRoot, path);
       throwIfAborted(context?.signal);
 
       const results: SearchWorkspaceResult[] = [];
-      const filesScanned = walkDir(root, results, query, root, 0);
+      const filesScanned = walkDir(root, results, query, workspaceRoot, 0);
 
       return {
         query,

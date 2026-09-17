@@ -64,3 +64,18 @@ test("search_workspace finds text matches and exposes read-only metadata", async
   assert.equal(result.truncated, false);
   assert.ok(result.filesScanned >= 2);
 });
+
+test("search_workspace searches an explicitly absolute directory outside the workspace", async () => {
+  const { createSearchWorkspaceTool } = await loadModule();
+  const workspaceRoot = await makeWorkspace();
+  const outsideRoot = await makeWorkspace();
+  const outsidePath = join(outsideRoot, "shared.txt");
+  await writeFile(outsidePath, "externalMagicToken\n", "utf8");
+
+  const result = await createSearchWorkspaceTool(workspaceRoot).execute({
+    query: "externalMagicToken",
+    path: outsideRoot,
+  }) as { results: Array<{ file: string }> };
+  assert.equal(result.results.length, 1);
+  assert.equal(result.results[0]?.file.replaceAll("/", "\\"), outsidePath.replaceAll("/", "\\"));
+});

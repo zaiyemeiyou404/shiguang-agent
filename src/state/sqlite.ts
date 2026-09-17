@@ -14,9 +14,15 @@ export function initializeStateDatabase(db: DatabaseSync): void {
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_version'")
     .get();
 
-  if (!existing) {
-    for (const migration of ALL_MIGRATIONS) {
-      db.exec(migration);
-    }
+  const currentVersion = existing
+    ? ((db.prepare("SELECT version FROM schema_version LIMIT 1").get() as { version?: number } | undefined)?.version ?? 0)
+    : 0;
+
+  if (currentVersion > ALL_MIGRATIONS.length) {
+    throw new Error(`State database schema version ${currentVersion} is newer than supported version ${ALL_MIGRATIONS.length}.`);
+  }
+
+  for (let index = currentVersion; index < ALL_MIGRATIONS.length; index += 1) {
+    db.exec(ALL_MIGRATIONS[index]!);
   }
 }

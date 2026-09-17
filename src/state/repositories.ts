@@ -7,7 +7,23 @@ import type {
   Artifact,
   Memory,
   Approval,
+  Project,
+  Workspace,
 } from "../core/types.js";
+
+export interface ProjectRepository {
+  create(project: Project): Promise<void>;
+  get(id: string): Promise<Project | null>;
+  list(): Promise<Project[]>;
+}
+
+export interface WorkspaceRepository {
+  create(workspace: Workspace): Promise<void>;
+  get(id: string): Promise<Workspace | null>;
+  update(id: string, patch: Partial<Workspace>): Promise<void>;
+  list(): Promise<Workspace[]>;
+  listByProject(projectId: string): Promise<Workspace[]>;
+}
 
 export interface SessionRepository {
   create(session: Session): Promise<void>;
@@ -64,6 +80,8 @@ export interface ApprovalRepository {
 }
 
 export interface Repositories {
+  projects: ProjectRepository;
+  workspaces: WorkspaceRepository;
   sessions: SessionRepository;
   tasks: TaskRepository;
   turns: TurnRepository;

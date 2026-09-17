@@ -1,9 +1,12 @@
 import { startTransition, useState, useEffect, useCallback } from "react";
 import { getDesktopBridgeErrorMessage, requireDesktopBridge } from "../bridge";
-import type { DesktopSession, DesktopRun, DesktopEvent, DesktopSessionDetail, DesktopWorkspaceSnapshot } from "../bridge";
+import type { DesktopSession, DesktopRun, DesktopEvent, DesktopSessionDetail, DesktopWorkspaceSnapshot, DesktopProject, DesktopWorkspace, CreateWorkspaceRequest } from "../bridge";
 
 export function useDesktopSessions() {
   const [sessions, setSessions] = useState<DesktopSession[]>([]);
+  const [projects, setProjects] = useState<DesktopProject[]>([]);
+  const [workspaces, setWorkspaces] = useState<DesktopWorkspace[]>([]);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(() => localStorage.getItem("shiguang.activeWorkspaceId"));
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [detail, setDetail] = useState<DesktopSessionDetail | null>(null);
   const [workspaceSnapshot, setWorkspaceSnapshot] = useState<DesktopWorkspaceSnapshot | null>(null);
@@ -16,10 +19,20 @@ export function useDesktopSessions() {
     try {
       const bridge = requireDesktopBridge();
       setSessionError(null);
-      const list = await bridge.listSessions();
+      const [list, projectList, workspaceList] = await Promise.all([
+        bridge.listSessions(),
+        bridge.listProjects(),
+        bridge.listWorkspaces(),
+      ]);
+      setProjects(projectList);
+      setWorkspaces(workspaceList);
+      const preferredWorkspaceId = workspaceList.some((workspace) => workspace.id === activeWorkspaceId)
+        ? activeWorkspaceId
+        : workspaceList[0]?.id ?? null;
+      setActiveWorkspaceId(preferredWorkspaceId);
       setSessions(list);
-      if (list.length === 0) {
-        const session = await bridge.createSession("Default Session");
+      if (list.length === 0 && preferredWorkspaceId) {
+        const session = await bridge.createSession({ title: "Default Session", workspaceId: preferredWorkspaceId });
         setSessions([session]);
         setActiveSessionId(session.id);
       } else if (!activeSessionId || !list.some((session) => session.id === activeSessionId)) {
@@ -31,7 +44,11 @@ export function useDesktopSessions() {
     } finally {
       setLoading(false);
     }
-  }, [activeSessionId]);
+  }, [activeSessionId, activeWorkspaceId]);
+
+  useEffect(() => {
+    if (activeWorkspaceId) localStorage.setItem("shiguang.activeWorkspaceId", activeWorkspaceId);
+  }, [activeWorkspaceId]);
 
   useEffect(() => {
     try {
@@ -88,11 +105,26 @@ export function useDesktopSessions() {
   }, [activeSessionId]);
 
 
-  const createSession = useCallback(async (title?: string) => {
-    const session = await requireDesktopBridge().createSession(title);
+  const createSession = useCallback(async (title?: string, workspaceId = activeWorkspaceId) => {
+    if (!workspaceId) throw new Error("请先创建或选择一个工作区。");
+    const session = await requireDesktopBridge().createSession({ title, workspaceId });
     await refreshSessions();
+    setActiveWorkspaceId(session.workspaceId);
     setActiveSessionId(session.id);
     return session;
+  }, [activeWorkspaceId, refreshSessions]);
+
+  const createProject = useCallback(async (name: string) => {
+    const project = await requireDesktopBridge().createProject({ name });
+    await refreshSessions();
+    return project;
+  }, [refreshSessions]);
+
+  const createWorkspace = useCallback(async (req: CreateWorkspaceRequest) => {
+    const workspace = await requireDesktopBridge().createWorkspace(req);
+    await refreshSessions();
+    setActiveWorkspaceId(workspace.id);
+    return workspace;
   }, [refreshSessions]);
 
   const branchSession = useCallback(async (runId: string, title?: string) => {
@@ -133,11 +165,13 @@ export function useDesktopSessions() {
   }, [activeSessionId, refreshSessions]);
 
   const selectSession = useCallback((id: string) => {
+    const session = sessions.find((item) => item.id === id);
+    if (session) setActiveWorkspaceId(session.workspaceId);
     setActiveSessionId(id);
     setActiveRunId(null);
-  }, []);
+  }, [sessions]);
 
-  return { sessions, activeSessionId, detail, workspaceSnapshot, activeRunId, setActiveRunId, loading, sessionError, detailError, createSession, branchSession, renameSession, updateSessionStatus, deleteSession, selectSession, refreshSessions, refreshDetail };
+  return { projects, workspaces, activeWorkspaceId, setActiveWorkspaceId, sessions, activeSessionId, detail, workspaceSnapshot, activeRunId, setActiveRunId, loading, sessionError, detailError, createProject, createWorkspace, createSession, branchSession, renameSession, updateSessionStatus, deleteSession, selectSession, refreshSessions, refreshDetail };
 }
 
 export function useRunEvents(runId: string | null) {
