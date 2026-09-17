@@ -1,8 +1,11 @@
 import { ipcMain } from "electron";
 import type { DesktopAppService } from "./app-service.js";
 import type { SendMessageRequest, DesktopSettings, ApprovalDecisionRequest, RunActionRequest, DesktopProviderConnectionRequest, SessionRenameRequest, SessionStatusRequest, SessionWorkspaceRequest, SessionLlmRequest, SessionDeleteRequest, SessionBranchRequest, ArtifactActionRequest, CreateProjectRequest, CreateWorkspaceRequest, CreateSessionRequest } from "./types.js";
+import type { RunEventSubscriptionRequest, RunEventUnsubscribeRequest } from "./types.js";
+import { RunEventSubscriptionRegistry } from "./run-event-subscriptions.js";
 
 export function registerIpcHandlers(service: DesktopAppService): void {
+  const runEventSubscriptions = new RunEventSubscriptionRegistry(service);
   ipcMain.handle("listProjects", () => service.listProjects());
   ipcMain.handle("createProject", (_event, req: CreateProjectRequest) => service.createProject(req.name));
   ipcMain.handle("listWorkspaces", () => service.listWorkspaces());
@@ -104,13 +107,11 @@ export function registerIpcHandlers(service: DesktopAppService): void {
     return service.retryRun(req.runId);
   });
 
-  ipcMain.handle("subscribeRunEvents", (event, runId: string) => {
-    const unsubscribe = service.subscribeRunEvents(runId, (desktopEvent) => {
-      if (!event.sender.isDestroyed()) {
-        event.sender.send("run-event", desktopEvent);
-      }
-    });
+  ipcMain.handle("subscribeRunEvents", (event, req: RunEventSubscriptionRequest) => {
+    runEventSubscriptions.subscribe(event.sender, req.runId, req.subscriptionId);
+  });
 
-    event.sender.on("destroyed", () => unsubscribe());
+  ipcMain.handle("unsubscribeRunEvents", (event, req: RunEventUnsubscribeRequest) => {
+    runEventSubscriptions.unsubscribe(event.sender.id, req.subscriptionId);
   });
 }

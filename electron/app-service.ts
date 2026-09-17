@@ -23,6 +23,7 @@ import type {
   CreateWorkspaceRequest,
   CreateSessionRequest,
 } from "./types.js";
+import { normalizeDesktopApprovalRequest, normalizeDesktopEventPayload } from "./event-contracts.js";
 import { Agent } from "../dist/app/agent.js";
 import { RepositoryEventSink } from "../dist/runtime/event-sink.js";
 import type { Approval, Artifact, Memory, Project, Run, RunEvent, Session, Task, Turn, Workspace } from "../dist/core/types.js";
@@ -417,9 +418,12 @@ export class DesktopAppService {
     return testDesktopProviderConnection(req);
   }
 
-  async createSession(req: CreateSessionRequest): Promise<DesktopSession> {
-    const workspace = await this.workspaceRepository.get(req.workspaceId);
-    if (!workspace) throw new Error(`工作区不存在：${req.workspaceId}`);
+  async createSession(req?: CreateSessionRequest | string): Promise<DesktopSession> {
+    const request: CreateSessionRequest = typeof req === "string" || req === undefined
+      ? { title: req, workspaceId: DEFAULT_WORKSPACE_ID }
+      : req;
+    const workspace = await this.workspaceRepository.get(request.workspaceId);
+    if (!workspace) throw new Error(`工作区不存在：${request.workspaceId}`);
     if (!isDirectoryAvailable(workspace.rootPath)) {
       throw new Error(`工作区目录不可用：${workspace.rootPath}`);
     }
@@ -430,7 +434,7 @@ export class DesktopAppService {
     const session: DesktopSession = {
       id,
       workspaceId: workspace.id,
-      title: req.title?.trim() || "New Session",
+      title: request.title?.trim() || "New Session",
       status: "active",
       createdAt: now,
       updatedAt: now,
@@ -2148,7 +2152,7 @@ function coreEventToDesktop(event: RunEvent): DesktopEvent {
     runId: event.runId,
     seq: event.seq,
     kind: event.kind,
-    payload: event.payload,
+    payload: normalizeDesktopEventPayload(event.kind, event.payload),
     createdAt: event.createdAt.toISOString(),
   };
 }
@@ -2262,7 +2266,7 @@ function coreApprovalToDesktop(approval: Approval): DesktopApproval {
     pluginId: approval.pluginId,
     capability: approval.capability,
     status: approval.status,
-    request: approval.request,
+    request: normalizeDesktopApprovalRequest(approval.request),
     decidedAt: approval.decidedAt?.toISOString() ?? null,
   };
 }

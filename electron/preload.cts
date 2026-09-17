@@ -40,15 +40,20 @@ const bridge: ShiguangBridge = {
   pauseRun: (req) => ipcRenderer.invoke("pauseRun", req),
   retryRun: (req) => ipcRenderer.invoke("retryRun", req),
   subscribeRunEvents: (runId: string, callback: (event: DesktopEvent) => void) => {
-    void ipcRenderer.invoke("subscribeRunEvents", runId);
+    const subscriptionId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    const channel = `run-event:${subscriptionId}`;
+    let disposed = false;
     const handler = (_event: Electron.IpcRendererEvent, data: DesktopEvent) => {
-      if (data.runId === runId) {
-        callback(data);
-      }
+      if (data.runId === runId) callback(data);
     };
-    ipcRenderer.on("run-event", handler);
+    ipcRenderer.on(channel, handler);
+    void ipcRenderer.invoke("subscribeRunEvents", { runId, subscriptionId }).then(() => {
+      if (disposed) void ipcRenderer.invoke("unsubscribeRunEvents", { subscriptionId });
+    });
     return () => {
-      ipcRenderer.removeListener("run-event", handler);
+      disposed = true;
+      ipcRenderer.removeListener(channel, handler);
+      void ipcRenderer.invoke("unsubscribeRunEvents", { subscriptionId });
     };
   },
 };

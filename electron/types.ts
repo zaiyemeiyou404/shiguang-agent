@@ -99,13 +99,79 @@ export interface DesktopConversationEntry {
   createdAt: string;
 }
 
+export type DesktopEventKind = "thinking" | "message" | "tool_call" | "tool_result" | "tool_pipeline" | "error" | "system" | "approval_request" | "approval_granted" | "approval_denied" | "model_usage" | "context_compacted";
+
+export interface DesktopMessageEventPayload extends Record<string, unknown> {
+  role: "user" | "assistant" | "system";
+  content: string;
+}
+
+export interface DesktopThinkingEventPayload extends Record<string, unknown> {
+  content: string;
+}
+
+export interface DesktopToolCallEventPayload extends Record<string, unknown> {
+  toolCallId: string | null;
+  tool: string;
+  input: unknown;
+  arguments: unknown;
+}
+
+export interface DesktopToolResultEventPayload extends Record<string, unknown> {
+  toolCallId: string | null;
+  tool: string;
+  output: unknown;
+  isError: boolean;
+  error?: string;
+}
+
+export interface DesktopNoticeEventPayload extends Record<string, unknown> {
+  message: string;
+  code?: string;
+  approvalId?: string;
+}
+
+export interface DesktopApprovalRequestEventPayload extends Record<string, unknown> {
+  approvalId: string | null;
+  pluginId: string;
+  capability: string;
+  request: DesktopApprovalRequest;
+}
+
+export type DesktopEventPayload =
+  | DesktopMessageEventPayload
+  | DesktopThinkingEventPayload
+  | DesktopToolCallEventPayload
+  | DesktopToolResultEventPayload
+  | DesktopNoticeEventPayload
+  | DesktopApprovalRequestEventPayload;
+
 export interface DesktopEvent {
   id: string;
   runId: string;
   seq: number;
-  kind: "thinking" | "message" | "tool_call" | "tool_result" | "tool_pipeline" | "error" | "system" | "approval_request" | "approval_granted" | "approval_denied" | "model_usage" | "context_compacted";
-  payload: unknown;
+  kind: DesktopEventKind;
+  payload: DesktopEventPayload;
   createdAt: string;
+}
+
+export interface DesktopApprovalPreview extends Record<string, unknown> {
+  kind: string;
+  title: string;
+  path: string | null;
+  operation: string | null;
+  diff: string | null;
+  additions: number | null;
+  deletions: number | null;
+  truncated: boolean;
+  warnings: string[];
+}
+
+export interface DesktopApprovalRequest extends Record<string, unknown> {
+  toolName: string | null;
+  toolInput: unknown;
+  reason: string | null;
+  preview: DesktopApprovalPreview | null;
 }
 
 export interface DesktopApproval {
@@ -114,7 +180,7 @@ export interface DesktopApproval {
   pluginId: string;
   capability: string;
   status: "pending" | "granted" | "denied" | "expired";
-  request: unknown;
+  request: DesktopApprovalRequest;
   decidedAt: string | null;
 }
 
@@ -137,6 +203,15 @@ export interface ApprovalDecisionRequest {
 
 export interface RunActionRequest {
   runId: string;
+}
+
+export interface RunEventSubscriptionRequest {
+  runId: string;
+  subscriptionId: string;
+}
+
+export interface RunEventUnsubscribeRequest {
+  subscriptionId: string;
 }
 
 export interface SessionRenameRequest {

@@ -20,6 +20,8 @@
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build",
     "test": "npm run build && node --test \"dist/**/*.test.js\"",
+    "test:ui": "vitest run --config ui/vitest.config.ts",
+    "test:electron": "vitest run --config electron/vitest.config.ts",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "desktop:dev": "npm run build && tsc -p tsconfig.electron.json && concurrently -n vite,electron -c cyan,green \"npm run desktop:vite\" \"npm run desktop:electron\"",
     "desktop:vite": "vite --config ui/vite.config.ts",
@@ -79,6 +81,9 @@
     }
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
     "@types/node": "^26.0.1",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
@@ -86,10 +91,12 @@
     "concurrently": "^9.1.0",
     "electron": "^43.1.0",
     "electron-builder": "^25.1.0",
+    "jsdom": "^29.1.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "typescript": "^5.7.0",
-    "vite": "^6.0.0"
+    "vite": "^6.0.0",
+    "vitest": "^5.0.1"
   },
   "keywords": [
     "agent",

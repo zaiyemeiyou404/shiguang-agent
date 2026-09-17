@@ -1,6 +1,9 @@
-import { startTransition, useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { getDesktopBridgeErrorMessage, requireDesktopBridge } from "../bridge";
-import type { DesktopSession, DesktopRun, DesktopEvent, DesktopSessionDetail, DesktopWorkspaceSnapshot, DesktopProject, DesktopWorkspace, CreateWorkspaceRequest } from "../bridge";
+import type { DesktopSession, DesktopRun, DesktopSessionDetail, DesktopWorkspaceSnapshot, DesktopProject, DesktopWorkspace, CreateWorkspaceRequest } from "../bridge";
+import { useSessionWorkspace } from "./useSessionWorkspace";
+
+export { useRunEvents } from "./useRunActivity";
 
 export function useDesktopSessions() {
   const [sessions, setSessions] = useState<DesktopSession[]>([]);
@@ -8,12 +11,9 @@ export function useDesktopSessions() {
   const [workspaces, setWorkspaces] = useState<DesktopWorkspace[]>([]);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(() => localStorage.getItem("shiguang.activeWorkspaceId"));
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [detail, setDetail] = useState<DesktopSessionDetail | null>(null);
-  const [workspaceSnapshot, setWorkspaceSnapshot] = useState<DesktopWorkspaceSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
-  const [detailError, setDetailError] = useState<string | null>(null);
+  const { detail, workspaceSnapshot, activeRunId, setActiveRunId, detailError, refreshDetail, clearWorkspace } = useSessionWorkspace(activeSessionId);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -64,52 +64,11 @@ export function useDesktopSessions() {
       setSessionError(message);
       setLoading(false);
       setSessions([]);
-      setDetail(null);
-      setActiveRunId(null);
+      clearWorkspace();
       return;
     }
     void refreshSessions();
   }, [refreshSessions]);
-
-  useEffect(() => {
-    if (activeSessionId) {
-      const bridge = requireDesktopBridge();
-      setDetailError(null);
-      void bridge.getWorkspaceSnapshot(activeSessionId).then((snapshot) => {
-        const d = snapshot.detail;
-        setWorkspaceSnapshot(snapshot);
-        setDetail(d);
-        if (d.runs.length > 0) {
-          const latest = d.runs.reduce((a, b) => ((a.startedAt ?? a.id) > (b.startedAt ?? b.id) ? a : b));
-          if (latest.status === "pending" || latest.status === "running" || latest.status === "paused" || latest.status === "needs_approval") {
-            setActiveRunId(latest.id);
-          } else if (!activeRunId) {
-            setActiveRunId(latest.id);
-          }
-        } else {
-          setActiveRunId(null);
-        }
-      }).catch((error) => {
-        const message = error instanceof Error ? error.message : String(error);
-        setDetailError(`Failed to load session detail: ${message}`);
-      });
-    }
-  }, [activeSessionId, activeRunId]);
-
-  const refreshDetail = useCallback(async () => {
-    if (!activeSessionId) return;
-    try {
-      const bridge = requireDesktopBridge();
-      setDetailError(null);
-      const snapshot = await bridge.getWorkspaceSnapshot(activeSessionId);
-      setWorkspaceSnapshot(snapshot);
-      setDetail(snapshot.detail);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setDetailError(`Failed to refresh session detail: ${message}`);
-    }
-  }, [activeSessionId]);
-
 
   const createSession = useCallback(async (title?: string, workspaceId = activeWorkspaceId) => {
     if (!workspaceId) throw new Error("请先创建或选择一个工作区。");
@@ -131,11 +90,9 @@ export function useDesktopSessions() {
     await refreshSessions();
     setActiveWorkspaceId(workspace.id);
     setActiveSessionId(null);
-    setDetail(null);
-    setWorkspaceSnapshot(null);
-    setActiveRunId(null);
+    clearWorkspace();
     return workspace;
-  }, [refreshSessions]);
+  }, [clearWorkspace, refreshSessions]);
 
   const branchSession = useCallback(async (runId: string, title?: string) => {
     const result = await requireDesktopBridge().branchSession({ runId, title });
@@ -167,13 +124,11 @@ export function useDesktopSessions() {
   const deleteSession = useCallback(async (sessionId: string) => {
     await requireDesktopBridge().deleteSession({ sessionId });
     if (activeSessionId === sessionId) {
-      setDetail(null);
-      setWorkspaceSnapshot(null);
-      setActiveRunId(null);
+      clearWorkspace();
       setActiveSessionId(null);
     }
     await refreshSessions();
-  }, [activeSessionId, refreshSessions]);
+  }, [activeSessionId, clearWorkspace, refreshSessions]);
 
   const selectSession = useCallback((id: string) => {
     const session = sessions.find((item) => item.id === id);
@@ -186,82 +141,8 @@ export function useDesktopSessions() {
     setActiveWorkspaceId(workspaceId);
     const nextSession = sessions.find((session) => session.workspaceId === workspaceId) ?? null;
     setActiveSessionId(nextSession?.id ?? null);
-    setDetail(null);
-    setWorkspaceSnapshot(null);
-    setActiveRunId(null);
-  }, [sessions]);
+    clearWorkspace();
+  }, [clearWorkspace, sessions]);
 
   return { projects, workspaces, activeWorkspaceId, setActiveWorkspaceId, sessions, activeSessionId, detail, workspaceSnapshot, activeRunId, setActiveRunId, loading, sessionError, detailError, createProject, createWorkspace, createSession, branchSession, renameSession, updateSessionStatus, deleteSession, selectSession, selectWorkspace, refreshSessions, refreshDetail };
-}
-
-export function useRunEvents(runId: string | null) {
-  const [events, setEvents] = useState<DesktopEvent[]>([]);
-  const [eventsError, setEventsError] = useState<string | null>(null);
-  const [streamState, setStreamState] = useState<"idle" | "connecting" | "live" | "error">("idle");
-
-  useEffect(() => {
-    if (!runId) {
-      setEvents([]);
-      setEventsError(null);
-      setStreamState("idle");
-      return;
-    }
-
-    let cancelled = false;
-    let bridge: ReturnType<typeof requireDesktopBridge>;
-    try {
-      bridge = requireDesktopBridge();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : getDesktopBridgeErrorMessage();
-      setEvents([]);
-      setEventsError(message);
-      setStreamState("error");
-      return;
-    }
-    setEventsError(null);
-    setStreamState("connecting");
-
-    void bridge.getRunEvents(runId).then((persisted) => {
-      if (cancelled) return;
-      startTransition(() => {
-        setEvents(persisted.sort((a, b) => a.seq - b.seq));
-      });
-      setEventsError(null);
-      setStreamState("live");
-    }).catch((error) => {
-      if (cancelled) return;
-      const message = error instanceof Error ? error.message : String(error);
-      setEventsError(`Failed to load run timeline: ${message}`);
-      setStreamState("error");
-    });
-
-    let unsub = () => {};
-    try {
-      unsub = bridge.subscribeRunEvents(runId, (event) => {
-        startTransition(() => {
-          setStreamState("live");
-          setEventsError(null);
-          setEvents((prev) => {
-            const exists = prev.some((e) => e.id === event.id);
-            if (exists) return prev;
-            if (prev.length === 0 || prev[prev.length - 1]!.seq <= event.seq) {
-              return [...prev, event];
-            }
-            return [...prev, event].sort((a, b) => a.seq - b.seq);
-          });
-        });
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setEventsError(`Failed to subscribe to run events: ${message}`);
-      setStreamState("error");
-    }
-
-    return () => {
-      cancelled = true;
-      unsub();
-    };
-  }, [runId]);
-
-  return { events, eventsError, streamState };
 }

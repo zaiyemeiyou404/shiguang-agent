@@ -2,6 +2,9 @@ import { type CSSProperties, useDeferredValue, useEffect, useMemo, useRef, useSt
 import { useDesktopSessions, useRunEvents } from "./hooks/useDesktopSessions";
 import { getDesktopBridge, getDesktopBridgeErrorMessage, requireDesktopBridge } from "./bridge";
 import type { DesktopSession, DesktopRun, DesktopConversationEntry, DesktopEvent, DesktopSettings, DesktopApproval, DesktopArtifact, DesktopProviderConnectionResult, DesktopAttachment, DesktopTokenUsage, DesktopSessionLlmSettings, DesktopProject, ToolApprovalMode } from "./bridge";
+import { ActivityFeed } from "./features/activity/ActivityFeed";
+import { ApprovalCenter } from "./features/approvals/ApprovalCenter";
+import { RunInspector } from "./features/run/RunInspector";
 
 type PillVariant = "progress" | "safe" | "auto" | "todo";
 type BannerVariant = "info" | "warn" | "danger" | "success";
@@ -1723,7 +1726,9 @@ function approvalFromEventPayload(
     pluginId: typeof record.pluginId === "string" ? record.pluginId : "runtime",
     capability: typeof record.capability === "string" ? record.capability : "tool.approval",
     status,
-    request: record.request,
+    request: record.request && typeof record.request === "object"
+      ? record.request as DesktopApproval["request"]
+      : { toolName: null, toolInput: null, reason: null, preview: null },
     decidedAt: null,
   };
 }
@@ -3747,7 +3752,7 @@ function ApprovalPreviewBlock({ preview }: { preview: ApprovalRequestPreview }) 
   );
 }
 
-function ApprovalCard({
+function LegacyApprovalCard({
   approval,
   decisionState,
   onDecision,
@@ -5144,6 +5149,8 @@ export default function App() {
   const [surface, setSurface] = useState<MainSurface>("home");
   const [settings, setSettings] = useState<DesktopSettings | null>(null);
   const [decisionState, setDecisionState] = useState<Record<string, "approving" | "approved" | "denied">>({});
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const decidingApprovalsRef = useRef(new Set<string>());
   const [runActionState, setRunActionState] = useState<"idle" | "cancelling" | "pausing" | "retrying">("idle");
   const [branchingRunId, setBranchingRunId] = useState<string | null>(null);
   const [quickModelSaving, setQuickModelSaving] = useState<string | null>(null);
@@ -5191,10 +5198,6 @@ export default function App() {
       return runKey > latestKey ? run : latest;
     })
     : null;
-  const showActiveRunTranscript = Boolean(
-    activeRun
-      && (sessionTurns.length === 0 || (latestSessionRun?.id ?? null) === (activeRunId ?? null)),
-  );
   const pendingApprovals = workspaceSnapshot?.pendingApprovals ?? [];
   const approvalQueue = useMemo(() => {
     return [...pendingApprovals].sort((a, b) => {
@@ -5318,7 +5321,7 @@ export default function App() {
   }, {}), [artifacts]);
   const surfaceTitle = surface === "running"
     ? (detail?.session?.title ?? activeSession?.title ?? "会话")
-    : "会话";
+    : surface === "approval" ? "操作确认" : "会话";
   const surfaceSubtitle = surface === "running"
     ? (activeRun ? `运行状态：${formatRunStatus(activeRun.status)}` : activeSession?.summary ?? "消息、审批和运行时间线都在这里。")
     : "左侧保留会话和设置，点开会话直接进入聊天。";
@@ -5508,6 +5511,8 @@ export default function App() {
 
   const handleApprovalDecision = async (approvalId: string, decision: "granted" | "denied") => {
     const approval = pendingApprovals.find((candidate) => candidate.id === approvalId);
+    if (decidingApprovalsRef.current.has(approvalId)) return;
+    decidingApprovalsRef.current.add(approvalId);
     setDecisionState((prev) => ({ ...prev, [approvalId]: "approving" }));
     try {
       const bridge = requireDesktopBridge();
@@ -5526,7 +5531,13 @@ export default function App() {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setApprovalError(`${decision === "granted" ? "通过" : "拒绝"}审批动作失败：${message}`);
+      setDecisionState((prev) => {
+        const next = { ...prev };
+        delete next[approvalId];
+        return next;
+      });
     } finally {
+      decidingApprovalsRef.current.delete(approvalId);
       setTimeout(() => {
         setDecisionState((prev) => {
           const next = { ...prev };
@@ -6130,6 +6141,10 @@ export default function App() {
               <button className={`app-nav-btn${showChatView ? " active" : ""}`} type="button" onClick={() => setSurface(activeSessionId ? "running" : "home")} title="聊天" aria-label="聊天">
                 <span className="app-nav-glyph">⌁</span>
               </button>
+              <button className={`app-nav-btn${surface === "approval" ? " active" : ""}`} type="button" onClick={() => setSurface("approval")}>
+                <span className="app-nav-glyph">✓</span>
+                <span className="app-nav-text">确认{pendingApprovals.length > 0 ? ` ${pendingApprovals.length}` : ""}</span>
+              </button>
               <button className="app-nav-btn" type="button" onClick={handleCreateSession} title="新建会话" aria-label="新建会话">
                 <span className="app-nav-glyph">＋</span>
               </button>
@@ -6282,6 +6297,7 @@ export default function App() {
                     <ToolBtn onClick={() => openSessionLifecycle("archive")}>{activeSession.status === "archived" ? "恢复" : "归档"}</ToolBtn>
                   </>
                 ) : null}
+                {showChatView ? <ToolBtn onClick={() => setInspectorOpen((value) => !value)}>{inspectorOpen ? "关闭详情" : "运行详情"}</ToolBtn> : null}
                 <ToolBtn onClick={() => { void openSettings(); }}>设置</ToolBtn>
                 <ToolBtn
                   primary
@@ -6297,6 +6313,24 @@ export default function App() {
                 </ToolBtn>
               </div>
             </header>
+
+            <RunInspector
+              open={showChatView && inspectorOpen}
+              onClose={() => setInspectorOpen(false)}
+              activeRun={activeRun}
+              runs={detail?.runs ?? []}
+              events={sortedEvents}
+              approvals={pendingApprovals}
+              artifacts={visibleArtifacts}
+              failure={failureInsight}
+              onSelectRun={setActiveRunId}
+              onRetry={(runId) => { void handleRetrySpecificRun(runId); }}
+              onBranch={(run) => { void handleBranchSpecificRun(run); }}
+              onDraftRepair={handleDraftRepairPrompt}
+              onCopyArtifact={(uri) => { void handleCopyArtifactUri(uri); }}
+              onOpenArtifact={(uri) => { void handleOpenArtifact(uri); }}
+              onRevealArtifact={(uri) => { void handleRevealArtifact(uri); }}
+            />
 
             <section className="chat-banner-stack">
               {sessionError ? (
@@ -6362,7 +6396,9 @@ export default function App() {
               ) : null}
             </section>
 
-            {!showChatView ? (
+            {surface === "approval" ? (
+              <ApprovalCenter approvals={pendingApprovals} decisionState={decisionState} onDecision={handleApprovalDecision} />
+            ) : !showChatView ? (
               <section className="chat-home">
                 <div className="chat-empty compact">
                   <span className="tiny">会话页</span>
@@ -6389,13 +6425,10 @@ export default function App() {
             ) : (
               <>
                 <section className="chat-surface">
-                  <SimpleChatTranscript
-                    key={activeSessionId ?? "no-session"}
+                  <ActivityFeed
                     entries={sessionConversation}
-                    liveEvents={sortedEvents}
-                    showLiveEvents={showActiveRunTranscript}
-                    debugMode={debugMode}
-                    pendingApprovals={pendingApprovals}
+                    events={sortedEvents}
+                    approvals={pendingApprovals}
                     decisionState={decisionState}
                     onApprovalDecision={handleApprovalDecision}
                   />

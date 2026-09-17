@@ -3115,6 +3115,18 @@ body::before {
 .chat-pane {
   padding: 0;
   min-height: 0;
+  position: relative;
+}
+
+.composer-status {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(214, 147, 77, .28);
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: #d99a58;
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 .chat-pane-header {
@@ -3173,6 +3185,7 @@ body::before {
 }
 
 .chat-surface {
+  flex: 1 1 auto;
   display: grid;
   flex: 1 1 auto;
   align-content: start;

@@ -1,0 +1,33 @@
+.approval-card {
+  border: 1px solid rgba(247, 176, 92, .3);
+  border-radius: 14px;
+  padding: 15px;
+  background: linear-gradient(145deg, rgba(74, 48, 26, .5), rgba(26, 25, 27, .94));
+  color: #f3eee7;
+  display: grid;
+  gap: 12px;
+}
+.approval-card-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+.approval-card h4 { margin: 3px 0 0; font-size: 15px; }
+.approval-eyebrow { color: #e8a859; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; }
+.approval-state { border: 1px solid #4b4741; border-radius: 999px; padding: 4px 9px; color: #aaa39a; font-size: 11px; white-space: nowrap; }
+.approval-state.pending { border-color: rgba(232,168,89,.45); color: #efb66e; }
+.approval-state.allowed { border-color: rgba(86,190,133,.45); color: #75d39f; }
+.approval-summary { margin: 0; color: #cec6bc; line-height: 1.55; }
+.approval-facts { margin: 0; display: grid; gap: 7px; }
+.approval-facts div { display: grid; grid-template-columns: 72px minmax(0,1fr); gap: 10px; }
+.approval-facts dt { color: #827c75; }
+.approval-facts dd { margin: 0; color: #d8d2ca; overflow-wrap: anywhere; }
+.approval-warnings { border-left: 2px solid #d48a39; padding-left: 10px; color: #e8b677; }
+.approval-warnings p { margin: 3px 0; }
+.approval-diff-stat { display: flex; gap: 10px; margin: 0; color: #99928a; }
+.approval-diff-stat span:first-child { color: #69c892; }
+.approval-diff-stat span:nth-child(2) { color: #df7a76; }
+.approval-diff-stat em { font-style: normal; }
+.approval-diff, .approval-details pre { max-height: 260px; overflow: auto; margin: 0; padding: 11px; border-radius: 9px; background: #111113; color: #c9c3bb; white-space: pre-wrap; overflow-wrap: anywhere; }
+.approval-details summary { cursor: pointer; color: #918a82; }
+.approval-details pre { margin-top: 8px; }
+.approval-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.approval-actions button { border: 1px solid #49453f; border-radius: 9px; padding: 8px 13px; background: #272528; color: #d7d1ca; cursor: pointer; }
+.approval-actions button.primary { border-color: #d69347; background: #bd7432; color: #fff8ef; }
+.approval-actions button:disabled { opacity: .5; cursor: default; }
