@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { relative, resolve } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 import type { Tool, ToolExecutionContext } from "../types.js";
 import { resolveWorkspacePath, toPortablePath } from "./path-format.js";
 
@@ -57,12 +57,12 @@ function throwIfAborted(signal?: AbortSignal): void {
 
 function isInsideWorkspace(workspaceRoot: string, candidate: string): boolean {
   const rel = relative(resolve(workspaceRoot), resolve(candidate));
-  return rel === "" || (!rel.startsWith("..") && !rel.startsWith("/") && !rel.startsWith("\\"));
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel) && !rel.startsWith("/") && !rel.startsWith("\\"));
 }
 
 function resolveTerminalCwd(workspaceRoot: string, cwd: string | undefined, command: string): string {
   if (!cwd) return resolveWorkspacePath(workspaceRoot);
-  const candidate = resolve(workspaceRoot, cwd);
+  const candidate = isAbsolute(cwd) ? resolve(cwd) : resolve(workspaceRoot, cwd);
   if (isInsideWorkspace(workspaceRoot, candidate)) return resolveWorkspacePath(workspaceRoot, cwd);
   if (isReadOnlyCommand(command)) return candidate;
   throw new Error(`run_terminal_command: cwd escapes workspace root for a command that may modify files. Use a workspace path for write/install/build/delete/move commands, or run an obvious read-only command outside the workspace. cwd=${cwd}`);

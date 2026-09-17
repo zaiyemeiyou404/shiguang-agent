@@ -1,5 +1,6 @@
 import { dirname, isAbsolute, normalize, relative, resolve } from "node:path";
 import { existsSync, realpathSync } from "node:fs";
+import { resolveWorkspacePath as resolveFormattedWorkspacePath } from "./path-format.js";
 
 export function isPathInside(rootPath: string, candidatePath: string): boolean {
   const rel = relative(resolve(rootPath), resolve(candidatePath));
@@ -8,9 +9,12 @@ export function isPathInside(rootPath: string, candidatePath: string): boolean {
 
 export function resolveReadablePath(workspaceRoot: string, requestedPath: string): string {
   if (isAbsolute(requestedPath)) {
-    return resolve(normalize(requestedPath));
+    const absolutePath = resolve(normalize(requestedPath));
+    return isPathInside(workspaceRoot, absolutePath)
+      ? resolveFormattedWorkspacePath(workspaceRoot, requestedPath)
+      : absolutePath;
   }
-  return resolveWorkspacePath(workspaceRoot, requestedPath);
+  return resolveFormattedWorkspacePath(workspaceRoot, requestedPath);
 }
 
 export function resolveWorkspacePath(workspaceRoot: string, requestedPath: string): string {
@@ -24,7 +28,7 @@ export function resolveWorkspacePath(workspaceRoot: string, requestedPath: strin
 
 export function resolveWritablePath(workspaceRoot: string, requestedPath: string): string {
   const root = resolve(normalize(workspaceRoot));
-  const candidate = resolveWorkspacePath(root, requestedPath);
+  const candidate = resolveFormattedWorkspacePath(root, requestedPath, { forWrite: true });
   if (!existsSync(root)) {
     throw new Error(`Workspace root is not available: ${workspaceRoot}`);
   }
