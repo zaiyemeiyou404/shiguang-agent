@@ -8,7 +8,7 @@ export function ApprovalCenter({
 }: {
   approvals: DesktopApproval[];
   decisionState: Record<string, ApprovalDecisionState>;
-  onDecision: (approvalId: string, decision: "granted" | "denied") => void;
+  onDecision: (approvalId: string, decision: "granted" | "denied", scope?: "once" | "task" | "workspace") => void;
 }) {
   return (
     <section className="approval-center">

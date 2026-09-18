@@ -56,6 +56,7 @@ export interface RunRepository {
   get(id: string): Promise<Run | null>;
   update(id: string, patch: Partial<Run>): Promise<void>;
   listByTask(taskId: string): Promise<Run[]>;
+  listBySession(sessionId: string): Promise<Run[]>;
 }
 
 export interface RunEventRepository {
@@ -84,6 +85,7 @@ export interface ApprovalRepository {
   update(id: string, patch: Partial<Approval>): Promise<void>;
   listPending(runId: string): Promise<Approval[]>;
   listBySession(sessionId: string): Promise<Approval[]>;
+  findReusable(runId: string, capability: string): Promise<Approval | null>;
 }
 
 export interface Repositories {

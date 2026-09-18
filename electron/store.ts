@@ -4,7 +4,7 @@ import type { DesktopSession, DesktopRun, DesktopEvent } from "./types.js";
 import { getShiguangWorkspacePolicy } from "./user-data.js";
 import { DEFAULT_WORKSPACE_ID } from "../dist/state/schema.js";
 
-interface StoreData {
+export interface StoreData {
   sessions: DesktopSession[];
   runs: DesktopRun[];
   events: DesktopEvent[];
@@ -41,6 +41,14 @@ export class DesktopStore {
 
   private save(): void {
     writeFileSync(this.filePath, JSON.stringify(this.data, null, 2), "utf-8");
+  }
+
+  getFilePath(): string {
+    return this.filePath;
+  }
+
+  getRuntimeSnapshot(): StoreData {
+    return structuredClone(this.data);
   }
 
   listSessions(): DesktopSession[] {

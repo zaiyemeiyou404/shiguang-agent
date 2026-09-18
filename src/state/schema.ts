@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 export const DEFAULT_PROJECT_ID = "project_default";
 export const DEFAULT_WORKSPACE_ID = "workspace_default";
 
@@ -167,7 +167,6 @@ WHERE workspace_id IS NULL OR workspace_id = '';
 CREATE INDEX IF NOT EXISTS idx_workspaces_project ON workspaces(project_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_id, updated_at);
 
-UPDATE schema_version SET version = 2;
 `;
 
 export const MIGRATION_003 = `
@@ -185,7 +184,6 @@ BEGIN
   SELECT RAISE(ABORT, 'session workspace_id cannot be changed');
 END;
 
-UPDATE schema_version SET version = 3;
 `;
 
 export const MIGRATION_004 = `
@@ -203,17 +201,40 @@ CREATE TABLE IF NOT EXISTS task_checkpoints (
 CREATE INDEX IF NOT EXISTS idx_task_checkpoints_task_created
 ON task_checkpoints(task_id, created_at);
 
-UPDATE schema_version SET version = 4;
 `;
 
 export const MIGRATION_005 = `
 ALTER TABLE runs ADD COLUMN budget_json TEXT DEFAULT '{}';
-UPDATE schema_version SET version = 5;
 `;
 
 export const MIGRATION_006 = `
 ALTER TABLE approvals ADD COLUMN scope TEXT NOT NULL DEFAULT 'once';
-UPDATE schema_version SET version = 6;
 `;
 
-export const ALL_MIGRATIONS = [MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004, MIGRATION_005, MIGRATION_006];
+export const MIGRATION_007 = `
+CREATE TABLE IF NOT EXISTS legacy_runtime_imports (
+  source_key TEXT PRIMARY KEY,
+  completed_at TEXT NOT NULL,
+  result_json TEXT NOT NULL
+);
+`;
+
+export interface StateMigration {
+  version: number;
+  name: string;
+  sql: string;
+  requiresBackup?: boolean;
+}
+
+export const STATE_MIGRATIONS: readonly StateMigration[] = [
+  { version: 1, name: "initial-state", sql: MIGRATION_001 },
+  { version: 2, name: "projects-and-workspaces", sql: MIGRATION_002 },
+  { version: 3, name: "session-workspace-constraints", sql: MIGRATION_003 },
+  { version: 4, name: "task-checkpoints", sql: MIGRATION_004 },
+  { version: 5, name: "run-budgets", sql: MIGRATION_005 },
+  { version: 6, name: "approval-scopes", sql: MIGRATION_006 },
+  { version: 7, name: "legacy-runtime-import-markers", sql: MIGRATION_007 },
+];
+
+/** @deprecated Prefer STATE_MIGRATIONS so version and backup metadata remain explicit. */
+export const ALL_MIGRATIONS = STATE_MIGRATIONS.map((migration) => migration.sql);

@@ -1,5 +1,6 @@
 export * from "./schema.js";
 export * from "./repositories.js";
+export * from "./legacy-runtime-importer.js";
 export * from "./run-store.js";
 export * from "./sqlite.js";
 export * from "./sqlite-artifact-repository.js";

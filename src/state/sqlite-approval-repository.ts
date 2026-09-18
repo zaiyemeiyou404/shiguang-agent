@@ -116,6 +116,32 @@ export class SqliteApprovalRepository implements ApprovalRepository {
       .all(sessionId) as ApprovalRow[];
     return rows.map(rowToApproval);
   }
+
+  async findReusable(runId: string, capability: string): Promise<Approval | null> {
+    const row = this.db
+      .prepare(`
+        SELECT a.id AS id, a.run_id AS run_id, a.plugin_id AS plugin_id,
+               a.capability AS capability, a.status AS status,
+               a.request_json AS request_json, a.decided_at AS decided_at, a.scope AS scope
+        FROM approvals a
+        JOIN runs source_run ON source_run.id = a.run_id
+        JOIN sessions source_session ON source_session.id = source_run.session_id
+        JOIN runs requested_run ON requested_run.id = ?
+        JOIN sessions requested_session ON requested_session.id = requested_run.session_id
+        WHERE a.status = 'granted'
+          AND a.capability = ?
+          AND a.scope IN ('task', 'workspace')
+          AND a.run_id <> ?
+          AND (
+            (a.scope = 'task' AND source_run.task_id = requested_run.task_id)
+            OR (a.scope = 'workspace' AND source_session.workspace_id = requested_session.workspace_id)
+          )
+        ORDER BY a.decided_at DESC, a.id DESC
+        LIMIT 1
+      `)
+      .get(runId, capability, runId) as ApprovalRow | undefined;
+    return row ? rowToApproval(row) : null;
+  }
 }
 
 function rowToApproval(row: ApprovalRow): Approval {

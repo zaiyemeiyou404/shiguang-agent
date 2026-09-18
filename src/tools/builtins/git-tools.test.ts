@@ -58,6 +58,37 @@ test("git_diff reads unstaged file diff", { skip: !gitAvailable() }, async () =>
   assert.match(output.diff ?? "", /\+after/);
 });
 
+test("git_commit creates a local commit only after the approval-gated tool executes", { skip: !gitAvailable() }, async () => {
+  const { createGitCommitTool } = await import("./git-commit.js");
+  const workspaceRoot = await makeWorkspace();
+  runGit(workspaceRoot, ["init"]);
+  runGit(workspaceRoot, ["config", "user.email", "agent@example.test"]);
+  runGit(workspaceRoot, ["config", "user.name", "Agent Test"]);
+  await writeFile(join(workspaceRoot, "README.md"), "hello\n", "utf8");
+
+  const tool = createGitCommitTool(workspaceRoot);
+  const preview = await tool.previewApproval?.({ message: "docs: add readme" });
+  const result = await tool.execute({ message: "docs: add readme" });
+  const output = result as { ok?: boolean; stdout?: string };
+
+  assert.equal(tool.descriptor.requiresApproval, true);
+  assert.equal(tool.descriptor.capability, "git.commit");
+  assert.match(preview?.title ?? "", /Git/);
+  assert.equal(output.ok, false); // no staged change is committed implicitly
+  runGit(workspaceRoot, ["add", "README.md"]);
+  assert.equal((await tool.execute({ message: "docs: add readme" }) as { ok?: boolean }).ok, true);
+});
+
+test("git_push always declares an approval-gated remote side effect", async () => {
+  const { createGitPushTool } = await import("./git-push.js");
+  const tool = createGitPushTool(await makeWorkspace());
+  const preview = await tool.previewApproval?.({ remote: "origin", branch: "main" });
+
+  assert.equal(tool.descriptor.requiresApproval, true);
+  assert.equal(tool.descriptor.capability, "git.push");
+  assert.match(preview?.warnings?.join(" ") ?? "", /每次/);
+});
+
 test("inspect_project summarizes package scripts and file stats", async () => {
   const { createInspectProjectTool } = await import("./inspect-project.js");
   const workspaceRoot = await makeWorkspace();

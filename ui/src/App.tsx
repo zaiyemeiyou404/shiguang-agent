@@ -1154,7 +1154,7 @@ function SimpleChatTranscript({
   debugMode: boolean;
   pendingApprovals: DesktopApproval[];
   decisionState: Record<string, "approving" | "approved" | "denied" | undefined>;
-  onApprovalDecision: (approvalId: string, decision: "granted" | "denied") => void;
+  onApprovalDecision: (approvalId: string, decision: "granted" | "denied", scope?: "once" | "task" | "workspace") => void;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const approvalViewStates = useMemo(
@@ -2429,6 +2429,14 @@ function approvalSafetyChecks(risk: ApprovalRiskInfo, summary: ReturnType<typeof
     "通过后 Agent 会自动继续运行；拒绝会让当前 run 停止并记录原因。",
   ].filter((item): item is string => Boolean(item));
   return checks;
+}
+
+function requiresSingleUseApproval(approval: DesktopApproval, summary: ReturnType<typeof summarizeApprovalRequest>): boolean {
+  const source = [approval.capability, summary.toolName, summary.toolInput]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return /delete|remove|move|rename|git[\s_.-]*push|push_to_remote|publish|deploy|release|credential|token|secret|password|api[_ -]?key|global.*install|install.*(?:-g|--global)/.test(source);
 }
 
 function compactApprovalInput(text: string): string {
@@ -3762,7 +3770,7 @@ function LegacyApprovalCard({
 }: {
   approval: DesktopApproval;
   decisionState?: "approving" | "approved" | "denied";
-  onDecision: (approvalId: string, decision: "granted" | "denied") => void;
+  onDecision: (approvalId: string, decision: "granted" | "denied", scope?: "once" | "task" | "workspace") => void;
 }) {
   const requestSummary = summarizeApprovalRequest(approval.request);
   const deciding = decisionState === "approving";
@@ -3853,13 +3861,15 @@ function ApprovalReviewCard({
   executionState?: ApprovalViewState;
   queuePosition?: number;
   queueTotal?: number;
-  onDecision: (approvalId: string, decision: "granted" | "denied") => void;
+  onDecision: (approvalId: string, decision: "granted" | "denied", scope?: "once" | "task" | "workspace") => void;
 }) {
   const requestSummary = summarizeApprovalRequest(approval.request);
   const risk = approvalRiskInfo(approval, requestSummary);
   const rows = approvalScopeRows(approval, requestSummary);
   const checks = approvalSafetyChecks(risk, requestSummary);
   const inputSnippet = compactApprovalInput(requestSummary.toolInput);
+  const forceOnce = requiresSingleUseApproval(approval, requestSummary);
+  const [scope, setScope] = useState<"once" | "task" | "workspace">("once");
   const deciding = decisionState === "approving";
   const resolved = decisionState === "approved"
     || decisionState === "denied"
@@ -3882,7 +3892,7 @@ function ApprovalReviewCard({
         <div className="approval-review-icon">!</div>
         <div className="approval-review-title">
           <span className="tiny">
-            权限审查 · 单次授权{queuePosition && queueTotal ? ` · 队列 ${queuePosition}/${queueTotal}` : ""}
+            权限审查 · {forceOnce ? "单次授权" : "可设定范围"}{queuePosition && queueTotal ? ` · 队列 ${queuePosition}/${queueTotal}` : ""}
           </span>
           <h3>{approvalActionLabel(approval, requestSummary)}</h3>
           <p className="muted">{requestSummary.reason ?? risk.detail}</p>
@@ -3923,6 +3933,15 @@ function ApprovalReviewCard({
       {!decisionState && executionState?.detail ? <p className="approval-state-note">{executionState.detail}</p> : null}
 
       <div className="approval-actions approval-review-actions">
+        <label className="approval-scope-control">
+          <span className="tiny">授权范围</span>
+          <select className="settings-input" value={forceOnce ? "once" : scope} disabled={deciding || resolved || forceOnce} onChange={(event) => setScope(event.target.value as typeof scope)}>
+            <option value="once">仅本次</option>
+            <option value="task">当前任务</option>
+            <option value="workspace">当前工作区</option>
+          </select>
+          {forceOnce ? <em className="tiny">此操作必须每次确认</em> : null}
+        </label>
         <button
           className="tool-btn"
           type="button"
@@ -3935,9 +3954,9 @@ function ApprovalReviewCard({
           className="tool-btn primary"
           type="button"
           disabled={deciding || resolved}
-          onClick={() => onDecision(approval.id, "granted")}
+          onClick={() => onDecision(approval.id, "granted", forceOnce ? "once" : scope)}
         >
-          {deciding ? "处理中..." : "通过一次并继续"}
+          {deciding ? "处理中..." : forceOnce || scope === "once" ? "通过一次并继续" : "通过并记住"}
         </button>
       </div>
     </div>
@@ -5527,14 +5546,14 @@ export default function App() {
     };
   }, [activeSessionId, activeRun?.status, sortedEvents.length, refreshDetail, refreshSessions]);
 
-  const handleApprovalDecision = async (approvalId: string, decision: "granted" | "denied") => {
+  const handleApprovalDecision = async (approvalId: string, decision: "granted" | "denied", scope: "once" | "task" | "workspace" = "once") => {
     const approval = pendingApprovals.find((candidate) => candidate.id === approvalId);
     if (decidingApprovalsRef.current.has(approvalId)) return;
     decidingApprovalsRef.current.add(approvalId);
     setDecisionState((prev) => ({ ...prev, [approvalId]: "approving" }));
     try {
       const bridge = requireDesktopBridge();
-      await bridge.decideApproval({ approvalId, decision });
+      await bridge.decideApproval({ approvalId, decision, scope });
       setApprovalError(null);
       if (approval) {
         setActiveRunId(approval.runId);

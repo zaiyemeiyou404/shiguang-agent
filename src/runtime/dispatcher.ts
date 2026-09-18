@@ -48,6 +48,14 @@ function classifyToolError(err: unknown, message: string): { kind: ToolErrorKind
   };
 }
 
+function allowsAutomaticRetry(contract: ReturnType<typeof inferToolContract>, retryable: boolean, toolName: string): boolean {
+  return retryable
+    && contract.risk === "read"
+    && contract.approval === "never"
+    && contract.effects.workspaceMutation !== true
+    && (contract.category === "web" || contract.category === "github" || contract.category === "mcp" || /^(web_|github_|mcp_)/.test(toolName));
+}
+
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw new DOMException("Run cancelled", "AbortError");
@@ -66,6 +74,7 @@ type ToolPipelinePhase =
   | "approved"
   | "denied"
   | "executing"
+  | "retrying"
   | "completed"
   | "failed";
 
@@ -170,6 +179,7 @@ export class ActionDispatcher {
             },
           };
         }
+        const executionStartedAt = Date.now();
         try {
           const contract = tool.descriptor.contract ?? inferToolContract(tool.descriptor);
           const permission = checkToolPermission(tool.descriptor, context);
@@ -201,12 +211,42 @@ export class ActionDispatcher {
             reason: decision.reasoning,
             contract: summarizeContractForEvent(contract),
           });
-          const output = await tool.execute(action.toolInput, context);
+          let output: unknown;
+          try {
+            output = await tool.execute(action.toolInput, context);
+          } catch (firstError: unknown) {
+            const firstMessage = firstError instanceof Error ? firstError.message : String(firstError);
+            const firstClassification = classifyToolError(firstError, firstMessage);
+            const firstHealth = this.toolRegistry.recordFailure(
+              action.toolName,
+              Date.now() - executionStartedAt,
+              firstClassification.kind,
+              firstClassification.retryable,
+            );
+            if (!allowsAutomaticRetry(contract, firstClassification.retryable, action.toolName)) throw firstError;
+            await this.recordToolPipeline(runId, {
+              phase: "retrying",
+              tool: action.toolName,
+              input: action.toolInput,
+              toolCallId,
+              reason: "只读外部请求暂时失败，正在进行唯一一次安全重试。",
+              error: firstMessage,
+              errorType: errorType(firstError),
+              errorKind: firstClassification.kind,
+              retryable: true,
+              contract: summarizeContractForEvent(contract),
+              attempt: 1,
+              health: firstHealth,
+            });
+            output = await tool.execute(action.toolInput, context);
+          }
+          const health = this.toolRegistry.recordSuccess(action.toolName, Date.now() - executionStartedAt);
           if (this.eventSink && runId) {
             await this.eventSink.record(runId, "tool_result", {
               tool: action.toolName,
               output,
               toolCallId,
+              health,
             });
           }
           await this.recordToolPipeline(runId, {
@@ -217,6 +257,7 @@ export class ActionDispatcher {
             toolCallId,
             reason: decision.reasoning,
             contract: summarizeContractForEvent(contract),
+            health,
           });
           return {
             action,
@@ -240,6 +281,7 @@ export class ActionDispatcher {
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
           const classification = classifyToolError(err, msg);
+          const health = this.toolRegistry.recordFailure(action.toolName, Date.now() - executionStartedAt, classification.kind, classification.retryable);
           await this.recordToolPipeline(runId, {
             phase: "failed",
             tool: action.toolName,
@@ -250,6 +292,7 @@ export class ActionDispatcher {
             errorType: errorType(err),
             errorKind: classification.kind,
             retryable: classification.retryable,
+            health,
           });
           return {
             action,
@@ -372,6 +415,8 @@ export class ActionDispatcher {
     errorType?: string;
     errorKind?: ToolErrorKind;
     retryable?: boolean;
+    attempt?: number;
+    health?: unknown;
     preview?: unknown;
     contract?: unknown;
   }): Promise<void> {
@@ -454,6 +499,7 @@ function buildToolPipelineDisplay(payload: {
 function titleForPhase(phase: ToolPipelinePhase, toolLabel: string): string {
   if (phase === "pre_execute") return `准备${toolLabel}`;
   if (phase === "executing") return `正在${toolLabel}`;
+  if (phase === "retrying") return `正在重试：${toolLabel}`;
   if (phase === "completed") return completedTitleForTool(toolLabel);
   if (phase === "failed") return `${toolLabel}失败`;
   if (phase === "approval_required") return `等待审批：${toolLabel}`;
@@ -517,6 +563,7 @@ function detailForPhase(
 
   if (phase === "pre_execute") return subject || `准备${parts.action}。`;
   if (phase === "executing") return subject || `正在${parts.action}，等待工具返回结果。`;
+  if (phase === "retrying") return "上一次只读外部请求暂时失败，正在进行唯一一次安全重试。";
   if (phase === "completed") return parts.result ?? `${parts.toolLabel}已经完成。`;
   if (phase === "failed") return parts.result ?? `${parts.toolLabel}执行失败，任务循环会把错误带回给模型做恢复判断。`;
   if (phase === "approval_required") return [reason, target, expected].filter(Boolean).join("；") || `这个动作需要你确认后才会执行。`;

@@ -256,3 +256,45 @@ test("ActionDispatcher explains failed tool recovery in pipeline display", async
   assert.match(display?.nextStep ?? "", /网页搜索|链接提取/);
   assert.match(display?.debugHint ?? "", /tool=web_fetch/);
 });
+
+test("ActionDispatcher retries a retryable read-only external request once and records health", async () => {
+  const sink = new InMemoryEventSink();
+  const registry = new ToolRegistry();
+  let calls = 0;
+  registry.register({
+    descriptor: { name: "web_fetch", description: "Fetch", inputSchema: { type: "object" } },
+    async execute() {
+      calls += 1;
+      if (calls === 1) throw new Error("network timeout");
+      return { url: "https://example.test", text: "ok" };
+    },
+  });
+  const result = await new ActionDispatcher(registry, sink).dispatch({
+    action: { kind: "tool_call", toolName: "web_fetch", toolInput: { url: "https://example.test" } },
+    reasoning: "Need external evidence.",
+  }, "run_safe_retry");
+
+  assert.equal(result.ok, true);
+  assert.equal(calls, 2);
+  assert.equal((await sink.list("run_safe_retry")).some((event) => event.kind === "tool_pipeline" && (event.payload as { phase?: unknown }).phase === "retrying"), true);
+  assert.equal(registry.healthSnapshot("web_fetch").successes, 1);
+});
+
+test("ActionDispatcher never retries workspace mutations automatically", async () => {
+  const registry = new ToolRegistry();
+  let calls = 0;
+  registry.register({
+    descriptor: {
+      name: "write_text_file", description: "Write", inputSchema: { type: "object" }, risk: "write",
+      effects: { workspaceMutation: true },
+    },
+    async execute() { calls += 1; throw new Error("network timeout"); },
+  });
+  const result = await new ActionDispatcher(registry).dispatch({
+    action: { kind: "tool_call", toolName: "write_text_file", toolInput: { path: "a.txt" } },
+    reasoning: "Write a file.",
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(calls, 1);
+});

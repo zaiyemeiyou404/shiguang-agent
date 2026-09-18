@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { Tool, ToolApprovalPreview } from "../types.js";
 
@@ -439,6 +439,14 @@ function parseRecordAgentRuleInput(input: unknown): RecordAgentRuleInput {
   };
 }
 
+function skillNameFromInput(input: unknown, toolName: string): string {
+  const name = input && typeof input === "object" ? (input as Record<string, unknown>).name : undefined;
+  if (typeof name !== "string") {
+    throw new Error(`${toolName}: input must be { name }`);
+  }
+  return safeExtensionName(name);
+}
+
 function readToolManifest(path: string): CustomToolManifest | null {
   if (!existsSync(path)) return null;
   const stats = statSync(path);
@@ -690,6 +698,7 @@ export function createCustomExtensionTools(extensionRoot: string): Tool[] {
     createListCustomExtensionsTool(extensionRoot),
     createRecordAgentRuleTool(extensionRoot),
     createCreateCustomSkillTool(extensionRoot),
+    createDeleteCustomSkillTool(extensionRoot),
     createCreateCustomToolTool(extensionRoot),
     createRunCustomToolTool(extensionRoot),
   ];
@@ -832,6 +841,36 @@ export function createCreateCustomSkillTool(extensionRoot: string): Tool {
       const path = skillPath(extensionRoot, safeName);
       writeFileSync(path, renderSkillMarkdown(parsed, safeName), "utf8");
       return { name: safeName, path, enabled: parsed.enabled !== false, status: "created" };
+    },
+  };
+}
+
+export function createDeleteCustomSkillTool(extensionRoot: string): Tool {
+  return {
+    descriptor: {
+      name: "delete_custom_skill",
+      description: "Delete one user-created Shiguang skill after explicit single-use approval. Built-in skills cannot be deleted.",
+      inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
+      risk: "write",
+      requiresApproval: true,
+      capability: "extensions.skill.delete",
+    },
+    previewApproval(input: unknown): ToolApprovalPreview {
+      const name = skillNameFromInput(input, "delete_custom_skill");
+      return {
+        kind: "summary",
+        title: `删除自定义 skill：${name}`,
+        path: skillPath(extensionRoot, name),
+        operation: "delete_custom_skill",
+        warnings: ["会永久删除该 skill；此操作必须每次单独确认。"],
+      };
+    },
+    async execute(input: unknown): Promise<unknown> {
+      const name = skillNameFromInput(input, "delete_custom_skill");
+      const path = skillPath(extensionRoot, name);
+      if (!existsSync(path)) throw new Error(`delete_custom_skill: skill not found: ${name}`);
+      unlinkSync(path);
+      return { name, path, status: "deleted" };
     },
   };
 }

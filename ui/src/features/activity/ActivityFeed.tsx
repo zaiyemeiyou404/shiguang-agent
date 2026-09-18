@@ -27,7 +27,7 @@ export function ActivityFeed({
   events: DesktopEvent[];
   approvals?: DesktopApproval[];
   decisionState?: Record<string, ApprovalDecisionState>;
-  onApprovalDecision?: (approvalId: string, decision: "granted" | "denied") => void;
+  onApprovalDecision?: (approvalId: string, decision: "granted" | "denied", scope?: "once" | "task" | "workspace") => void;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [following, setFollowing] = useState(true);

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { DesktopApproval } from "../../bridge";
 import { normalizeApproval } from "./approval-model";
 import "./approvals.css";
@@ -11,9 +12,10 @@ export function ApprovalCard({
 }: {
   approval: DesktopApproval;
   decisionState?: ApprovalDecisionState;
-  onDecision: (approvalId: string, decision: "granted" | "denied") => void;
+  onDecision: (approvalId: string, decision: "granted" | "denied", scope?: "once" | "task" | "workspace") => void;
 }) {
   const view = normalizeApproval(approval);
+  const [scope, setScope] = useState<"once" | "task" | "workspace">("once");
   const pending = approval.status === "pending" && !decisionState;
   const busy = decisionState === "approving";
   const status = decisionState === "approving"
@@ -61,9 +63,17 @@ export function ApprovalCard({
 
       {approval.status === "pending" ? (
         <footer className="approval-actions">
+          <label>
+            <span className="sr-only">授权范围</span>
+            <select value={scope} disabled={busy || Boolean(decisionState)} onChange={(event) => setScope(event.target.value as typeof scope)}>
+              <option value="once">仅本次</option>
+              <option value="task">当前任务</option>
+              <option value="workspace">当前工作区</option>
+            </select>
+          </label>
           <button type="button" disabled={busy || Boolean(decisionState)} onClick={() => onDecision(approval.id, "denied")}>拒绝</button>
-          <button className="primary" type="button" disabled={busy || Boolean(decisionState)} onClick={() => onDecision(approval.id, "granted")}>
-            {busy ? "处理中…" : "允许一次"}
+          <button className="primary" type="button" disabled={busy || Boolean(decisionState)} onClick={() => onDecision(approval.id, "granted", scope)}>
+            {busy ? "处理中…" : scope === "once" ? "允许一次" : "允许并记住"}
           </button>
         </footer>
       ) : null}

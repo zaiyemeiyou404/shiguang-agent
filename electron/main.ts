@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu } from "electron";
+import { app, BrowserWindow, Menu, shell } from "electron";
 import * as path from "node:path";
 import { DesktopStore } from "./store.js";
 import { DesktopAppService } from "./app-service.js";
@@ -8,6 +8,11 @@ import {
   startLocalAgentGateway,
   type LocalAgentGatewayHandle,
 } from "../dist/integrations/local-agent-gateway.js";
+import {
+  createSecureWebPreferences,
+  installWindowSecurity,
+  resolveWindowResources,
+} from "./window-security.js";
 
 const isDev = process.env.ELECTRON_DEV === "true";
 const userDataPath = configureAppUserDataPath();
@@ -16,10 +21,7 @@ let localAgentGateway: LocalAgentGatewayHandle | null = null;
 
 function createWindow() {
   const appPath = app.getAppPath();
-  const projectRoot = path.basename(appPath) === "desktop-build" ? path.dirname(appPath) : appPath;
-  const desktopBuildDir = path.basename(appPath) === "desktop-build" ? appPath : path.join(appPath, "desktop-build");
-  const preloadPath = path.join(desktopBuildDir, "preload.cjs");
-  const uiEntry = path.join(projectRoot, "ui", "dist", "index.html");
+  const resources = resolveWindowResources(appPath, isDev);
   const win = new BrowserWindow({
     width: 1400,
     height: 960,
@@ -27,18 +29,15 @@ function createWindow() {
     minHeight: 700,
     title: "拾光 Agent",
     autoHideMenuBar: true,
-    webPreferences: {
-      preload: preloadPath,
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
+    webPreferences: createSecureWebPreferences(resources.preloadPath),
   });
+  installWindowSecurity(win, resources, isDev, shell);
 
   if (isDev) {
-    win.loadURL("http://localhost:5173");
+    win.loadURL(resources.rendererUrl);
     win.webContents.openDevTools({ mode: "detach" });
   } else {
-    win.loadFile(uiEntry);
+    win.loadFile(resources.uiEntry);
   }
 }
 

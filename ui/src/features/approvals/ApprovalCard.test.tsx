@@ -18,7 +18,7 @@ describe("ApprovalCard", () => {
     expect(screen.getByText("terminal.execute")).toBeInTheDocument();
     expect(screen.getByText("G:\\repo")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "允许一次" }));
-    expect(decide).toHaveBeenCalledWith("approval-1", "granted");
+    expect(decide).toHaveBeenCalledWith("approval-1", "granted", "once");
   });
 
   it("disables both decisions while a request is in flight", () => {

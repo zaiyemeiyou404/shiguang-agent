@@ -30,6 +30,7 @@ import type { Approval, Artifact, Memory, Project, Run, RunEvent, Session, Task,
 import type { ExecutionGrant } from "../dist/tools/types.js";
 import { MemoryService } from "../dist/memory/service.js";
 import { openStateDatabase } from "../dist/state/sqlite.js";
+import { importLegacyRuntimeData } from "../dist/state/legacy-runtime-importer.js";
 import { SqliteApprovalRepository } from "../dist/state/sqlite-approval-repository.js";
 import { SqliteArtifactRepository } from "../dist/state/sqlite-artifact-repository.js";
 import { SqliteMemoryRepository } from "../dist/state/sqlite-memory-repository.js";
@@ -57,6 +58,8 @@ import { createMovePathTool } from "../dist/tools/builtins/move-path.js";
 import { createDeletePathTool } from "../dist/tools/builtins/delete-path.js";
 import { createGitStatusTool } from "../dist/tools/builtins/git-status.js";
 import { createGitDiffTool } from "../dist/tools/builtins/git-diff.js";
+import { createGitCommitTool } from "../dist/tools/builtins/git-commit.js";
+import { createGitPushTool } from "../dist/tools/builtins/git-push.js";
 import { createInspectProjectTool } from "../dist/tools/builtins/inspect-project.js";
 import { createGitHubRepoTool } from "../dist/tools/builtins/github-repo.js";
 import { createWebFetchTool } from "../dist/tools/builtins/web-fetch.js";
@@ -347,6 +350,9 @@ export class DesktopAppService {
     const workspacePolicy = getShiguangWorkspacePolicy();
     const stateDbPath = workspacePolicy.stateDbPath;
     const db = openStateDatabase(stateDbPath);
+    importLegacyRuntimeData(db, this.store.getRuntimeSnapshot(), {
+      sourceKey: `desktop-store-v1:${this.store.getFilePath()}`,
+    });
     const memoryDb = openStateDatabase(resolveDedicatedMemoryDatabasePath(workspacePolicy));
     migrateLegacyMemoriesToDedicatedDatabase(stateDbPath, memoryDb);
     const migratedRoot = resolve(normalize(loadDesktopConfig().workspaceRoot));
@@ -768,6 +774,9 @@ export class DesktopAppService {
           summary,
           payload: { steps: output.state.steps, stopReason: output.state.stopReason ?? null },
         });
+        if (runStatus === "needs_approval") {
+          await this.resumeWithReusableApproval(runId);
+        }
         await this.artifactRepository.create({
           id: `artifact_${runId}_summary`,
           sessionId,
@@ -893,10 +902,11 @@ export class DesktopAppService {
     }
 
     const decidedAt = new Date();
+    const effectiveScope = normalizeApprovalScope(approval, decision, scope);
     await this.approvalRepository.update(approvalId, {
       status: decision,
       decidedAt,
-      scope,
+      scope: effectiveScope,
     });
 
     if (decision === "granted") {
@@ -935,6 +945,7 @@ export class DesktopAppService {
       input: approvedAction?.toolInput,
       approvalId: approval.id,
       capability: approval.capability,
+      scope: effectiveScope,
     });
     await sink.record(
       approval.runId,
@@ -943,6 +954,7 @@ export class DesktopAppService {
         approvalId: approval.id,
         capability: approval.capability,
         request: approval.request,
+        scope: effectiveScope,
       },
     );
 
@@ -1214,6 +1226,8 @@ export class DesktopAppService {
       createInspectProjectTool(workspaceRoot),
       createGitStatusTool(workspaceRoot),
       createGitDiffTool(workspaceRoot),
+      createGitCommitTool(workspaceRoot),
+      createGitPushTool(workspaceRoot),
       createGitHubRepoTool(workspaceRoot),
       createWebFetchTool(),
       createWebSearchTool(),
@@ -1440,7 +1454,7 @@ export class DesktopAppService {
     if (!session) return;
     const workspace = await this.requireWorkspace(session.workspaceId);
     const sessionWithWorkspace = this.ensureSessionWorkspace(session);
-    const { agent, label, workspaceRoot } = await this.createAgentRuntime(sink, workspace.rootPath, sessionWithWorkspace.llm);
+    const { agent, label, workspaceRoot, executionGrant } = await this.createAgentRuntime(sink, workspace.rootPath, sessionWithWorkspace.llm);
     const userMessage = await this.loadLatestUserMessage(run.sessionId, task);
     const controller = new AbortController();
     this.activeRunControllers.set(run.id, controller);
@@ -1459,6 +1473,7 @@ export class DesktopAppService {
         runId: run.id,
         userMessage,
         signal: controller.signal,
+        executionGrant,
         approvalId: approval.id,
         approvedAction,
         contextInput: {
@@ -1639,6 +1654,28 @@ export class DesktopAppService {
         }
       }
     }
+  }
+
+  private async resumeWithReusableApproval(runId: string): Promise<void> {
+    const pending = (await this.approvalRepository.listPending(runId))[0];
+    if (!pending || requiresSingleUseApproval(pending)) return;
+    const reusable = await this.approvalRepository.findReusable(runId, pending.capability);
+    if (!reusable) return;
+
+    const decidedAt = new Date();
+    await this.approvalRepository.update(pending.id, {
+      status: "granted",
+      decidedAt,
+      scope: reusable.scope ?? "once",
+    });
+    const sink = this.createRunEventSink();
+    await sink.record(runId, "approval_granted", {
+      approvalId: pending.id,
+      capability: pending.capability,
+      scope: reusable.scope ?? "once",
+      reusedFromApprovalId: reusable.id,
+    });
+    setTimeout(() => { void this.resumeRunAfterApproval({ ...pending, status: "granted", decidedAt, scope: reusable.scope }); }, 0);
   }
 
   private async persistAttachmentArtifacts(sessionId: string, taskId: string, runId: string, attachments: DesktopAttachment[]): Promise<void> {
@@ -2197,6 +2234,22 @@ function coreRunToDesktop(run: Run): DesktopRun {
     summary: run.summary,
     budget: run.budget ?? null,
   };
+}
+
+function normalizeApprovalScope(
+  approval: Approval,
+  decision: "granted" | "denied",
+  requestedScope: "once" | "task" | "workspace",
+): "once" | "task" | "workspace" {
+  if (decision !== "granted" || requiresSingleUseApproval(approval)) return "once";
+  return requestedScope;
+}
+
+function requiresSingleUseApproval(approval: Approval): boolean {
+  const source = [approval.capability, approval.pluginId, JSON.stringify(approval.request ?? {})]
+    .join(" ")
+    .toLowerCase();
+  return /delete|remove|move|rename|git[\s_.-]*push|push_to_remote|publish|deploy|release|credential|token|secret|password|api[_ -]?key|global.*install|install.*(?:-g|--global)/.test(source);
 }
 
 function coreTaskCheckpointToDesktop(checkpoint: TaskCheckpoint): import("./types.js").DesktopTaskCheckpoint {

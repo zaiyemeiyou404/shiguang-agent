@@ -24,10 +24,12 @@ test("custom extension tools create, list, and run a declarative custom tool", a
   const createTool = tools.find((tool) => tool.descriptor.name === "create_custom_tool");
   const listTool = tools.find((tool) => tool.descriptor.name === "list_custom_extensions");
   const runTool = tools.find((tool) => tool.descriptor.name === "run_custom_tool");
+  const deleteSkill = tools.find((tool) => tool.descriptor.name === "delete_custom_skill");
 
   assert.ok(createTool);
   assert.ok(listTool);
   assert.ok(runTool);
+  assert.ok(deleteSkill);
   assert.equal(createTool.descriptor.requiresApproval, true);
 
   const created = await createTool.execute({
