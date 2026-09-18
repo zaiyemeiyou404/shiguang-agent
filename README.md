@@ -2,9 +2,9 @@
 
 拾光 Agent 是一个轻量级桌面 AI Agent。它把对话、工作区文件操作、工具调用、审批、运行记录和上下文压缩放在一个 Electron 桌面界面里，目标是做成一个下载后即可配置使用的小型个人工作台。
 
-当前版本：`0.2.47`
+当前版本：`0.2.48`
 
-## 0.2.47 更新
+## 0.2.48 更新
 
 - 新增可治理的 Git 工具：`git_commit` 只在本地创建提交；`git_push` 必须逐次确认后才会推送远程。
 - 审批卡片支持“仅本次”和有限范围复用；高风险写入、命令和远程推送始终要求本次确认。
@@ -12,6 +12,7 @@
 - 自定义 Skill 支持创建、筛选、加载和删除，作为项目的可复用流程记忆。
 - Electron 窗口启用沙箱、受控导航与内容安全策略；前端桥接接口增加完整性校验。
 - 状态库改为可审计的逐版本迁移，并自动一次性导入旧桌面运行记录而不覆盖现有数据。
+- 修复 Windows 打包版的 Electron sandbox preload 桥接，桌面程序可正常进入工作台。
 
 本版重点：新增自定义扩展工作台。Agent 可以创建可复用的 skill 指令和声明式自定义工具，扩展文件统一保存在应用数据目录的 `extensions/skills` 与 `extensions/tools` 下；已启用 skill 会注入后续运行提示词，自定义工具可通过 `run_custom_tool` 立即使用，并会在后续运行中以独立 `custom_*` 工具加载。
 ## 项目与工作区
@@ -30,7 +31,7 @@
 
 在 GitHub Releases 页面下载 Windows 版本：
 
-- 安装包：`shiguang-agent-setup-0.2.47.exe`
+- 安装包：`shiguang-agent-setup-0.2.48.exe`
 - 免安装版：`win-unpacked.zip`
 
 安装包安装完成后会创建桌面快捷方式和开始菜单快捷方式。桌面上出现的是快捷方式，不是复制出来的独立 `.exe` 文件。
@@ -361,8 +362,8 @@ examples/          示例配置
 推送 tag 后会自动构建 Release：
 
 ```bash
-git tag v0.2.47
-git push origin v0.2.47
+git tag v0.2.48
+git push origin v0.2.48
 ```
 
 Release 会上传：
