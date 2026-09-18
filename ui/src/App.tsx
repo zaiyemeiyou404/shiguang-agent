@@ -5946,7 +5946,7 @@ export default function App() {
     document.body.style.userSelect = "none";
 
     const handleMove = (moveEvent: MouseEvent) => {
-      const nextWidth = Math.min(420, Math.max(220, startWidth + moveEvent.clientX - startX));
+      const nextWidth = Math.min(420, Math.max(260, startWidth + moveEvent.clientX - startX));
       setSessionPaneWidth(nextWidth);
     };
 

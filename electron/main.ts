@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, Menu } from "electron";
 import * as path from "node:path";
 import { DesktopStore } from "./store.js";
 import { DesktopAppService } from "./app-service.js";
@@ -26,6 +26,7 @@ function createWindow() {
     minWidth: 1024,
     minHeight: 700,
     title: "拾光 Agent",
+    autoHideMenuBar: true,
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
@@ -42,6 +43,7 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  Menu.setApplicationMenu(null);
   console.log(`Shiguang Agent user data: ${userDataPath}`);
   const store = new DesktopStore();
   service = new DesktopAppService(store);
