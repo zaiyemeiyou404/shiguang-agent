@@ -13,6 +13,7 @@ type RunRow = {
   ended_at: string | null;
   model: string | null;
   summary: string | null;
+  budget_json: string | null;
 };
 
 const RUN_COLUMNS = `
@@ -24,7 +25,8 @@ const RUN_COLUMNS = `
   started_at,
   ended_at,
   model,
-  summary
+  summary,
+  budget_json
 `;
 
 const PATCH_COLUMNS = {
@@ -36,6 +38,7 @@ const PATCH_COLUMNS = {
   endedAt: "ended_at",
   model: "model",
   summary: "summary",
+  budget: "budget_json",
 } as const satisfies Partial<Record<keyof Run, string>>;
 
 export class SqliteRunRepository implements RunRepository {
@@ -57,9 +60,10 @@ export class SqliteRunRepository implements RunRepository {
           started_at,
           ended_at,
           model,
-          summary
+          summary,
+          budget_json
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         run.id,
@@ -71,6 +75,7 @@ export class SqliteRunRepository implements RunRepository {
         toSqlDate(run.endedAt),
         run.model,
         run.summary,
+        JSON.stringify(run.budget ?? {}),
       );
   }
 
@@ -90,7 +95,7 @@ export class SqliteRunRepository implements RunRepository {
     >) {
       if (field in patch && patch[field] !== undefined) {
         assignments.push(`${column} = ?`);
-        values.push(toSqlValue(patch[field]));
+        values.push(field === "budget" ? JSON.stringify(patch.budget ?? {}) : toSqlValue(patch[field]));
       }
     }
 
@@ -136,12 +141,13 @@ function rowToRun(row: RunRow): Run {
     endedAt: fromSqlDate(row.ended_at),
     model: row.model,
     summary: row.summary,
+    budget: parseBudget(row.budget_json),
   };
 }
 
-function toSqlValue(value: Run[keyof Run] | undefined): SQLInputValue {
+function toSqlValue(value: unknown): SQLInputValue {
   if (value === undefined) return null;
-  return value instanceof Date ? toSqlDate(value) : value;
+  return value instanceof Date ? toSqlDate(value) : value as SQLInputValue;
 }
 
 function toSqlDate(date: Date | null): string | null {
@@ -150,4 +156,18 @@ function toSqlDate(date: Date | null): string | null {
 
 function fromSqlDate(value: string | null): Date | null {
   return value ? new Date(value) : null;
+}
+
+function parseBudget(value: string | null): Run["budget"] {
+  if (!value) return null;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const candidate = parsed as Record<string, unknown>;
+    return typeof candidate.maxSteps === "number" && typeof candidate.stepsUsed === "number"
+      ? { maxSteps: candidate.maxSteps, stepsUsed: candidate.stepsUsed }
+      : null;
+  } catch {
+    return null;
+  }
 }

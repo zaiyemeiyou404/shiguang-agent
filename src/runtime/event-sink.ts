@@ -1,5 +1,6 @@
 import type { RunEvent, RunEventKind } from "../core/types.js";
 import type { RunEventRepository } from "../state/repositories.js";
+import { redactEventPayload } from "./redact-event-payload.js";
 
 export interface EventSink {
   record(runId: string, kind: RunEventKind, payload: unknown): Promise<RunEvent>;
@@ -8,15 +9,17 @@ export interface EventSink {
 
 export class InMemoryEventSink implements EventSink {
   private events: RunEvent[] = [];
-  private seq = 0;
+  private seqByRun = new Map<string, number>();
 
   async record(runId: string, kind: RunEventKind, payload: unknown): Promise<RunEvent> {
+    const seq = (this.seqByRun.get(runId) ?? 0) + 1;
+    this.seqByRun.set(runId, seq);
     const event: RunEvent = {
-      id: `evt_${runId}_${++this.seq}`,
+      id: `evt_${runId}_${seq}`,
       runId,
-      seq: this.seq,
+      seq,
       kind,
-      payload,
+      payload: redactEventPayload(payload),
       createdAt: new Date(),
     };
     this.events.push(event);
@@ -42,7 +45,7 @@ export class RepositoryEventSink implements EventSink {
       runId,
       seq,
       kind,
-      payload,
+      payload: redactEventPayload(payload),
       createdAt: new Date(),
     };
 

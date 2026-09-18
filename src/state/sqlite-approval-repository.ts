@@ -11,6 +11,7 @@ type ApprovalRow = {
   status: string;
   request_json: string;
   decided_at: string | null;
+  scope: "once" | "task" | "workspace";
 };
 
 const APPROVAL_COLUMNS = `
@@ -20,12 +21,14 @@ const APPROVAL_COLUMNS = `
   capability,
   status,
   request_json,
-  decided_at
+  decided_at,
+  scope
 `;
 
 const PATCH_COLUMNS: Record<string, string> = {
   status: "status",
   decidedAt: "decided_at",
+  scope: "scope",
 };
 
 export class SqliteApprovalRepository implements ApprovalRepository {
@@ -45,9 +48,10 @@ export class SqliteApprovalRepository implements ApprovalRepository {
           capability,
           status,
           request_json,
-          decided_at
+          decided_at,
+          scope
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         approval.id,
@@ -57,6 +61,7 @@ export class SqliteApprovalRepository implements ApprovalRepository {
         approval.status,
         JSON.stringify(approval.request ?? {}),
         toSqlDate(approval.decidedAt),
+        approval.scope ?? "once",
       );
   }
 
@@ -102,7 +107,7 @@ export class SqliteApprovalRepository implements ApprovalRepository {
       .prepare(`
         SELECT a.id AS id, a.run_id AS run_id, a.plugin_id AS plugin_id,
                a.capability AS capability, a.status AS status,
-               a.request_json AS request_json, a.decided_at AS decided_at
+               a.request_json AS request_json, a.decided_at AS decided_at, a.scope AS scope
         FROM approvals a
         JOIN runs r ON r.id = a.run_id
         WHERE r.session_id = ? AND a.status = 'pending'
@@ -122,6 +127,7 @@ function rowToApproval(row: ApprovalRow): Approval {
     status: row.status as ApprovalStatus,
     request: parseRequestJson(row.request_json),
     decidedAt: fromSqlDate(row.decided_at),
+    scope: row.scope,
   };
 }
 

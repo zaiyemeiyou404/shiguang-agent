@@ -242,9 +242,9 @@ function GlobalBanner({ variant, title, detail }: { variant: BannerVariant; titl
 }
 
 function signalToneForRunStatus(status: DesktopRun["status"] | null): SignalTone {
-  if (status === "running") return "success";
-  if (status === "needs_approval" || status === "pending" || status === "paused") return "warn";
-  if (status === "failed" || status === "cancelled") return "danger";
+  if (status === "running" || status === "verifying") return "success";
+  if (status === "needs_approval" || status === "waiting_user" || status === "pending" || status === "paused") return "warn";
+  if (status === "failed" || status === "cancelled" || status === "blocked") return "danger";
   if (status === "completed") return "accent";
   return "neutral";
 }
@@ -540,6 +540,9 @@ function formatEventKindLabel(kind: DesktopEvent["kind"]) {
 }
 
 function formatRunStatus(status: DesktopRun["status"] | null | undefined) {
+  if (status === "verifying") return "验证中";
+  if (status === "waiting_user") return "等待你的输入";
+  if (status === "blocked") return "已阻塞";
   if (status === "running") return "运行中";
   if (status === "paused") return "待继续";
   if (status === "needs_approval") return "待审批";
@@ -4002,6 +4005,7 @@ function buildSettings(
   activeModel: string,
   maxTokens: string,
   toolApprovalMode: ToolApprovalMode,
+  executionPreset: DesktopSettings["executionPreset"],
 ): DesktopSettings {
   const parsedMaxTokens = maxTokens.trim() ? Number.parseInt(maxTokens, 10) : undefined;
   const nextProviders = Object.fromEntries(
@@ -4012,6 +4016,7 @@ function buildSettings(
     ...base,
     workspaceRoot: workspaceRoot.trim(),
     toolApprovalMode,
+    executionPreset,
     llm: {
       provider: activeProvider.trim() || "openai",
       ...(activeModel.trim() ? { model: activeModel.trim() } : {}),
@@ -4160,6 +4165,7 @@ function SettingsDrawer({
   const [activeModel, setActiveModel] = useState("");
   const [maxTokens, setMaxTokens] = useState("");
   const [toolApprovalMode, setToolApprovalMode] = useState<ToolApprovalMode>("ask");
+  const [executionPreset, setExecutionPreset] = useState<DesktopSettings["executionPreset"]>("workspace_write_network");
   const [mcpServersJson, setMcpServersJson] = useState("{}");
   const [providerCatalog, setProviderCatalog] = useState<Record<string, ProviderDraft>>({ openai: createProviderDraft("openai") });
   const [providerKeyInput, setProviderKeyInput] = useState("openai");
@@ -4192,6 +4198,7 @@ function SettingsDrawer({
         ? String(catalog[providerKey]?.maxTokens)
         : "");
     setToolApprovalMode(settings.toolApprovalMode ?? "ask");
+    setExecutionPreset(settings.executionPreset ?? "workspace_write_network");
     setMcpServersJson(formatMcpServersJson(settings.mcpServers));
     setProviderCatalog(catalog);
     setProviderKeyInput(providerKey);
@@ -4302,6 +4309,7 @@ function SettingsDrawer({
         model: activeModel,
         maxTokens,
         toolApprovalMode,
+        executionPreset,
       },
       provider: normalizeProviderDraftForCompare(providerDraft),
     }, null, 2);
@@ -4464,6 +4472,7 @@ function SettingsDrawer({
           fullMode ? activeModel : globalModel,
           fullMode ? maxTokens : globalMaxTokens,
           fullMode ? toolApprovalMode : (settings.toolApprovalMode ?? "ask"),
+          fullMode ? executionPreset : (settings.executionPreset ?? "workspace_write_network"),
         ),
         mcpServers,
       };
@@ -4882,6 +4891,15 @@ function SettingsDrawer({
               <label className="tiny">旧版默认目录（仅迁移兼容）</label>
               <input className="settings-input" value={workspaceRoot} readOnly />
               <p className="muted">实际修改范围由左侧当前工作区决定，不再由这里统一切换。</p>
+            </div>
+            <div>
+              <label className="tiny">执行权限</label>
+              <select className="settings-input" value={executionPreset} onChange={(e) => setExecutionPreset(e.target.value as DesktopSettings["executionPreset"])}>
+                <option value="read_only">只读</option>
+                <option value="workspace_write">工作区修改（禁网）</option>
+                <option value="workspace_write_network">工作区修改 + 联网</option>
+                <option value="full_access">完整访问</option>
+              </select>
             </div>
             <div>
               <label className="tiny">当前 Provider</label>

@@ -17,7 +17,7 @@ import {
 } from "../brain/agent-profile.js";
 import { ActionDispatcher } from "../runtime/dispatcher.js";
 import { ToolRegistry } from "../tools/registry.js";
-import type { Tool } from "../tools/types.js";
+import type { ExecutionGrant, Tool } from "../tools/types.js";
 import {
   formatCustomSkillInstructions,
   type CustomSkill,
@@ -51,6 +51,7 @@ export interface AgentInput {
   userMessage: string;
   contextInput: Omit<ContextBuilderInput, "userTurn">;
   signal?: AbortSignal;
+  executionGrant?: ExecutionGrant;
 }
 
 export interface AgentOutput {
@@ -61,6 +62,7 @@ export interface AgentApprovalResumeInput {
   runId: string;
   userMessage: string;
   signal?: AbortSignal;
+  executionGrant?: ExecutionGrant;
   approvalId?: string;
   approvedAction: {
     toolName: string;
@@ -125,7 +127,7 @@ export class Agent {
       const state = await this.runLoopUntilFinal(
         brainInput,
         DEFAULT_RUN_STEP_BUDGET,
-        { signal: input.signal },
+        { signal: input.signal, executionGrant: input.executionGrant },
       );
 
       await this.emitSyntheticFinalFeedback(input.runId, state);
@@ -163,7 +165,7 @@ export class Agent {
         reasoning: `Resuming approved tool: ${input.approvedAction.toolName}`,
       };
 
-      const approvedResult = await this.dispatcher.dispatch(approvedDecision, input.runId, { signal: input.signal });
+      const approvedResult = await this.dispatcher.dispatch(approvedDecision, input.runId, { signal: input.signal, executionGrant: input.executionGrant });
       await this.options.eventSink.record(input.runId, "tool_pipeline", {
         phase: approvedResult.ok ? "approval_executed" : "approval_failed",
         approvalId: input.approvalId ?? null,
@@ -206,7 +208,7 @@ export class Agent {
         state = await this.runLoopUntilFinal(
           brainInput,
           APPROVAL_RESUME_STEP_BUDGET,
-          { signal: input.signal },
+        { signal: input.signal, executionGrant: input.executionGrant },
         );
       }
 
@@ -236,7 +238,7 @@ export class Agent {
   private async runLoopUntilFinal(
     input: BrainInput,
     stepBudget: number,
-    context?: { signal?: AbortSignal },
+    context?: { signal?: AbortSignal; executionGrant?: ExecutionGrant },
   ): Promise<LoopState> {
     let nextInput = input;
     let latestState: LoopState | null = null;
@@ -250,7 +252,7 @@ export class Agent {
           planner: this.planner,
           policy: this.policy,
           dispatcher: {
-            dispatch: (decision, dispatchContext) => this.dispatcher.dispatch(decision, input.runId, dispatchContext),
+            dispatch: (decision, dispatchContext) => this.dispatcher.dispatch(decision, input.runId, { ...dispatchContext, executionGrant: context?.executionGrant }),
           },
           evaluator: this.evaluator,
         },

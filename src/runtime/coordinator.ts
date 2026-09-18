@@ -29,6 +29,69 @@ export class RuntimeCoordinator {
         });
         break;
       }
+      case "resume": {
+        await this.store.updateRun(cmd.runId, {
+          status: "running",
+          reason: null,
+          model: cmd.model ?? null,
+        });
+        await this.sink.record(cmd.runId, "system", {
+          message: "run resumed",
+          model: cmd.model,
+        });
+        break;
+      }
+      case "pause": {
+        await this.store.updateRun(cmd.runId, {
+          status: "paused",
+          reason: cmd.reason ?? null,
+        });
+        await this.sink.record(cmd.runId, "system", {
+          message: "run paused",
+          reason: cmd.reason,
+        });
+        break;
+      }
+      case "wait_for_approval": {
+        await this.store.updateRun(cmd.runId, {
+          status: "needs_approval",
+          reason: cmd.reason,
+        });
+        await this.sink.record(cmd.runId, "system", {
+          message: "run waiting for approval",
+          reason: cmd.reason,
+        });
+        break;
+      }
+      case "wait_for_user": {
+        await this.store.updateRun(cmd.runId, {
+          status: "waiting_user",
+          reason: cmd.reason,
+        });
+        await this.sink.record(cmd.runId, "system", {
+          message: "run waiting for user",
+          reason: cmd.reason,
+        });
+        break;
+      }
+      case "block": {
+        const now = new Date();
+        await this.store.updateRun(cmd.runId, {
+          status: "blocked",
+          reason: cmd.reason,
+          endedAt: now,
+        });
+        await this.sink.record(cmd.runId, "error", {
+          message: "run blocked",
+          reason: cmd.reason,
+        });
+        break;
+      }
+      case "verify": {
+        await this.store.updateRun(cmd.runId, { status: "verifying" });
+        await this.sink.record(cmd.runId, "system", { message: "run verifying" });
+        break;
+      }
       case "append_event": {
         await this.sink.record(cmd.runId, cmd.kind, cmd.payload);
         break;

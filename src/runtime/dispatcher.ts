@@ -3,6 +3,7 @@ import type { ToolRegistry } from "../tools/registry.js";
 import type { EventSink } from "./event-sink.js";
 import type { ToolExecutionContext } from "../tools/types.js";
 import { inferToolContract } from "../tools/contract.js";
+import { checkToolPermission } from "../tools/execution-policy.js";
 import { randomUUID } from "node:crypto";
 
 function summarize(value: unknown, maxLength = 500): string {
@@ -171,6 +172,27 @@ export class ActionDispatcher {
         }
         try {
           const contract = tool.descriptor.contract ?? inferToolContract(tool.descriptor);
+          const permission = checkToolPermission(tool.descriptor, context);
+          if (!permission.allowed) {
+            await this.recordToolPipeline(runId, {
+              phase: "failed",
+              tool: action.toolName,
+              input: action.toolInput,
+              toolCallId,
+              reason: decision.reasoning,
+              error: permission.reason,
+              errorKind: "permission_denied",
+              retryable: false,
+              contract: summarizeContractForEvent(contract),
+            });
+            return {
+              action,
+              ok: false,
+              output: null,
+              error: permission.reason,
+              metadata: { category: "tool_error", summary: permission.reason, retryable: false, toolName: action.toolName, toolCallId, errorType: "PermissionDenied", errorKind: "permission_denied" },
+            };
+          }
           await this.recordToolPipeline(runId, {
             phase: "executing",
             tool: action.toolName,

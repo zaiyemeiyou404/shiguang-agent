@@ -37,6 +37,12 @@ export interface Turn {
 export type TaskStatus =
   | "pending"
   | "in_progress"
+  | "planned"
+  | "running"
+  | "waiting_approval"
+  | "waiting_user"
+  | "blocked"
+  | "verifying"
   | "completed"
   | "failed"
   | "cancelled";
@@ -57,6 +63,9 @@ export type RunStatus =
   | "pending"
   | "running"
   | "paused"
+  | "waiting_user"
+  | "blocked"
+  | "verifying"
   | "completed"
   | "failed"
   | "cancelled"
@@ -72,6 +81,12 @@ export interface Run {
   endedAt: Date | null;
   model: string | null;
   summary: string | null;
+  budget?: RunBudget | null;
+}
+
+export interface RunBudget {
+  maxSteps: number;
+  stepsUsed: number;
 }
 
 export type RunEventKind =
@@ -94,6 +109,28 @@ export interface RunEvent {
   seq: number;
   kind: RunEventKind;
   payload: unknown;
+  createdAt: Date;
+}
+
+export type TaskCheckpointKind =
+  | "planned"
+  | "progress"
+  | "waiting_approval"
+  | "waiting_user"
+  | "verifying"
+  | "completed"
+  | "blocked"
+  | "cancelled"
+  | "failed";
+
+export interface TaskCheckpoint {
+  id: string;
+  taskId: string;
+  runId: string | null;
+  kind: TaskCheckpointKind;
+  title: string;
+  summary: string | null;
+  payload: Record<string, unknown> | null;
   createdAt: Date;
 }
 
@@ -156,6 +193,7 @@ export interface MemoryLink {
 }
 
 export type ApprovalStatus = "pending" | "granted" | "denied" | "expired";
+export type ApprovalScope = "once" | "task" | "workspace";
 
 export interface Approval {
   id: string;
@@ -165,4 +203,5 @@ export interface Approval {
   status: ApprovalStatus;
   request: unknown;
   decidedAt: Date | null;
+  scope?: ApprovalScope;
 }

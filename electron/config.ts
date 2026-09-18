@@ -11,10 +11,12 @@ const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_MODEL = "gpt-4o-mini";
 const DEFAULT_MAX_TOKENS = 2048;
 const DEFAULT_TOOL_APPROVAL_MODE = "ask";
+const DEFAULT_EXECUTION_PRESET: ExecutionPreset = "workspace_write_network";
 
 export type ProviderProtocol = "openai-compatible" | "anthropic" | "gemini";
 export type ProviderAuthMode = "api_key" | "none";
 export type ToolApprovalMode = "ask" | "workspace_edits";
+export type ExecutionPreset = "read_only" | "workspace_write" | "workspace_write_network" | "full_access";
 export type McpTransportMode = "stdio";
 
 interface ProviderConfigFile {
@@ -36,6 +38,7 @@ interface LlmConfigFile extends ProviderConfigFile {
 interface DesktopConfigFile {
   workspaceRoot?: string;
   toolApprovalMode?: ToolApprovalMode;
+  executionPreset?: ExecutionPreset;
   llm?: LlmConfigFile;
   providers?: Record<string, ProviderConfigFile>;
   mcpServers?: Record<string, McpServerConfigFile>;
@@ -64,6 +67,7 @@ export interface ResolvedDesktopConfig {
   configPath: string;
   workspaceRoot: string;
   toolApprovalMode: ToolApprovalMode;
+  executionPreset: ExecutionPreset;
   llm: ResolvedLlmConfig;
   mcpServers: ResolvedMcpServerConfig[];
 }
@@ -92,6 +96,7 @@ export interface DesktopSettings {
   configPath: string;
   workspaceRoot: string;
   toolApprovalMode: ToolApprovalMode;
+  executionPreset: ExecutionPreset;
   llm: {
     provider: string;
     model?: string;
@@ -211,6 +216,7 @@ export function loadDesktopConfig(): ResolvedDesktopConfig {
     configPath,
     workspaceRoot,
     toolApprovalMode: normalizeToolApprovalMode(fileConfig.toolApprovalMode),
+    executionPreset: normalizeExecutionPreset(fileConfig.executionPreset),
     llm,
     mcpServers: resolveMcpServers(fileConfig.mcpServers),
   };
@@ -274,6 +280,7 @@ export function getDesktopSettings(): DesktopSettings {
     configPath,
     workspaceRoot: resolveWorkspaceRoot(fileConfig.workspaceRoot),
     toolApprovalMode: normalizeToolApprovalMode(fileConfig.toolApprovalMode),
+    executionPreset: normalizeExecutionPreset(fileConfig.executionPreset),
     llm: {
       provider: fileConfig.llm?.provider ?? "openai",
       ...(fileConfig.llm?.model ? { model: fileConfig.llm.model } : {}),
@@ -301,6 +308,7 @@ export function saveDesktopSettings(settings: DesktopSettings): DesktopSettings 
   const nextConfig: DesktopConfigFile = {
     workspaceRoot: settings.workspaceRoot,
     toolApprovalMode: normalizeToolApprovalMode(settings.toolApprovalMode),
+    executionPreset: normalizeExecutionPreset(settings.executionPreset),
     llm: {
       provider: settings.llm.provider,
       ...(settings.llm.model ? { model: settings.llm.model } : {}),
@@ -598,6 +606,12 @@ function normalizeMaxTokens(value: string | number): number {
 
 function normalizeToolApprovalMode(value: unknown): ToolApprovalMode {
   return value === "workspace_edits" ? "workspace_edits" : DEFAULT_TOOL_APPROVAL_MODE;
+}
+
+function normalizeExecutionPreset(value: unknown): ExecutionPreset {
+  return value === "read_only" || value === "workspace_write" || value === "full_access"
+    ? value
+    : DEFAULT_EXECUTION_PRESET;
 }
 
 function normalizeMcpTransport(value: unknown): McpTransportMode {

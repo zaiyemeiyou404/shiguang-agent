@@ -92,7 +92,7 @@ export function registerIpcHandlers(service: DesktopAppService): void {
   });
 
   ipcMain.handle("decideApproval", (_event, req: ApprovalDecisionRequest) => {
-    return service.decideApproval(req.approvalId, req.decision);
+    return service.decideApproval(req.approvalId, req.decision, req.scope);
   });
 
   ipcMain.handle("cancelRun", (_event, req: RunActionRequest) => {

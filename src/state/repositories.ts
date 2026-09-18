@@ -1,6 +1,7 @@
 import type {
   Session,
   Task,
+  TaskCheckpoint,
   Turn,
   Run,
   RunEvent,
@@ -37,6 +38,12 @@ export interface TaskRepository {
   get(id: string): Promise<Task | null>;
   update(id: string, patch: Partial<Task>): Promise<void>;
   listBySession(sessionId: string): Promise<Task[]>;
+}
+
+export interface TaskCheckpointRepository {
+  create(checkpoint: TaskCheckpoint): Promise<void>;
+  listByTask(taskId: string): Promise<TaskCheckpoint[]>;
+  latestByTask(taskId: string): Promise<TaskCheckpoint | null>;
 }
 
 export interface TurnRepository {
@@ -84,6 +91,7 @@ export interface Repositories {
   workspaces: WorkspaceRepository;
   sessions: SessionRepository;
   tasks: TaskRepository;
+  taskCheckpoints: TaskCheckpointRepository;
   turns: TurnRepository;
   runs: RunRepository;
   runEvents: RunEventRepository;

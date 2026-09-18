@@ -70,12 +70,24 @@ export interface CreateSessionRequest {
 export interface DesktopRun {
   id: string;
   sessionId: string;
-  status: "pending" | "running" | "paused" | "completed" | "failed" | "cancelled" | "needs_approval";
+  status: "pending" | "running" | "paused" | "waiting_user" | "blocked" | "verifying" | "completed" | "failed" | "cancelled" | "needs_approval";
   reason: string | null;
   startedAt: string | null;
   endedAt: string | null;
   summary: string | null;
   tokenUsage?: DesktopTokenUsage;
+  checkpoints?: DesktopTaskCheckpoint[];
+  budget?: { maxSteps: number; stepsUsed: number } | null;
+}
+
+export interface DesktopTaskCheckpoint {
+  id: string;
+  taskId: string;
+  runId: string | null;
+  kind: "planned" | "progress" | "waiting_approval" | "waiting_user" | "verifying" | "completed" | "blocked" | "cancelled" | "failed";
+  title: string;
+  summary: string | null;
+  createdAt: string;
 }
 
 export interface DesktopTurn {
@@ -182,6 +194,7 @@ export interface DesktopApproval {
   status: "pending" | "granted" | "denied" | "expired";
   request: DesktopApprovalRequest;
   decidedAt: string | null;
+  scope?: "once" | "task" | "workspace";
 }
 
 export interface DesktopArtifact {
@@ -199,6 +212,7 @@ export interface DesktopArtifact {
 export interface ApprovalDecisionRequest {
   approvalId: string;
   decision: "granted" | "denied";
+  scope?: "once" | "task" | "workspace";
 }
 
 export interface RunActionRequest {
@@ -313,6 +327,7 @@ export interface DesktopSettings {
   configPath: string;
   workspaceRoot: string;
   toolApprovalMode: ToolApprovalMode;
+  executionPreset: "read_only" | "workspace_write" | "workspace_write_network" | "full_access";
   llm: {
     provider: string;
     model?: string;

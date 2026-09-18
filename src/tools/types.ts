@@ -69,6 +69,19 @@ export interface ToolContract {
 
 export interface ToolExecutionContext {
   signal?: AbortSignal;
+  executionGrant?: ExecutionGrant;
+}
+
+export type ExecutionPreset = "read_only" | "workspace_write" | "workspace_write_network" | "full_access";
+
+export interface ExecutionGrant {
+  preset: ExecutionPreset;
+  workspaceRoot?: string;
+  allowRead: boolean;
+  allowWrite: boolean;
+  allowExecute: boolean;
+  allowNetwork: boolean;
+  approvedDomains?: string[];
 }
 
 export interface Tool {

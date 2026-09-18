@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 6;
 export const DEFAULT_PROJECT_ID = "project_default";
 export const DEFAULT_WORKSPACE_ID = "workspace_default";
 
@@ -188,4 +188,32 @@ END;
 UPDATE schema_version SET version = 3;
 `;
 
-export const ALL_MIGRATIONS = [MIGRATION_001, MIGRATION_002, MIGRATION_003];
+export const MIGRATION_004 = `
+CREATE TABLE IF NOT EXISTS task_checkpoints (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+  kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  summary TEXT,
+  payload_json TEXT DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_checkpoints_task_created
+ON task_checkpoints(task_id, created_at);
+
+UPDATE schema_version SET version = 4;
+`;
+
+export const MIGRATION_005 = `
+ALTER TABLE runs ADD COLUMN budget_json TEXT DEFAULT '{}';
+UPDATE schema_version SET version = 5;
+`;
+
+export const MIGRATION_006 = `
+ALTER TABLE approvals ADD COLUMN scope TEXT NOT NULL DEFAULT 'once';
+UPDATE schema_version SET version = 6;
+`;
+
+export const ALL_MIGRATIONS = [MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004, MIGRATION_005, MIGRATION_006];

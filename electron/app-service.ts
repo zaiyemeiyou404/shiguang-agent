@@ -26,7 +26,8 @@ import type {
 import { normalizeDesktopApprovalRequest, normalizeDesktopEventPayload } from "./event-contracts.js";
 import { Agent } from "../dist/app/agent.js";
 import { RepositoryEventSink } from "../dist/runtime/event-sink.js";
-import type { Approval, Artifact, Memory, Project, Run, RunEvent, Session, Task, Turn, Workspace } from "../dist/core/types.js";
+import type { Approval, Artifact, Memory, Project, Run, RunEvent, Session, Task, TaskCheckpoint, Turn, Workspace } from "../dist/core/types.js";
+import type { ExecutionGrant } from "../dist/tools/types.js";
 import { MemoryService } from "../dist/memory/service.js";
 import { openStateDatabase } from "../dist/state/sqlite.js";
 import { SqliteApprovalRepository } from "../dist/state/sqlite-approval-repository.js";
@@ -39,6 +40,7 @@ import { SqliteProjectRepository } from "../dist/state/sqlite-project-repository
 import { SqliteWorkspaceRepository } from "../dist/state/sqlite-workspace-repository.js";
 import { DEFAULT_PROJECT_ID, DEFAULT_WORKSPACE_ID } from "../dist/state/schema.js";
 import { SqliteTaskRepository } from "../dist/state/sqlite-task-repository.js";
+import { SqliteTaskCheckpointRepository } from "../dist/state/sqlite-task-checkpoint-repository.js";
 import { SqliteTurnRepository } from "../dist/state/sqlite-turn-repository.js";
 import { createReadTextFileTool } from "../dist/tools/builtins/read-text-file.js";
 import { createReadManyFilesTool } from "../dist/tools/builtins/read-many-files.js";
@@ -329,6 +331,7 @@ export class DesktopAppService {
   private projectRepository: SqliteProjectRepository;
   private workspaceRepository: SqliteWorkspaceRepository;
   private taskRepository: SqliteTaskRepository;
+  private taskCheckpointRepository: SqliteTaskCheckpointRepository;
   private runRepository: SqliteRunRepository;
   private runEventRepository: SqliteRunEventRepository;
   private turnRepository: SqliteTurnRepository;
@@ -355,6 +358,7 @@ export class DesktopAppService {
     this.workspaceRepository = new SqliteWorkspaceRepository(db);
     this.sessionRepository = new SqliteSessionRepository(db);
     this.taskRepository = new SqliteTaskRepository(db);
+    this.taskCheckpointRepository = new SqliteTaskCheckpointRepository(db);
     this.runRepository = new SqliteRunRepository(db);
     this.runEventRepository = new SqliteRunEventRepository(db);
     this.turnRepository = new SqliteTurnRepository(db);
@@ -550,7 +554,7 @@ export class DesktopAppService {
     const session = this.store.getSession(sessionId);
     if (!session) throw new Error(`Session not found: ${sessionId}`);
     const runs = await this.runRepository.listBySession(sessionId);
-    const hasLiveRun = runs.some((run) => run.status === "pending" || run.status === "running" || run.status === "needs_approval");
+    const hasLiveRun = runs.some((run) => run.status === "pending" || run.status === "running" || run.status === "verifying" || run.status === "needs_approval" || run.status === "waiting_user");
     if (hasLiveRun) {
       throw new Error("Session still has a live run. Cancel or finish it before deleting.");
     }
@@ -671,16 +675,25 @@ export class DesktopAppService {
       endedAt: null,
       model: null,
       summary: null,
+      budget: { maxSteps: 72, stepsUsed: 0 },
     };
     await this.taskRepository.create(task);
     await this.runRepository.create(run);
+    await this.createTaskCheckpoint({
+      taskId: task.id,
+      runId,
+      kind: "planned",
+      title: "Task planned",
+      summary: "Waiting to start the agent run.",
+      payload: { nextStep: "start_run" },
+    });
     const controller = new AbortController();
     this.activeRunControllers.set(runId, controller);
 
     const sink = this.createRunEventSink();
 
     (async () => {
-      const { agent, label, workspaceRoot } = await this.createAgentRuntime(sink, workspace.rootPath, session.llm);
+      const { agent, label, workspaceRoot, executionGrant } = await this.createAgentRuntime(sink, workspace.rootPath, session.llm);
       const currentRunBeforeStart = await this.runRepository.get(runId);
       if (controller.signal.aborted || isRunStoppedByUser(currentRunBeforeStart?.status)) {
         return;
@@ -709,6 +722,7 @@ export class DesktopAppService {
           runId,
           userMessage: buildUserMessageWithAttachments(message, attachments),
           signal: controller.signal,
+          executionGrant,
           contextInput: {
             task,
             recentRuns,
@@ -740,10 +754,19 @@ export class DesktopAppService {
           endedAt: new Date(),
           summary,
           reason: output.state.lastDecision?.action.reason ?? output.state.stopSummary ?? null,
+          budget: { maxSteps: 72, stepsUsed: output.state.steps },
         });
         await this.taskRepository.update(task.id, {
           status: taskStatus,
           updatedAt: new Date(),
+        });
+        await this.createTaskCheckpoint({
+          taskId: task.id,
+          runId,
+          kind: checkpointKindForRunStatus(runStatus),
+          title: checkpointTitleForRunStatus(runStatus),
+          summary,
+          payload: { steps: output.state.steps, stopReason: output.state.stopReason ?? null },
         });
         await this.artifactRepository.create({
           id: `artifact_${runId}_summary`,
@@ -792,6 +815,14 @@ export class DesktopAppService {
           status: "failed",
           updatedAt: new Date(),
         });
+        await this.createTaskCheckpoint({
+          taskId: task.id,
+          runId,
+          kind: "failed",
+          title: "Run failed",
+          summary: reason,
+          payload: { reason },
+        });
 
         await sink.record(runId, "error", { message: reason });
         await this.persistRunMemory({
@@ -835,6 +866,14 @@ export class DesktopAppService {
     return coreRunToDesktop(run);
   }
 
+  private async createTaskCheckpoint(input: Omit<TaskCheckpoint, "id" | "createdAt">): Promise<void> {
+    await this.taskCheckpointRepository.create({
+      id: nextId("checkpoint"),
+      ...input,
+      createdAt: new Date(),
+    });
+  }
+
   async getRunEvents(runId: string): Promise<DesktopEvent[]> {
     return (await this.runEventRepository.listByRun(runId)).map(coreEventToDesktop);
   }
@@ -844,7 +883,7 @@ export class DesktopAppService {
     return (await this.approvalRepository.listBySession(sessionId)).map(coreApprovalToDesktop);
   }
 
-  async decideApproval(approvalId: string, decision: "granted" | "denied"): Promise<DesktopApproval> {
+  async decideApproval(approvalId: string, decision: "granted" | "denied", scope: "once" | "task" | "workspace" = "once"): Promise<DesktopApproval> {
     const approval = await this.approvalRepository.get(approvalId);
     if (!approval) {
       throw new Error(`Approval not found: ${approvalId}`);
@@ -857,6 +896,7 @@ export class DesktopAppService {
     await this.approvalRepository.update(approvalId, {
       status: decision,
       decidedAt,
+      scope,
     });
 
     if (decision === "granted") {
@@ -1091,9 +1131,13 @@ export class DesktopAppService {
   }
 
   private async decorateRun(run: Run): Promise<DesktopRun> {
+    const checkpoints = await this.taskCheckpointRepository.listByTask(run.taskId);
     return {
       ...coreRunToDesktop(run),
       tokenUsage: await this.summarizeRunTokenUsage(run.id),
+      checkpoints: checkpoints
+        .filter((checkpoint) => checkpoint.runId === null || checkpoint.runId === run.id)
+        .map(coreTaskCheckpointToDesktop),
     };
   }
 
@@ -1122,6 +1166,7 @@ export class DesktopAppService {
     agent: Agent;
     label: string;
     workspaceRoot: string;
+    executionGrant: ExecutionGrant;
   }> {
     const desktopConfig = loadDesktopConfig();
     const workspaceRoot = resolve(normalize(workspacePath));
@@ -1150,7 +1195,7 @@ export class DesktopAppService {
     });
 
     const runtimeLabel = agentProfile ? `${label} · profile:${agentProfile.name}` : label;
-    return { agent, label: runtimeLabel, workspaceRoot };
+    return { agent, label: runtimeLabel, workspaceRoot, executionGrant: executionGrantForPreset(desktopConfig.executionPreset, workspaceRoot) };
   }
 
   private async createDesktopTools(desktopConfig: ResolvedDesktopConfig, workspaceRoot: string, customExtensionRoot: string): Promise<Tool[]> {
@@ -1757,6 +1802,13 @@ function buildFailedMemoryContent(input: { task: Task; reason: string }): string
   ].join("\n");
 }
 
+function executionGrantForPreset(preset: ExecutionGrant["preset"], workspaceRoot: string): ExecutionGrant {
+  if (preset === "read_only") return { preset, workspaceRoot, allowRead: true, allowWrite: false, allowExecute: false, allowNetwork: false };
+  if (preset === "workspace_write") return { preset, workspaceRoot, allowRead: true, allowWrite: true, allowExecute: true, allowNetwork: false };
+  if (preset === "full_access") return { preset, workspaceRoot, allowRead: true, allowWrite: true, allowExecute: true, allowNetwork: true };
+  return { preset, workspaceRoot, allowRead: true, allowWrite: true, allowExecute: true, allowNetwork: true };
+}
+
 function deriveRunStatus(state: { stopReason: string | null; lastDecision: { action: { kind: string } } | null }): Run["status"] {
   if (state.lastDecision?.action.kind === "needs_approval" || state.stopReason === "needs_approval") {
     return "needs_approval";
@@ -1774,6 +1826,33 @@ function deriveTaskStatus(runStatus: Run["status"]): Task["status"] {
   if (runStatus === "completed") return "completed";
   if (runStatus === "failed") return "failed";
   return "in_progress";
+}
+
+function checkpointKindForRunStatus(status: Run["status"]): TaskCheckpoint["kind"] {
+  if (status === "completed") return "completed";
+  if (status === "failed") return "failed";
+  if (status === "cancelled") return "cancelled";
+  if (status === "needs_approval") return "waiting_approval";
+  if (status === "waiting_user") return "waiting_user";
+  if (status === "verifying") return "verifying";
+  if (status === "blocked") return "blocked";
+  return "progress";
+}
+
+function checkpointTitleForRunStatus(status: Run["status"]): string {
+  const titles: Record<Run["status"], string> = {
+    pending: "Run pending",
+    running: "Run in progress",
+    paused: "Run paused",
+    waiting_user: "Waiting for user",
+    blocked: "Run blocked",
+    verifying: "Verifying result",
+    completed: "Task completed",
+    failed: "Run failed",
+    cancelled: "Run cancelled",
+    needs_approval: "Waiting for approval",
+  };
+  return titles[status];
 }
 
 function summarizeUnknownValue(value: unknown, maxLength = 500): string {
@@ -2116,6 +2195,19 @@ function coreRunToDesktop(run: Run): DesktopRun {
     startedAt: run.startedAt?.toISOString() ?? null,
     endedAt: run.endedAt?.toISOString() ?? null,
     summary: run.summary,
+    budget: run.budget ?? null,
+  };
+}
+
+function coreTaskCheckpointToDesktop(checkpoint: TaskCheckpoint): import("./types.js").DesktopTaskCheckpoint {
+  return {
+    id: checkpoint.id,
+    taskId: checkpoint.taskId,
+    runId: checkpoint.runId,
+    kind: checkpoint.kind,
+    title: checkpoint.title,
+    summary: checkpoint.summary,
+    createdAt: checkpoint.createdAt.toISOString(),
   };
 }
 
@@ -2268,6 +2360,7 @@ function coreApprovalToDesktop(approval: Approval): DesktopApproval {
     status: approval.status,
     request: normalizeDesktopApprovalRequest(approval.request),
     decidedAt: approval.decidedAt?.toISOString() ?? null,
+    scope: approval.scope ?? "once",
   };
 }
 

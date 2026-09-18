@@ -10,5 +10,6 @@ export * from "./sqlite-session-repository.js";
 export * from "./sqlite-project-repository.js";
 export * from "./sqlite-workspace-repository.js";
 export * from "./sqlite-task-repository.js";
+export * from "./sqlite-task-checkpoint-repository.js";
 export * from "./sqlite-approval-repository.js";
 export * from "./sqlite-turn-repository.js";

@@ -6,6 +6,9 @@ type FailureSummary = { title: string; summary: string; cause: string; nextStep:
 
 function statusLabel(status: DesktopRun["status"]): string {
   const labels: Record<DesktopRun["status"], string> = {
+    waiting_user: "等待你的输入",
+    blocked: "已阻塞",
+    verifying: "正在验证",
     pending: "等待中",
     running: "运行中",
     paused: "已暂停",
@@ -46,7 +49,13 @@ export function RunInspector({
         <section className="inspector-section">
           <div className="inspector-title"><h4>当前运行</h4><strong>{activeRun ? statusLabel(activeRun.status) : "空闲"}</strong></div>
           {activeRun ? <dl className="inspector-facts"><div><dt>ID</dt><dd>{activeRun.id.slice(0, 12)}</dd></div><div><dt>开始</dt><dd>{activeRun.startedAt ? new Date(activeRun.startedAt).toLocaleString() : "—"}</dd></div><div><dt>事件</dt><dd>{events.length}</dd></div><div><dt>待确认</dt><dd>{approvals.length}</dd></div></dl> : <p>选择一次运行查看详情。</p>}
+          {activeRun?.budget ? <p className="inspector-reason">步骤预算：{activeRun.budget.stepsUsed} / {activeRun.budget.maxSteps}</p> : null}
           {activeRun?.reason ? <p className="inspector-reason">{activeRun.reason}</p> : null}
+        </section>
+
+        <section className="inspector-section">
+          <div className="inspector-title"><h4>任务检查点</h4><span>{activeRun?.checkpoints?.length ?? 0}</span></div>
+          {activeRun?.checkpoints?.length ? <ol className="inspector-run-list">{activeRun.checkpoints.map((checkpoint) => <li key={checkpoint.id}><strong>{checkpoint.title}</strong><span>{checkpoint.summary || checkpoint.kind}</span></li>)}</ol> : <p>此运行尚未写入检查点。</p>}
         </section>
 
         {failure ? <section className="inspector-section failure"><div className="inspector-title"><h4>{failure.title}</h4><strong>需要处理</strong></div><p>{failure.summary}</p><p><b>原因：</b>{failure.cause}</p><p><b>下一步：</b>{failure.nextStep}</p><div className="inspector-card-actions"><button type="button" onClick={onDraftRepair}>写入修复提示</button>{activeRun ? <><button type="button" onClick={() => onBranch(activeRun)}>分支修复</button><button type="button" onClick={() => onRetry(activeRun.id)}>重新运行</button></> : null}</div></section> : null}
