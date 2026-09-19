@@ -50,6 +50,7 @@ test("Agent auto-continues after a step budget slice before returning final feed
       recentRuns: [],
       linkedArtifacts: [],
       memories: [],
+      systemInstructions: "User attached local files for this run.\nUse read/search/stat tools against these paths when relevant:",
     },
   });
 
@@ -213,6 +214,7 @@ test("Agent injects custom skills into prompts without persisting them as visibl
   const persistedTurns = await turns.listBySession("sess_skill_prompt_visibility");
   assert.deepEqual(persistedTurns.map((turn) => turn.role), ["user", "assistant"]);
   assert.equal(persistedTurns.some((turn) => turn.content.includes("Relevant Shiguang skills are active")), false);
+  assert.equal(persistedTurns.some((turn) => turn.content.includes("User attached local files for this run.")), false);
 });
 
 test("Agent selects skills from the previous real task when the current turn only continues", async () => {

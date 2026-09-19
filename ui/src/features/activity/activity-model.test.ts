@@ -35,6 +35,40 @@ describe("buildActivityItems", () => {
       .toMatchObject([{ type: "response", id: "event:evt-2", content: "完成" }]);
   });
 
+  it("suppresses a live assistant event when its persisted assistant turn is already shown", () => {
+    const conversation: DesktopConversationEntry[] = [{
+      id: "turn:assistant-1",
+      sessionId: "session-1",
+      runId: null,
+      source: "turn",
+      kind: "message",
+      role: "assistant",
+      from: "拾光 Agent",
+      content: "完成",
+      createdAt: "2026-09-17T00:00:02.100Z",
+    }];
+
+    const items = buildActivityItems(conversation, [event("evt-2", 2, "message", { role: "assistant", content: "完成" })]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ id: "turn:assistant-1", type: "response", content: "完成" });
+  });
+
+  it("does not render persisted internal instructions as conversation cards", () => {
+    const conversation: DesktopConversationEntry[] = [{
+      id: "turn:system-1",
+      sessionId: "session-1",
+      runId: null,
+      source: "turn",
+      kind: "system",
+      role: "system",
+      from: "系统",
+      content: "User attached local files for this run.\nUse read/search/stat tools against these paths when relevant:",
+      createdAt: "2026-09-17T00:00:02.000Z",
+    }];
+
+    expect(buildActivityItems(conversation, [])).toEqual([]);
+  });
+
   it("creates response, thinking, system, error, approval, and context items", () => {
     const items = buildActivityItems([], [
       event("message", 1, "message", { role: "assistant", content: "结果" }),

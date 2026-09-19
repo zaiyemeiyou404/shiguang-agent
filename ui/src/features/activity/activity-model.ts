@@ -76,6 +76,30 @@ function stringField(payload: Record<string, unknown>, ...keys: string[]): strin
   return null;
 }
 
+function isInternalInstruction(content: string): boolean {
+  const text = content.trim();
+  return text.startsWith("Relevant Shiguang skills are active.")
+    || text.startsWith("Agent profile:")
+    || text.startsWith("Pending approvals from prior runs:")
+    || text.startsWith("User attached local files for this run.")
+    || text.includes("Skill contract: shiguang.skill.v1")
+    || text.includes("These are selected user/Agent-authored reusable instructions.");
+}
+
+function hasPersistedResponse(
+  conversation: readonly DesktopConversationEntry[],
+  event: DesktopEvent,
+  role: "user" | "assistant",
+  content: string,
+): boolean {
+  const eventTime = Date.parse(event.createdAt);
+  return conversation.some((entry) => {
+    if (entry.source !== "turn" || entry.role !== role || entry.content.trim() !== content) return false;
+    const turnTime = Date.parse(entry.createdAt);
+    return Number.isFinite(eventTime) && Number.isFinite(turnTime) && Math.abs(turnTime - eventTime) <= 10_000;
+  });
+}
+
 function callIdOf(event: DesktopEvent): string | null {
   return stringField(record(event.payload), "toolCallId", "callId", "id");
 }
@@ -109,6 +133,7 @@ export function buildActivityItems(
   conversation.forEach((entry, index) => {
     const content = entry.content.trim();
     if (!content) return;
+    if (entry.role === "system" && isInternalInstruction(content)) return;
     if (entry.role === "system" || entry.kind === "system" || entry.kind === "error") {
       ordered.push({
         order: Date.parse(entry.createdAt) || index,
@@ -188,6 +213,7 @@ export function buildActivityItems(
       const content = stringField(payload, "content", "message");
       if (!content) return;
       const role = payload.role === "user" ? "user" : "assistant";
+      if (hasPersistedResponse(conversation, event, role, content)) return;
       ordered.push({ order: eventOrder, subOrder: index, item: { ...base, type: "response", role, from: role === "user" ? "你" : "拾光 Agent", content } });
       return;
     }

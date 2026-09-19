@@ -313,11 +313,6 @@ export class Agent {
     if (!this.options.turnRepository) return;
 
     const sessionId = input.contextInput.task.sessionId;
-    const systemInstructions = input.contextInput.systemInstructions?.trim();
-    if (systemInstructions && shouldPersistSystemTurn(priorTurns, systemInstructions)) {
-      await this.options.turnRepository.create(makeTurn(sessionId, "system", systemInstructions));
-    }
-
     await this.options.turnRepository.create(makeTurn(sessionId, "user", input.userMessage));
   }
 
@@ -579,11 +574,6 @@ function makeTurn(sessionId: string, role: Turn["role"], content: string): Turn 
     content,
     createdAt: new Date(),
   };
-}
-
-function shouldPersistSystemTurn(priorTurns: Turn[], content: string): boolean {
-  const lastSystemTurn = [...priorTurns].reverse().find(turn => turn.role === "system");
-  return lastSystemTurn?.content !== content;
 }
 
 function summarizeAssistantTurn(state: LoopState): string {
