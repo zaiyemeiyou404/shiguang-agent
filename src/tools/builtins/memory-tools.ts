@@ -106,8 +106,21 @@ export function createRememberFactTool(memoryService: MemoryService, workspaceRo
         required: ["summary", "content"],
       },
       risk: "write",
-      requiresApproval: false,
+      requiresApproval: true,
       capability: "memory.write",
+    },
+    previewApproval(input: unknown): ToolApprovalPreview {
+      const obj = input && typeof input === "object" ? input as Record<string, unknown> : {};
+      const summary = typeof obj.summary === "string" && obj.summary.trim()
+        ? obj.summary.trim().slice(0, 240)
+        : "(missing summary)";
+      const kind = isKind(obj.kind) ? obj.kind : "fact";
+      return {
+        kind: "summary",
+        title: "Save long-term memory",
+        operation: "write",
+        warnings: [`${kind[0]?.toUpperCase()}${kind.slice(1)}: ${summary}`],
+      };
     },
     async execute(input: unknown): Promise<unknown> {
       if (!input || typeof input !== "object") {

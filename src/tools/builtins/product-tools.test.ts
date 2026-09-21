@@ -115,6 +115,22 @@ test("remember_fact refuses sensitive credentials and secrets", async () => {
   assert.equal(repo.memories.size, 0);
 });
 
+test("remember_fact presents long-term memory as an approval candidate", () => {
+  const remember = createRememberFactTool(new MemoryService(new FakeMemoryRepository()), "G:\\workspace");
+
+  assert.equal(remember.descriptor.requiresApproval, true);
+  assert.deepEqual(remember.previewApproval?.({
+    summary: "Preferred workspace",
+    content: "Keep project data on G:.",
+    kind: "preference",
+  }), {
+    kind: "summary",
+    title: "Save long-term memory",
+    operation: "write",
+    warnings: ["Preference: Preferred workspace"],
+  });
+});
+
 test("memory tools keep workspace memories inside the active workspace", async () => {
   const repo = new FakeMemoryRepository();
   const service = new MemoryService(repo);
