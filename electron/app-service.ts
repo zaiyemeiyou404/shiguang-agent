@@ -1153,6 +1153,18 @@ export class DesktopAppService {
     };
   }
 
+  async listReusableApprovals(sessionId: string): Promise<DesktopApproval[]> {
+    return (await this.approvalRepository.listReusableBySession(sessionId)).map(coreApprovalToDesktop);
+  }
+
+  async revokeApprovalScope(approvalId: string): Promise<DesktopApproval> {
+    const approval = await this.approvalRepository.get(approvalId);
+    if (!approval) throw new Error(`Approval not found: ${approvalId}`);
+    if (approval.status !== "granted" || approval.scope === "once") return coreApprovalToDesktop(approval);
+    await this.approvalRepository.update(approvalId, { scope: "once" });
+    return coreApprovalToDesktop({ ...approval, scope: "once" });
+  }
+
   private async decorateSession(session: DesktopSession): Promise<DesktopSession> {
     session = this.ensureSessionWorkspace(session);
     await this.syncApprovalsForSession(session.id);

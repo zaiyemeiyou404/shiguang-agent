@@ -1,4 +1,4 @@
-import { type CSSProperties, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useDesktopSessions, useRunEvents } from "./hooks/useDesktopSessions";
 import { getDesktopBridge, getDesktopBridgeErrorMessage, requireDesktopBridge } from "./bridge";
 import type { DesktopSession, DesktopRun, DesktopConversationEntry, DesktopEvent, DesktopSettings, DesktopApproval, DesktopArtifact, DesktopProviderConnectionResult, DesktopAttachment, DesktopTokenUsage, DesktopSessionLlmSettings, DesktopProject, ToolApprovalMode } from "./bridge";
@@ -4194,6 +4194,9 @@ function SettingsDrawer({
   const [showApiKey, setShowApiKey] = useState(false);
   const [testingConnection, setTestingConnection] = useState(false);
   const [connectionResult, setConnectionResult] = useState<DesktopProviderConnectionResult | null>(null);
+  const [reusableApprovals, setReusableApprovals] = useState<DesktopApproval[]>([]);
+  const [approvalScopeBusy, setApprovalScopeBusy] = useState<string | null>(null);
+  const [approvalScopeError, setApprovalScopeError] = useState("");
 
   const providerOptions = useMemo(() => Object.keys(providerCatalog), [providerCatalog]);
   const providerDraft = providerCatalog[activeProvider] ?? createProviderDraft(activeProvider);
@@ -4226,6 +4229,34 @@ function SettingsDrawer({
     setConnectionResult(null);
     setShowApiKey(false);
   }, [currentSessionLlm, fullMode, settings, open]);
+
+  const refreshReusableApprovals = useCallback(async () => {
+    if (!open || !activeSessionId) {
+      setReusableApprovals([]);
+      return;
+    }
+    try {
+      setApprovalScopeError("");
+      setReusableApprovals(await requireDesktopBridge().listReusableApprovals(activeSessionId));
+    } catch (error) {
+      setApprovalScopeError(error instanceof Error ? error.message : "无法读取已记住的授权。");
+    }
+  }, [activeSessionId, open]);
+
+  useEffect(() => { void refreshReusableApprovals(); }, [refreshReusableApprovals]);
+
+  const revokeReusableApproval = async (approvalId: string) => {
+    try {
+      setApprovalScopeBusy(approvalId);
+      setApprovalScopeError("");
+      await requireDesktopBridge().revokeApprovalScope(approvalId);
+      await refreshReusableApprovals();
+    } catch (error) {
+      setApprovalScopeError(error instanceof Error ? error.message : "撤销授权失败。");
+    } finally {
+      setApprovalScopeBusy(null);
+    }
+  };
 
   if (!open || !settings) return null;
 
@@ -4988,6 +5019,35 @@ function SettingsDrawer({
               </p>
             </div>
           </details>
+        </div>
+
+        <div className="detail-block settings-section-stack">
+          <div className="section-title">
+            <h3>工作区已记住的授权</h3>
+            <div className="toolbar">
+              <span className="tiny">{reusableApprovals.length} 条</span>
+              <ToolBtn onClick={() => { void refreshReusableApprovals(); }}>刷新</ToolBtn>
+            </div>
+          </div>
+          <p className="muted" style={{ margin: 0 }}>这里只显示当前会话工作区内可复用的授权。撤销后，后续同类操作会重新请求确认；高风险操作不会出现在这里。</p>
+          {approvalScopeError ? <p className="muted">{approvalScopeError}</p> : null}
+          {!activeSessionId ? <p className="muted">先打开一个工作区中的会话，再查看它的授权范围。</p> : null}
+          {activeSessionId && reusableApprovals.length === 0 ? <p className="muted">当前工作区没有已记住的授权。</p> : null}
+          {reusableApprovals.map((approval) => (
+            <div className="settings-diff-item" key={approval.id}>
+              <div>
+                <span className="tiny">{approval.capability} · 工作区范围</span>
+                <div className="settings-diff-values">
+                  <span>{approval.pluginId}</span>
+                  <strong>·</strong>
+                  <span>{approval.decidedAt ? new Date(approval.decidedAt).toLocaleString() : "已授权"}</span>
+                </div>
+              </div>
+              <button className="tool-btn" type="button" onClick={() => { void revokeReusableApproval(approval.id); }} disabled={approvalScopeBusy === approval.id}>
+                {approvalScopeBusy === approval.id ? "撤销中…" : "撤销"}
+              </button>
+            </div>
+          ))}
         </div>
 
         <div className="detail-block settings-section-stack">

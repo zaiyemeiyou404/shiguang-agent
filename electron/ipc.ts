@@ -90,6 +90,8 @@ export function registerIpcHandlers(service: DesktopAppService): void {
   ipcMain.handle("listPendingApprovals", (_event, sessionId: string) => {
     return service.listPendingApprovals(sessionId);
   });
+  ipcMain.handle("listReusableApprovals", (_event, sessionId: string) => service.listReusableApprovals(sessionId));
+  ipcMain.handle("revokeApprovalScope", (_event, approvalId: string) => service.revokeApprovalScope(approvalId));
 
   ipcMain.handle("decideApproval", (_event, req: ApprovalDecisionRequest) => {
     return service.decideApproval(req.approvalId, req.decision, req.scope);

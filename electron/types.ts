@@ -376,6 +376,8 @@ export interface ShiguangBridge {
   sendUserMessage(req: SendMessageRequest): Promise<DesktopRun>;
   getRunEvents(runId: string): Promise<DesktopEvent[]>;
   listPendingApprovals(sessionId: string): Promise<DesktopApproval[]>;
+  listReusableApprovals(sessionId: string): Promise<DesktopApproval[]>;
+  revokeApprovalScope(approvalId: string): Promise<DesktopApproval>;
   decideApproval(req: ApprovalDecisionRequest): Promise<DesktopApproval>;
   cancelRun(req: RunActionRequest): Promise<DesktopRun>;
   pauseRun(req: RunActionRequest): Promise<DesktopRun>;

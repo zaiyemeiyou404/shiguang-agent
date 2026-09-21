@@ -85,6 +85,7 @@ export interface ApprovalRepository {
   update(id: string, patch: Partial<Approval>): Promise<void>;
   listPending(runId: string): Promise<Approval[]>;
   listBySession(sessionId: string): Promise<Approval[]>;
+  listReusableBySession(sessionId: string): Promise<Approval[]>;
   findReusable(runId: string, capability: string): Promise<Approval | null>;
 }
 

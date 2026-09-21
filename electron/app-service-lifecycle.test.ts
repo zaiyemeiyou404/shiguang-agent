@@ -157,6 +157,26 @@ describe("DesktopAppService approval and cancellation characterization", () => {
     expect(events.map((event) => event.seq)).toEqual([1, 2, 3, 4]);
   });
 
+  it("lists reusable workspace grants and revokes them back to one-time approval", async () => {
+    const { service, internals, session, run } = await createFixture();
+    const granted = approval("approval-workspace", run.id);
+    await internals.approvalRepository.create(granted);
+    vi.spyOn(internals, "resumeRunAfterApproval").mockResolvedValue();
+
+    await service.decideApproval(granted.id, "granted", "workspace");
+    await expect(service.listReusableApprovals(session.id)).resolves.toMatchObject([{
+      id: granted.id,
+      capability: granted.capability,
+      scope: "workspace",
+    }]);
+
+    await expect(service.revokeApprovalScope(granted.id)).resolves.toMatchObject({
+      id: granted.id,
+      scope: "once",
+    });
+    await expect(service.listReusableApprovals(session.id)).resolves.toEqual([]);
+  });
+
   it("cancels a run, expires pending approvals, and appends an ordered system event", async () => {
     const { service, internals, task, run } = await createFixture();
     const pending = approval("approval-pending", run.id);

@@ -15,7 +15,7 @@ export const SHIGUANG_BRIDGE_METHODS = [
   "getSettings", "saveSettings", "testProviderConnection", "createSession", "branchSession",
   "renameSession", "updateSessionStatus", "updateSessionWorkspace", "updateSessionLlm", "deleteSession",
   "getSessionDetail", "getWorkspaceSnapshot", "listArtifacts", "openArtifact", "revealArtifact",
-  "pickAttachments", "sendUserMessage", "getRunEvents", "listPendingApprovals", "decideApproval",
+  "pickAttachments", "sendUserMessage", "getRunEvents", "listPendingApprovals", "listReusableApprovals", "revokeApprovalScope", "decideApproval",
   "cancelRun", "pauseRun", "retryRun", "subscribeRunEvents",
 ] as const satisfies readonly (keyof ShiguangBridge)[];
 
@@ -45,24 +45,25 @@ export function createShiguangBridge(ipcRenderer: IpcRenderer): ShiguangBridge {
     sendUserMessage: (req) => ipcRenderer.invoke("sendUserMessage", req),
     getRunEvents: (runId: string) => ipcRenderer.invoke("getRunEvents", runId),
     listPendingApprovals: (sessionId: string) => ipcRenderer.invoke("listPendingApprovals", sessionId),
+    listReusableApprovals: (sessionId: string) => ipcRenderer.invoke("listReusableApprovals", sessionId),
+    revokeApprovalScope: (approvalId: string) => ipcRenderer.invoke("revokeApprovalScope", approvalId),
     decideApproval: (req) => ipcRenderer.invoke("decideApproval", req),
     cancelRun: (req) => ipcRenderer.invoke("cancelRun", req),
     pauseRun: (req) => ipcRenderer.invoke("pauseRun", req),
     retryRun: (req) => ipcRenderer.invoke("retryRun", req),
     subscribeRunEvents: (runId: string, callback: (event: DesktopEvent) => void) => {
       const subscriptionId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-      const channel = `run-event:${subscriptionId}`;
       let disposed = false;
       const handler = (_event: Electron.IpcRendererEvent, data: DesktopEvent) => {
         if (data.runId === runId) callback(data);
       };
-      ipcRenderer.on(channel, handler);
+      ipcRenderer.on(`run-event:${subscriptionId}`, handler);
       void ipcRenderer.invoke("subscribeRunEvents", { runId, subscriptionId }).then(() => {
         if (disposed) void ipcRenderer.invoke("unsubscribeRunEvents", { subscriptionId });
       });
       return () => {
         disposed = true;
-        ipcRenderer.removeListener(channel, handler);
+        ipcRenderer.removeListener(`run-event:${subscriptionId}`, handler);
         void ipcRenderer.invoke("unsubscribeRunEvents", { subscriptionId });
       };
     },
@@ -70,6 +71,7 @@ export function createShiguangBridge(ipcRenderer: IpcRenderer): ShiguangBridge {
   assertShiguangBridge(bridge);
   return bridge;
 }
+
 export function assertShiguangBridge(value: Partial<Record<keyof ShiguangBridge, unknown>>): asserts value is ShiguangBridge {
   const missing = SHIGUANG_BRIDGE_METHODS.filter((method) => typeof value[method] !== "function");
   if (missing.length > 0) throw new Error(`Shiguang preload bridge is missing required methods: ${missing.join(", ")}`);
