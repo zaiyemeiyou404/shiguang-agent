@@ -223,6 +223,28 @@ test("ActionDispatcher attaches Codex-style readable display metadata to tool pi
   assert.match(completedDisplay?.nextStep ?? "", /web_fetch/);
 });
 
+test("ActionDispatcher identifies the MCP server on tool pipeline cards", async () => {
+  const sink = new InMemoryEventSink();
+  const registry = new ToolRegistry();
+  registry.register({
+    descriptor: {
+      name: "mcp_docs_search",
+      description: "[MCP:docs] Search internal documentation",
+      inputSchema: { type: "object" },
+    },
+    async execute() { return { results: [] }; },
+  });
+
+  await new ActionDispatcher(registry, sink).dispatch({
+    action: { kind: "tool_call", toolName: "mcp_docs_search", toolInput: { query: "memory" } },
+    reasoning: "Look up the workspace documentation.",
+  }, "run_mcp_source");
+
+  const events = await sink.list("run_mcp_source");
+  const executing = events.find((event) => event.kind === "tool_pipeline" && (event.payload as { phase?: unknown }).phase === "executing");
+  assert.equal((executing?.payload as { display?: { source?: unknown } }).display?.source, "MCP · docs");
+});
+
 test("ActionDispatcher explains failed tool recovery in pipeline display", async () => {
   const sink = new InMemoryEventSink();
   const registry = new ToolRegistry();

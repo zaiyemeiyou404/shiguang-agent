@@ -81,6 +81,7 @@ type ToolPipelinePhase =
 interface ToolPipelineDisplay {
   title: string;
   action: string;
+  source?: string;
   target?: string;
   reason?: string;
   detail: string;
@@ -182,6 +183,7 @@ export class ActionDispatcher {
         const executionStartedAt = Date.now();
         try {
           const contract = tool.descriptor.contract ?? inferToolContract(tool.descriptor);
+          const source = toolSourceForDisplay(tool.descriptor.description);
           const permission = checkToolPermission(tool.descriptor, context);
           if (!permission.allowed) {
             await this.recordToolPipeline(runId, {
@@ -210,6 +212,7 @@ export class ActionDispatcher {
             toolCallId,
             reason: decision.reasoning,
             contract: summarizeContractForEvent(contract),
+            ...(source ? { source } : {}),
           });
           let output: unknown;
           try {
@@ -257,6 +260,7 @@ export class ActionDispatcher {
             toolCallId,
             reason: decision.reasoning,
             contract: summarizeContractForEvent(contract),
+            ...(source ? { source } : {}),
             health,
           });
           return {
@@ -419,6 +423,7 @@ export class ActionDispatcher {
     health?: unknown;
     preview?: unknown;
     contract?: unknown;
+    source?: string;
   }): Promise<void> {
     if (!this.eventSink || !runId) return;
     const display = buildToolPipelineDisplay(payload);
@@ -456,6 +461,7 @@ function buildToolPipelineDisplay(payload: {
   error?: string;
   retryable?: boolean;
   contract?: unknown;
+  source?: string;
 }): ToolPipelineDisplay {
   const toolLabel = labelTool(payload.tool);
   const target = targetFromToolInput(payload.tool, payload.input) ?? targetFromToolOutput(payload.tool, payload.output);
@@ -484,6 +490,7 @@ function buildToolPipelineDisplay(payload: {
   return {
     title: titleForPhase(payload.phase, toolLabel),
     action,
+    ...(payload.source ? { source: payload.source } : {}),
     ...(target ? { target } : {}),
     ...(reason ? { reason } : {}),
     detail,
@@ -494,6 +501,11 @@ function buildToolPipelineDisplay(payload: {
     ...(risk ? { risk } : {}),
     ...(cost ? { cost } : {}),
   };
+}
+
+function toolSourceForDisplay(description: string): string | undefined {
+  const match = /^\[MCP:([^\]]+)\]/i.exec(description);
+  return match?.[1]?.trim() ? `MCP · ${match[1].trim()}` : undefined;
 }
 
 function titleForPhase(phase: ToolPipelinePhase, toolLabel: string): string {

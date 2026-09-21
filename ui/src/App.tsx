@@ -1466,6 +1466,7 @@ function activityFromToolPipelineEvent(event: DesktopEvent, relatedEvents: Deskt
     display?.target ? `目标：${truncateInline(display.target, 90)}` : null,
     display?.reason ? `原因：${truncateInline(display.reason, 90)}` : null,
     display?.expected ? `预期：${truncateInline(display.expected, 110)}` : null,
+    display?.source ? display.source : null,
     display?.risk ? `风险 ${display.risk}` : null,
     display?.cost ? `成本 ${display.cost}` : null,
     activityScopeLabel(toolName, payload),
@@ -1745,6 +1746,7 @@ function eventPayloadRecord(event: DesktopEvent): Record<string, unknown> {
 function toolDisplayPayload(payload: Record<string, unknown>): {
   title?: string;
   detail?: string;
+  source?: string;
   target?: string;
   reason?: string;
   expected?: string;
