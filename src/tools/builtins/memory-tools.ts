@@ -74,7 +74,7 @@ export function createSearchMemoryTool(memoryService: MemoryService, workspaceRo
     async execute(input: unknown): Promise<unknown> {
       const obj = input && typeof input === "object" ? input as Record<string, unknown> : {};
       const scope = isScope(obj.scope) ? obj.scope : (obj.workspaceScope || workspaceRoot ? "workspace" : "global");
-      const workspaceScope = typeof obj.workspaceScope === "string" ? obj.workspaceScope : workspaceRoot;
+      const workspaceScope = workspaceRoot ?? (typeof obj.workspaceScope === "string" ? obj.workspaceScope : undefined);
       const memories = await memoryService.search({
         text: typeof obj.query === "string" ? obj.query : "",
         scope,
@@ -126,7 +126,7 @@ export function createRememberFactTool(memoryService: MemoryService, workspaceRo
       const memory: Memory = {
         id: `mem_${randomUUID()}`,
         scope,
-        workspaceScope: scope === "workspace" ? (typeof obj.workspaceScope === "string" ? obj.workspaceScope : workspaceRoot ?? null) : null,
+        workspaceScope: scope === "workspace" ? (workspaceRoot ?? (typeof obj.workspaceScope === "string" ? obj.workspaceScope : null)) : null,
         kind: isKind(obj.kind) ? obj.kind : "fact",
         summary: obj.summary.trim().slice(0, 240),
         content: obj.content.trim().slice(0, 4_000),
@@ -144,7 +144,7 @@ export function createRememberFactTool(memoryService: MemoryService, workspaceRo
   };
 }
 
-export function createForgetMemoryTool(memoryService: MemoryService): Tool {
+export function createForgetMemoryTool(memoryService: MemoryService, workspaceRoot?: string): Tool {
   return {
     descriptor: {
       name: "forget_memory",
@@ -175,6 +175,9 @@ export function createForgetMemoryTool(memoryService: MemoryService): Tool {
       const existing = await memoryService.get(id);
       if (!existing) {
         throw new Error(`Memory not found: ${id}`);
+      }
+      if (workspaceRoot && existing.workspaceScope !== workspaceRoot) {
+        throw new Error("forget_memory: memory does not belong to the current workspace");
       }
       await memoryService.delete(id);
       return { deleted: true, memory: serializeMemory(existing) };

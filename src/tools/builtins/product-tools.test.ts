@@ -115,6 +115,47 @@ test("remember_fact refuses sensitive credentials and secrets", async () => {
   assert.equal(repo.memories.size, 0);
 });
 
+test("memory tools keep workspace memories inside the active workspace", async () => {
+  const repo = new FakeMemoryRepository();
+  const service = new MemoryService(repo);
+  const workspaceA = "G:\\workspace-a";
+  const workspaceB = "G:\\workspace-b";
+  const remember = createRememberFactTool(service, workspaceA);
+  const search = createSearchMemoryTool(service, workspaceA);
+  const forget = createForgetMemoryTool(service, workspaceA);
+
+  const saved = await remember.execute({
+    summary: "Workspace boundary",
+    content: "This should remain in workspace A.",
+    workspaceScope: workspaceB,
+  }) as { memory: { id: string; workspaceScope: string | null } };
+  assert.equal(saved.memory.workspaceScope, workspaceA);
+
+  const now = new Date();
+  await repo.create({
+    id: "mem_workspace_b",
+    scope: "workspace",
+    workspaceScope: workspaceB,
+    kind: "fact",
+    summary: "Other workspace",
+    content: "Must not be visible or removable from workspace A.",
+    salience: 0.5,
+    lastAccessedAt: null,
+    sourceType: "user",
+    sourceId: "test",
+    confidence: 0.8,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const found = await search.execute({ scope: "workspace", workspaceScope: workspaceB }) as {
+    memories: Array<{ id: string }>;
+  };
+  assert.deepEqual(found.memories.map((memory) => memory.id), [saved.memory.id]);
+  await assert.rejects(() => forget.execute({ id: "mem_workspace_b" }), /current workspace/i);
+  assert.equal(repo.memories.has("mem_workspace_b"), true);
+});
+
 test("code intelligence tools map entrypoints, symbols, and dependencies", async () => {
   const dir = mkdtempSync(join(tmpdir(), "shiguang-code-map-"));
   try {

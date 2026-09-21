@@ -1287,7 +1287,7 @@ export class DesktopAppService {
       createRunTerminalCommandTool(workspaceRoot),
       createStartBackgroundProcessTool(workspaceRoot),
       createStopBackgroundProcessTool(),
-      createForgetMemoryTool(this.memoryService),
+      createForgetMemoryTool(this.memoryService, workspaceRoot),
       createRunValidationTool(workspaceRoot),
     ];
   }
