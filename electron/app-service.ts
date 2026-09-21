@@ -10,6 +10,7 @@ import type {
   DesktopWorkspaceSnapshot,
   DesktopSettings,
   DesktopApproval,
+  DesktopMemory,
   DesktopArtifact,
   DesktopProviderConnectionRequest,
   DesktopProviderConnectionResult,
@@ -1163,6 +1164,28 @@ export class DesktopAppService {
     if (approval.status !== "granted" || approval.scope === "once") return coreApprovalToDesktop(approval);
     await this.approvalRepository.update(approvalId, { scope: "once" });
     return coreApprovalToDesktop({ ...approval, scope: "once" });
+  }
+
+  async listWorkspaceMemories(sessionId: string): Promise<DesktopMemory[]> {
+    const workspace = await this.workspaceForSession(sessionId);
+    return (await this.memoryRepository.listByWorkspace(workspace.rootPath, 100)).map(coreMemoryToDesktop);
+  }
+
+  async forgetWorkspaceMemory(sessionId: string, memoryId: string): Promise<void> {
+    const workspace = await this.workspaceForSession(sessionId);
+    const memory = await this.memoryRepository.get(memoryId);
+    if (!memory || memory.workspaceScope !== workspace.rootPath) {
+      throw new Error("Memory does not belong to the current workspace.");
+    }
+    await this.memoryRepository.delete(memoryId);
+  }
+
+  private async workspaceForSession(sessionId: string): Promise<Workspace> {
+    const session = await this.sessionRepository.get(sessionId);
+    if (!session) throw new Error(`Session not found: ${sessionId}`);
+    const workspace = await this.workspaceRepository.get(session.workspaceId);
+    if (!workspace) throw new Error(`Workspace not found for session: ${sessionId}`);
+    return workspace;
   }
 
   private async decorateSession(session: DesktopSession): Promise<DesktopSession> {
@@ -2426,6 +2449,23 @@ function coreApprovalToDesktop(approval: Approval): DesktopApproval {
     request: normalizeDesktopApprovalRequest(approval.request),
     decidedAt: approval.decidedAt?.toISOString() ?? null,
     scope: approval.scope ?? "once",
+  };
+}
+
+function coreMemoryToDesktop(memory: Memory): DesktopMemory {
+  return {
+    id: memory.id,
+    scope: memory.scope,
+    workspaceScope: memory.workspaceScope,
+    kind: memory.kind,
+    summary: memory.summary,
+    content: memory.content,
+    salience: memory.salience,
+    confidence: memory.confidence,
+    sourceType: memory.sourceType,
+    sourceId: memory.sourceId,
+    createdAt: memory.createdAt.toISOString(),
+    updatedAt: memory.updatedAt.toISOString(),
   };
 }
 

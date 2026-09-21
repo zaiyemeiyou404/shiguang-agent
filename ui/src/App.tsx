@@ -1,7 +1,7 @@
 import { type CSSProperties, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useDesktopSessions, useRunEvents } from "./hooks/useDesktopSessions";
 import { getDesktopBridge, getDesktopBridgeErrorMessage, requireDesktopBridge } from "./bridge";
-import type { DesktopSession, DesktopRun, DesktopConversationEntry, DesktopEvent, DesktopSettings, DesktopApproval, DesktopArtifact, DesktopProviderConnectionResult, DesktopAttachment, DesktopTokenUsage, DesktopSessionLlmSettings, DesktopProject, ToolApprovalMode } from "./bridge";
+import type { DesktopSession, DesktopRun, DesktopConversationEntry, DesktopEvent, DesktopSettings, DesktopApproval, DesktopArtifact, DesktopMemory, DesktopProviderConnectionResult, DesktopAttachment, DesktopTokenUsage, DesktopSessionLlmSettings, DesktopProject, ToolApprovalMode } from "./bridge";
 import { ActivityFeed } from "./features/activity/ActivityFeed";
 import { ApprovalCenter } from "./features/approvals/ApprovalCenter";
 import { RunInspector } from "./features/run/RunInspector";
@@ -4197,6 +4197,9 @@ function SettingsDrawer({
   const [reusableApprovals, setReusableApprovals] = useState<DesktopApproval[]>([]);
   const [approvalScopeBusy, setApprovalScopeBusy] = useState<string | null>(null);
   const [approvalScopeError, setApprovalScopeError] = useState("");
+  const [workspaceMemories, setWorkspaceMemories] = useState<DesktopMemory[]>([]);
+  const [memoryBusy, setMemoryBusy] = useState<string | null>(null);
+  const [memoryError, setMemoryError] = useState("");
 
   const providerOptions = useMemo(() => Object.keys(providerCatalog), [providerCatalog]);
   const providerDraft = providerCatalog[activeProvider] ?? createProviderDraft(activeProvider);
@@ -4244,6 +4247,35 @@ function SettingsDrawer({
   }, [activeSessionId, open]);
 
   useEffect(() => { void refreshReusableApprovals(); }, [refreshReusableApprovals]);
+
+  const refreshWorkspaceMemories = useCallback(async () => {
+    if (!open || !activeSessionId) {
+      setWorkspaceMemories([]);
+      return;
+    }
+    try {
+      setMemoryError("");
+      setWorkspaceMemories(await requireDesktopBridge().listWorkspaceMemories(activeSessionId));
+    } catch (error) {
+      setMemoryError(error instanceof Error ? error.message : "无法读取工作区记忆。");
+    }
+  }, [activeSessionId, open]);
+
+  useEffect(() => { void refreshWorkspaceMemories(); }, [refreshWorkspaceMemories]);
+
+  const forgetWorkspaceMemory = async (memoryId: string) => {
+    if (!activeSessionId) return;
+    try {
+      setMemoryBusy(memoryId);
+      setMemoryError("");
+      await requireDesktopBridge().forgetWorkspaceMemory(activeSessionId, memoryId);
+      await refreshWorkspaceMemories();
+    } catch (error) {
+      setMemoryError(error instanceof Error ? error.message : "删除记忆失败。");
+    } finally {
+      setMemoryBusy(null);
+    }
+  };
 
   const revokeReusableApproval = async (approvalId: string) => {
     try {
@@ -5045,6 +5077,32 @@ function SettingsDrawer({
               </div>
               <button className="tool-btn" type="button" onClick={() => { void revokeReusableApproval(approval.id); }} disabled={approvalScopeBusy === approval.id}>
                 {approvalScopeBusy === approval.id ? "撤销中…" : "撤销"}
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <div className="detail-block settings-section-stack">
+          <div className="section-title">
+            <h3>工作区记忆</h3>
+            <div className="toolbar">
+              <span className="tiny">{workspaceMemories.length} 条</span>
+              <ToolBtn onClick={() => { void refreshWorkspaceMemories(); }}>刷新</ToolBtn>
+            </div>
+          </div>
+          <p className="muted" style={{ margin: 0 }}>仅显示当前工作区会在后续任务中使用的记忆。每条都保留来源、置信度与最后更新时间，可随时删除。</p>
+          {memoryError ? <p className="muted">{memoryError}</p> : null}
+          {!activeSessionId ? <p className="muted">先打开一个工作区中的会话，再查看它的记忆。</p> : null}
+          {activeSessionId && workspaceMemories.length === 0 ? <p className="muted">当前工作区还没有可复用记忆。</p> : null}
+          {workspaceMemories.map((memory) => (
+            <div className="settings-diff-item" key={memory.id}>
+              <div>
+                <span className="tiny">{memory.kind} · {memory.sourceType} · 置信度 {Math.round(memory.confidence * 100)}%</span>
+                <strong>{memory.summary}</strong>
+                <p className="muted" style={{ margin: "4px 0 0" }}>{memory.content}</p>
+              </div>
+              <button className="tool-btn" type="button" onClick={() => { void forgetWorkspaceMemory(memory.id); }} disabled={memoryBusy === memory.id}>
+                {memoryBusy === memory.id ? "删除中…" : "删除"}
               </button>
             </div>
           ))}

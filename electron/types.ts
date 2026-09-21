@@ -197,6 +197,21 @@ export interface DesktopApproval {
   scope?: "once" | "task" | "workspace";
 }
 
+export interface DesktopMemory {
+  id: string;
+  scope: "session" | "task" | "global" | "workspace";
+  workspaceScope: string | null;
+  kind: "fact" | "insight" | "preference" | "observation" | "decision";
+  summary: string;
+  content: string;
+  salience: number;
+  confidence: number;
+  sourceType: "session" | "task" | "run" | "artifact" | "user";
+  sourceId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface DesktopArtifact {
   id: string;
   sessionId: string | null;
@@ -378,6 +393,8 @@ export interface ShiguangBridge {
   listPendingApprovals(sessionId: string): Promise<DesktopApproval[]>;
   listReusableApprovals(sessionId: string): Promise<DesktopApproval[]>;
   revokeApprovalScope(approvalId: string): Promise<DesktopApproval>;
+  listWorkspaceMemories(sessionId: string): Promise<DesktopMemory[]>;
+  forgetWorkspaceMemory(sessionId: string, memoryId: string): Promise<void>;
   decideApproval(req: ApprovalDecisionRequest): Promise<DesktopApproval>;
   cancelRun(req: RunActionRequest): Promise<DesktopRun>;
   pauseRun(req: RunActionRequest): Promise<DesktopRun>;

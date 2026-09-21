@@ -35,6 +35,7 @@ interface LifecycleInternals {
     get(id: string): Promise<ApprovalRecord | null>;
   };
   runEventRepository: { listByRun(runId: string): Promise<RunEventRecord[]> };
+  memoryRepository: { create(memory: { id: string; workspaceScope: string | null; scope: string; kind: string; summary: string; content: string; salience: number; lastAccessedAt: Date | null; sourceType: "user"; sourceId: string; confidence: number; createdAt: Date; updatedAt: Date }): Promise<void> };
   resumeRunAfterApproval(approval: ApprovalRecord): Promise<void>;
 }
 
@@ -175,6 +176,21 @@ describe("DesktopAppService approval and cancellation characterization", () => {
       scope: "once",
     });
     await expect(service.listReusableApprovals(session.id)).resolves.toEqual([]);
+  });
+
+  it("lists and deletes only memories belonging to the active workspace", async () => {
+    const { service, internals, session } = await createFixture();
+    const now = new Date("2026-09-18T00:00:00.000Z");
+    const memory = {
+      id: "memory-workspace", workspaceScope: process.env.SHIGUANG_WORKSPACE_ROOT!, scope: "workspace", kind: "fact",
+      summary: "Test workspace memory", content: "Keep this only in the active workspace.", salience: 0.8,
+      lastAccessedAt: null, sourceType: "user" as const, sourceId: "test", confidence: 0.9, createdAt: now, updatedAt: now,
+    };
+    await internals.memoryRepository.create(memory);
+
+    await expect(service.listWorkspaceMemories(session.id)).resolves.toMatchObject([{ id: memory.id, summary: memory.summary }]);
+    await expect(service.forgetWorkspaceMemory(session.id, memory.id)).resolves.toBeUndefined();
+    await expect(service.listWorkspaceMemories(session.id)).resolves.toEqual([]);
   });
 
   it("cancels a run, expires pending approvals, and appends an ordered system event", async () => {

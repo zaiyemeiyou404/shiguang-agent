@@ -92,6 +92,8 @@ export function registerIpcHandlers(service: DesktopAppService): void {
   });
   ipcMain.handle("listReusableApprovals", (_event, sessionId: string) => service.listReusableApprovals(sessionId));
   ipcMain.handle("revokeApprovalScope", (_event, approvalId: string) => service.revokeApprovalScope(approvalId));
+  ipcMain.handle("listWorkspaceMemories", (_event, sessionId: string) => service.listWorkspaceMemories(sessionId));
+  ipcMain.handle("forgetWorkspaceMemory", (_event, sessionId: string, memoryId: string) => service.forgetWorkspaceMemory(sessionId, memoryId));
 
   ipcMain.handle("decideApproval", (_event, req: ApprovalDecisionRequest) => {
     return service.decideApproval(req.approvalId, req.decision, req.scope);

@@ -15,7 +15,7 @@ export const SHIGUANG_BRIDGE_METHODS = [
   "getSettings", "saveSettings", "testProviderConnection", "createSession", "branchSession",
   "renameSession", "updateSessionStatus", "updateSessionWorkspace", "updateSessionLlm", "deleteSession",
   "getSessionDetail", "getWorkspaceSnapshot", "listArtifacts", "openArtifact", "revealArtifact",
-  "pickAttachments", "sendUserMessage", "getRunEvents", "listPendingApprovals", "listReusableApprovals", "revokeApprovalScope", "decideApproval",
+  "pickAttachments", "sendUserMessage", "getRunEvents", "listPendingApprovals", "listReusableApprovals", "revokeApprovalScope", "listWorkspaceMemories", "forgetWorkspaceMemory", "decideApproval",
   "cancelRun", "pauseRun", "retryRun", "subscribeRunEvents",
 ] as const satisfies readonly (keyof ShiguangBridge)[];
 
@@ -47,6 +47,8 @@ export function createShiguangBridge(ipcRenderer: IpcRenderer): ShiguangBridge {
     listPendingApprovals: (sessionId: string) => ipcRenderer.invoke("listPendingApprovals", sessionId),
     listReusableApprovals: (sessionId: string) => ipcRenderer.invoke("listReusableApprovals", sessionId),
     revokeApprovalScope: (approvalId: string) => ipcRenderer.invoke("revokeApprovalScope", approvalId),
+    listWorkspaceMemories: (sessionId: string) => ipcRenderer.invoke("listWorkspaceMemories", sessionId),
+    forgetWorkspaceMemory: (sessionId: string, memoryId: string) => ipcRenderer.invoke("forgetWorkspaceMemory", sessionId, memoryId),
     decideApproval: (req) => ipcRenderer.invoke("decideApproval", req),
     cancelRun: (req) => ipcRenderer.invoke("cancelRun", req),
     pauseRun: (req) => ipcRenderer.invoke("pauseRun", req),
