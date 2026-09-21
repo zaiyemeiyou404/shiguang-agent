@@ -22,6 +22,19 @@ function normalizeLimit(value: unknown): number {
   return Math.max(1, Math.min(50, Math.trunc(typeof value === "number" ? value : 10)));
 }
 
+const SENSITIVE_MEMORY_PATTERNS: readonly RegExp[] = [
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----/i,
+  /\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret|cookie|set-cookie)\s*[:=]/i,
+  /\bsk-[A-Za-z0-9_-]{16,}\b/,
+];
+
+function assertSafeMemoryText(summary: string, content: string): void {
+  const text = `${summary}\n${content}`;
+  if (SENSITIVE_MEMORY_PATTERNS.some((pattern) => pattern.test(text))) {
+    throw new Error("remember_fact: sensitive data cannot be saved to memory");
+  }
+}
+
 function serializeMemory(memory: Memory): Record<string, unknown> {
   return {
     id: memory.id,
@@ -107,6 +120,7 @@ export function createRememberFactTool(memoryService: MemoryService, workspaceRo
       if (typeof obj.content !== "string" || !obj.content.trim()) {
         throw new Error("remember_fact: content is required");
       }
+      assertSafeMemoryText(obj.summary, obj.content);
       const now = new Date();
       const scope = isScope(obj.scope) ? obj.scope : (workspaceRoot ? "workspace" : "global");
       const memory: Memory = {

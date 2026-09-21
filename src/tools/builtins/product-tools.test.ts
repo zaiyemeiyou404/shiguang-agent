@@ -101,6 +101,20 @@ test("memory tools can remember, search, and forget a memory", async () => {
   assert.equal(afterDelete.memories.length, 0);
 });
 
+test("remember_fact refuses sensitive credentials and secrets", async () => {
+  const repo = new FakeMemoryRepository();
+  const remember = createRememberFactTool(new MemoryService(repo), "G:\\workspace");
+
+  await assert.rejects(
+    () => remember.execute({
+      summary: "Production login",
+      content: "password=correct-horse-battery-staple",
+    }),
+    /sensitive data/i,
+  );
+  assert.equal(repo.memories.size, 0);
+});
+
 test("code intelligence tools map entrypoints, symbols, and dependencies", async () => {
   const dir = mkdtempSync(join(tmpdir(), "shiguang-code-map-"));
   try {
