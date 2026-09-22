@@ -5,6 +5,7 @@ import type { DesktopSession, DesktopRun, DesktopConversationEntry, DesktopEvent
 import { ActivityFeed } from "./features/activity/ActivityFeed";
 import { ApprovalCenter } from "./features/approvals/ApprovalCenter";
 import { RunInspector } from "./features/run/RunInspector";
+import { sortSessionsForSidebar } from "./features/session/session-order";
 
 type PillVariant = "progress" | "safe" | "auto" | "todo";
 type BannerVariant = "info" | "warn" | "danger" | "success";
@@ -508,17 +509,6 @@ function SessionLifecycleDialog({
       </div>
     </div>
   );
-}
-
-function sessionPriority(session: DesktopSession, activeSessionId: string | null) {
-  if (session.id === activeSessionId) return 1000;
-  let score = 0;
-  if (session.attention?.hasPendingApproval) score += 500 + (session.attention.pendingApprovalCount * 10);
-  if (session.attention?.hasRunningRun) score += 300;
-  if (session.attention?.hasFailedRun) score += 200;
-  if (session.attention?.hasContextCompaction) score += 50;
-  if (session.status === "active") score += 20;
-  return score;
 }
 
 function formatEventKindLabel(kind: DesktopEvent["kind"]) {
@@ -5424,16 +5414,10 @@ export default function App() {
         ? (eventsError ?? "时间线连接失败。")
         : `运行 ${activeRunId.slice(0, 8)} · ${sortedEvents.length} 条事件`;
   const approvalLabel = pendingApprovals.length > 0 ? `${pendingApprovals.length} 待处理` : "清空";
-  const sortedSessions = useMemo(() => {
-    return [...sessions].sort((a, b) => {
-      const aPinned = pinnedSessionIds.includes(a.id) ? 1 : 0;
-      const bPinned = pinnedSessionIds.includes(b.id) ? 1 : 0;
-      if (aPinned !== bPinned) return bPinned - aPinned;
-      const priorityDiff = sessionPriority(b, activeSessionId) - sessionPriority(a, activeSessionId);
-      if (priorityDiff !== 0) return priorityDiff;
-      return (b.updatedAt ?? b.createdAt).localeCompare(a.updatedAt ?? a.createdAt);
-    });
-  }, [activeSessionId, pinnedSessionIds, sessions]);
+  const sortedSessions = useMemo(
+    () => sortSessionsForSidebar(sessions, pinnedSessionIds, activeSessionId),
+    [activeSessionId, pinnedSessionIds, sessions],
+  );
   const filteredSessions = useMemo(() => {
     const query = sessionQuery.trim().toLowerCase();
     return sortedSessions.filter((session) => {
