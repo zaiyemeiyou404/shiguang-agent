@@ -40,7 +40,9 @@ export function useDesktopSessions() {
         setActiveWorkspaceId(session.workspaceId);
         setActiveSessionId(session.id);
       } else if (!activeSessionId || !list.some((session) => session.id === activeSessionId)) {
-        const nextSession = list.find((session) => session.workspaceId === preferredWorkspaceId) ?? list[0];
+        const nextSession = preferredWorkspaceId
+          ? list.find((session) => session.workspaceId === preferredWorkspaceId)
+          : list[0];
         setActiveSessionId(nextSession?.id ?? null);
         if (nextSession) setActiveWorkspaceId(nextSession.workspaceId);
       }
