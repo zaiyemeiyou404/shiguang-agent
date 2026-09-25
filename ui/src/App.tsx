@@ -6,6 +6,8 @@ import { ActivityFeed } from "./features/activity/ActivityFeed";
 import { ApprovalCenter } from "./features/approvals/ApprovalCenter";
 import { RunInspector } from "./features/run/RunInspector";
 import { sortSessionsForSidebar } from "./features/session/session-order";
+import { ConversationPane } from "./features/workbench/ConversationPane";
+import { TaskPanel } from "./features/workbench/TaskPanel";
 import { WorkspaceSidebar } from "./features/workbench/WorkspaceSidebar";
 
 type PillVariant = "progress" | "safe" | "auto" | "todo";
@@ -7074,6 +7076,12 @@ export default function App() {
                   </div>
                 </div>
 
+                <ConversationPane
+                  title="当前任务"
+                  taskTitle={runProgressLabel}
+                  progressLabel={`${runPhase.label} · ${runPhase.steps.filter((step) => step.status === "done").length} / ${runPhase.steps.length}`}
+                  onOpenTaskDrawer={() => setInspectorOpen(true)}
+                >
                 <div className="run-phase-strip">
                   <div className={`codex-progress-readout ${activeRun?.status ?? "idle"}`}>
                     <div className="codex-progress-copy">
@@ -7109,6 +7117,16 @@ export default function App() {
                     {runPhase.latestEventLabel ? <SignalPill tone="success">最新事件 {runPhase.latestEventLabel}</SignalPill> : null}
                   </div>
                 </div>
+                </ConversationPane>
+
+                {inspectorOpen ? (
+                  <TaskPanel
+                    heading="任务"
+                    evidence="本次证据"
+                    steps={runPhase.steps.map((step) => ({ id: step.key, label: step.label, status: step.status === "done" ? "已完成" : step.status === "active" ? "进行中" : step.status === "warn" ? "等待处理" : "待进入" }))}
+                    controls={<ToolBtn onClick={() => setInspectorOpen(false)}>收起任务详情</ToolBtn>}
+                  />
+                ) : null}
 
                 <div className="workspace-inline-stats">
                   <div className="workspace-inline-stat">
