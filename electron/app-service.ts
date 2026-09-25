@@ -1187,6 +1187,15 @@ export class DesktopAppService {
     await this.memoryRepository.delete(memoryId);
   }
 
+  async markWorkspaceMemoryStale(sessionId: string, memoryId: string): Promise<void> {
+    const workspace = await this.workspaceForSession(sessionId);
+    const memory = await this.memoryRepository.get(memoryId);
+    if (!memory || memory.workspaceScope !== workspace.rootPath) {
+      throw new Error("Memory does not belong to the current workspace.");
+    }
+    await this.memoryRepository.update(memoryId, { status: "stale" });
+  }
+
   async listMemoryCandidates(sessionId: string): Promise<DesktopMemoryCandidate[]> {
     const workspace = await this.workspaceForSession(sessionId);
     return (await this.memoryCandidateService.listPending(workspace.rootPath)).map(coreMemoryCandidateToDesktop);
@@ -2488,6 +2497,8 @@ function coreMemoryToDesktop(memory: Memory): DesktopMemory {
     sourceId: memory.sourceId,
     createdAt: memory.createdAt.toISOString(),
     updatedAt: memory.updatedAt.toISOString(),
+    status: memory.status ?? "active",
+    verifiedAt: memory.verifiedAt?.toISOString() ?? null,
   };
 }
 

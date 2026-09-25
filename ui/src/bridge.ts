@@ -210,6 +210,8 @@ export interface DesktopMemory {
   sourceId: string;
   createdAt: string;
   updatedAt: string;
+  status: "active" | "stale";
+  verifiedAt: string | null;
 }
 
 export interface DesktopMemoryCandidate extends Omit<DesktopMemory, "updatedAt"> {
@@ -390,6 +392,7 @@ export interface ShiguangBridge {
   revokeApprovalScope(approvalId: string): Promise<DesktopApproval>;
   listWorkspaceMemories(sessionId: string): Promise<DesktopMemory[]>;
   forgetWorkspaceMemory(sessionId: string, memoryId: string): Promise<void>;
+  markWorkspaceMemoryStale(sessionId: string, memoryId: string): Promise<void>;
   listMemoryCandidates(sessionId: string): Promise<DesktopMemoryCandidate[]>;
   acceptMemoryCandidate(sessionId: string, candidateId: string): Promise<DesktopMemory>;
   dismissMemoryCandidate(sessionId: string, candidateId: string): Promise<void>;

@@ -17,6 +17,8 @@ type MemoryRow = {
   confidence: number;
   created_at: string;
   updated_at: string;
+  status: "active" | "stale";
+  verified_at: string | null;
 };
 
 const MEMORY_COLUMNS = `
@@ -33,6 +35,8 @@ const MEMORY_COLUMNS = `
   confidence,
   created_at,
   updated_at
+  , status
+  , verified_at
 `;
 
 const PATCH_COLUMNS = {
@@ -47,6 +51,8 @@ const PATCH_COLUMNS = {
   sourceId: "source_id",
   confidence: "confidence",
   createdAt: "created_at",
+  status: "status",
+  verifiedAt: "verified_at",
 } as const satisfies Partial<Record<keyof Memory, string>>;
 
 export class SqliteMemoryRepository implements MemoryRepository {
@@ -73,8 +79,10 @@ export class SqliteMemoryRepository implements MemoryRepository {
           confidence,
           created_at,
           updated_at
+          , status
+          , verified_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         memory.id,
@@ -90,6 +98,8 @@ export class SqliteMemoryRepository implements MemoryRepository {
         memory.confidence,
         toSqlDate(memory.createdAt),
         toSqlDate(memory.updatedAt),
+        memory.status ?? "active",
+        toSqlDate(memory.verifiedAt ?? null),
       );
   }
 
@@ -179,6 +189,8 @@ function rowToMemory(row: MemoryRow): Memory {
     confidence: row.confidence,
     createdAt: fromRequiredSqlDate(row.created_at),
     updatedAt: fromRequiredSqlDate(row.updated_at),
+    status: row.status,
+    verifiedAt: fromSqlDate(row.verified_at),
   };
 }
 

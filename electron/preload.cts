@@ -42,6 +42,7 @@ const bridge: ShiguangBridge = {
   revokeApprovalScope: (approvalId: string) => ipcRenderer.invoke("revokeApprovalScope", approvalId),
   listWorkspaceMemories: (sessionId: string) => ipcRenderer.invoke("listWorkspaceMemories", sessionId),
   forgetWorkspaceMemory: (sessionId: string, memoryId: string) => ipcRenderer.invoke("forgetWorkspaceMemory", sessionId, memoryId),
+  markWorkspaceMemoryStale: (sessionId: string, memoryId: string) => ipcRenderer.invoke("markWorkspaceMemoryStale", sessionId, memoryId),
   listMemoryCandidates: (sessionId: string) => ipcRenderer.invoke("listMemoryCandidates", sessionId),
   acceptMemoryCandidate: (sessionId: string, candidateId: string) => ipcRenderer.invoke("acceptMemoryCandidate", sessionId, candidateId),
   dismissMemoryCandidate: (sessionId: string, candidateId: string) => ipcRenderer.invoke("dismissMemoryCandidate", sessionId, candidateId),

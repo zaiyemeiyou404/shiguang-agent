@@ -4285,6 +4285,20 @@ function SettingsDrawer({
     }
   };
 
+  const markWorkspaceMemoryStale = async (memoryId: string) => {
+    if (!activeSessionId) return;
+    try {
+      setMemoryBusy(memoryId);
+      setMemoryError("");
+      await requireDesktopBridge().markWorkspaceMemoryStale(activeSessionId, memoryId);
+      await refreshWorkspaceMemories();
+    } catch (error) {
+      setMemoryError(error instanceof Error ? error.message : "标记失效失败。");
+    } finally {
+      setMemoryBusy(null);
+    }
+  };
+
   const decideMemoryCandidate = async (candidateId: string, decision: "accept" | "dismiss") => {
     if (!activeSessionId) return;
     try {
@@ -5145,13 +5159,16 @@ function SettingsDrawer({
           {workspaceMemories.map((memory) => (
             <div className="settings-diff-item" key={memory.id}>
               <div>
-                <span className="tiny">{memory.kind} · {memory.sourceType} · 置信度 {Math.round(memory.confidence * 100)}%</span>
+                <span className="tiny">{memory.kind} · {memory.sourceType} · {memory.status === "stale" ? "已失效" : "有效"} · 置信度 {Math.round(memory.confidence * 100)}%</span>
                 <strong>{memory.summary}</strong>
                 <p className="muted" style={{ margin: "4px 0 0" }}>{memory.content}</p>
               </div>
-              <button className="tool-btn" type="button" onClick={() => { void forgetWorkspaceMemory(memory.id); }} disabled={memoryBusy === memory.id}>
-                {memoryBusy === memory.id ? "删除中…" : "删除"}
-              </button>
+              <div className="toolbar">
+                {memory.status !== "stale" ? <button className="tool-btn" type="button" onClick={() => { void markWorkspaceMemoryStale(memory.id); }} disabled={memoryBusy === memory.id}>标记失效</button> : null}
+                <button className="tool-btn" type="button" onClick={() => { void forgetWorkspaceMemory(memory.id); }} disabled={memoryBusy === memory.id}>
+                  {memoryBusy === memory.id ? "删除中…" : "删除"}
+                </button>
+              </div>
             </div>
           ))}
         </div>

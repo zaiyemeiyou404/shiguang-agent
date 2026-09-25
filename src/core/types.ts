@@ -184,6 +184,9 @@ export interface Memory {
   confidence: number;
   createdAt: Date;
   updatedAt: Date;
+  /** Stale memories remain auditable but must not be injected into future runs. */
+  status?: "active" | "stale";
+  verifiedAt?: Date | null;
 }
 
 export interface MemoryLink {

@@ -131,6 +131,30 @@ test("accepting a workspace memory candidate is the only step that creates durab
   assert.deepEqual(await service.listPending("G:\\workspace"), []);
 });
 
+test("memory search excludes stale workspace memories from future task context", async () => {
+  const repo = new FakeMemoryRepository();
+  const service = new MemoryService(repo);
+  const now = new Date();
+  await repo.create({
+    id: "mem_stale_workspace",
+    scope: "workspace",
+    workspaceScope: "G:\\workspace",
+    kind: "fact",
+    summary: "Old test command",
+    content: "npm run old-test",
+    salience: 0.9,
+    lastAccessedAt: null,
+    sourceType: "task",
+    sourceId: "test",
+    confidence: 0.8,
+    createdAt: now,
+    updatedAt: now,
+    status: "stale",
+  } as Memory);
+
+  assert.deepEqual(await service.search({ scope: "workspace", workspaceScope: "G:\\workspace", text: "test" }), []);
+});
+
 test("remember_fact refuses sensitive credentials and secrets", async () => {
   const repo = new FakeMemoryRepository();
   const remember = createRememberFactTool(memoryCandidateService(repo), "G:\\workspace");

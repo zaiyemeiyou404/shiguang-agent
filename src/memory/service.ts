@@ -54,6 +54,7 @@ export class MemoryService implements MemoryStore {
       ? await this.repo.listByWorkspace(query.workspaceScope, limit)
       : await this.repo.search(scope, query.text ?? "", limit);
     const results = candidates.filter(mem => {
+      if (mem.status === "stale") return false;
       if (mem.scope !== scope) return false;
       if (query.kind && mem.kind !== query.kind) return false;
       if (scope === "workspace" && query.workspaceScope && mem.workspaceScope !== query.workspaceScope) {
