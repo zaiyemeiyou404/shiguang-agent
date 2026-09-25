@@ -320,3 +320,28 @@ test("ActionDispatcher never retries workspace mutations automatically", async (
   assert.equal(result.ok, false);
   assert.equal(calls, 1);
 });
+
+test("ActionDispatcher gives code_map a readable summary instead of raw JSON", async () => {
+  const registry = new ToolRegistry();
+  registry.register({
+    descriptor: { name: "code_map", description: "Map code", inputSchema: { type: "object" }, risk: "read" },
+    async execute() {
+      return {
+        workspaceRoot: "G:/projects/demo",
+        frameworks: ["react", "vite"],
+        entrypoints: ["src/main.tsx"],
+        fileStats: { filesScanned: 42, directoriesVisited: 9, truncated: false },
+      };
+    },
+  });
+
+  const result = await new ActionDispatcher(registry).dispatch({
+    action: { kind: "tool_call", toolName: "code_map", toolInput: {} },
+    reasoning: "Map the project.",
+  });
+
+  assert.equal(result.ok, true);
+  assert.match(result.metadata?.summary ?? "", /扫描 42 个文件/);
+  assert.match(result.metadata?.summary ?? "", /react、vite/);
+  assert.doesNotMatch(result.metadata?.summary ?? "", /^\s*[{[]/);
+});

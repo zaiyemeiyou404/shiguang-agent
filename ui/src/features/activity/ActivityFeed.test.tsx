@@ -17,7 +17,7 @@ describe("ActivityFeed", () => {
       event("r", 4, "tool_result", { tool: "read_text_file", toolCallId: "call-1", output: "ok", isError: false }),
     ]} />);
     expect(screen.getByText("完成")).toBeInTheDocument();
-    expect(screen.getByText("思考过程")).toBeInTheDocument();
+    expect(screen.getByText(/^工作过程/)).toBeInTheDocument();
     expect(screen.getByText("read_text_file")).toBeInTheDocument();
     expect(screen.getByText("已完成")).toBeInTheDocument();
   });

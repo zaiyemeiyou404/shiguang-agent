@@ -46,7 +46,10 @@
     "files": [
       "desktop-build/**/*",
       "ui/dist/**/*",
-      "dist/**/*"
+      "dist/**/*",
+      "!dist/**/*.test.js",
+      "!dist/**/*.test.d.ts",
+      "!dist/**/*.test.js.map"
     ],
     "linux": {
       "target": [
@@ -81,6 +84,7 @@
     }
   },
   "devDependencies": {
+    "@phosphor-icons/react": "^2.1.10",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.7",

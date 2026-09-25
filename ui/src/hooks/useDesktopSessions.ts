@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { getDesktopBridgeErrorMessage, requireDesktopBridge } from "../bridge";
 import type { DesktopSession, DesktopRun, DesktopSessionDetail, DesktopWorkspaceSnapshot, DesktopProject, DesktopWorkspace, CreateWorkspaceRequest } from "../bridge";
 import { useSessionWorkspace } from "./useSessionWorkspace";
@@ -13,6 +13,8 @@ export function useDesktopSessions() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [sessionError, setSessionError] = useState<string | null>(null);
+  const activeWorkspaceIdRef = useRef(activeWorkspaceId);
+  const activeSessionIdRef = useRef(activeSessionId);
   const { detail, workspaceSnapshot, activeRunId, setActiveRunId, detailError, refreshDetail, clearWorkspace } = useSessionWorkspace(activeSessionId);
 
   const refreshSessions = useCallback(async () => {
@@ -26,20 +28,14 @@ export function useDesktopSessions() {
       ]);
       setProjects(projectList);
       setWorkspaces(workspaceList);
-      const preferredWorkspaceId = workspaceList.some((workspace) => workspace.id === activeWorkspaceId)
-        ? activeWorkspaceId
+      const currentWorkspaceId = activeWorkspaceIdRef.current;
+      const currentSessionId = activeSessionIdRef.current;
+      const preferredWorkspaceId = workspaceList.some((workspace) => workspace.id === currentWorkspaceId)
+        ? currentWorkspaceId
         : workspaceList.find((workspace) => workspace.available)?.id ?? workspaceList[0]?.id ?? null;
       setActiveWorkspaceId(preferredWorkspaceId);
       setSessions(list);
-      const availableWorkspaceId = workspaceList.find((workspace) => workspace.id === preferredWorkspaceId && workspace.available)?.id
-        ?? workspaceList.find((workspace) => workspace.available)?.id
-        ?? null;
-      if (list.length === 0 && availableWorkspaceId) {
-        const session = await bridge.createSession({ title: "Default Session", workspaceId: availableWorkspaceId });
-        setSessions([session]);
-        setActiveWorkspaceId(session.workspaceId);
-        setActiveSessionId(session.id);
-      } else if (!activeSessionId || !list.some((session) => session.id === activeSessionId)) {
+      if (!currentSessionId || !list.some((session) => session.id === currentSessionId)) {
         const nextSession = preferredWorkspaceId
           ? list.find((session) => session.workspaceId === preferredWorkspaceId)
           : list[0];
@@ -52,7 +48,10 @@ export function useDesktopSessions() {
     } finally {
       setLoading(false);
     }
-  }, [activeSessionId, activeWorkspaceId]);
+  }, []);
+
+  useEffect(() => { activeWorkspaceIdRef.current = activeWorkspaceId; }, [activeWorkspaceId]);
+  useEffect(() => { activeSessionIdRef.current = activeSessionId; }, [activeSessionId]);
 
   useEffect(() => {
     if (activeWorkspaceId) localStorage.setItem("shiguang.activeWorkspaceId", activeWorkspaceId);

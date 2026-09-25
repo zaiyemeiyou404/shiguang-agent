@@ -44,7 +44,7 @@ export function WorkspaceSidebar({
                     aria-current={selected ? "true" : undefined}
                     onClick={() => onSelectWorkspace(workspace.id)}
                   >
-                    <span className="workspace-group-icon">◇</span>
+                    <span className="workspace-group-icon" aria-hidden="true" />
                     <span className="workspace-group-copy">
                       <strong>{workspace.name}</strong>
                       <small>{workspace.available ? workspace.rootPath : "目录不可用"}</small>

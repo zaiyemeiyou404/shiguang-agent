@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { DesktopApproval, DesktopConversationEntry, DesktopEvent } from "../../bridge";
 import { ApprovalCard, type ApprovalDecisionState } from "../approvals/ApprovalCard";
+import { MarkdownMessage } from "../markdown/MarkdownMessage";
 import { buildActivityItems } from "./activity-model";
-import "./activity.css";
 
 function formatTime(value: string): string {
   const parsed = new Date(value);
@@ -32,6 +32,11 @@ export function ActivityFeed({
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [following, setFollowing] = useState(true);
   const items = useMemo(() => buildActivityItems(entries, events), [entries, events]);
+  const processItems = items.filter((item) => item.type === "thinking" || item.type === "tool");
+  const firstProcessId = processItems[0]?.id;
+  const processSteps = processItems.reduce((count, item) => count + (item.type === "thinking" ? item.steps.length : 0), 0);
+  const processTools = processItems.filter((item) => item.type === "tool").length;
+  const processHasError = processItems.some((item) => item.type === "tool" && (item.status === "error" || item.status === "orphan-result"));
   const referencedApprovalIds = new Set(items.filter((item) => item.type === "approval").map((item) => item.approvalId).filter(Boolean));
   const unmatchedApprovals = approvals.filter((approval) => !referencedApprovalIds.has(approval.id));
 
@@ -63,20 +68,27 @@ export function ActivityFeed({
           return (
             <article key={item.id} className={`activity-card response-card ${item.role}`}>
               <header><span>{item.from}</span><time>{formatTime(item.createdAt)}</time></header>
-              <p>{item.content}</p>
+              <MarkdownMessage content={item.content} />
             </article>
           );
         }
-        if (item.type === "thinking") {
-          return <details key={item.id} className="activity-card thinking-card"><summary>思考过程 <time>{formatTime(item.createdAt)}</time></summary><p>{item.content}</p></details>;
-        }
-        if (item.type === "tool") {
+        if (item.type === "thinking" || item.type === "tool") {
+          if (item.id !== firstProcessId) return null;
           return (
-            <details key={item.id} className={`activity-card tool-activity ${item.status}`} open={item.status === "error" || item.status === "orphan-result"}>
-              <summary><span className="tool-status-dot" />{item.tool}<em>{item.status === "running" ? "运行中" : item.status === "success" ? "已完成" : item.status === "error" ? "失败" : "仅有结果"}</em><time>{formatTime(item.createdAt)}</time></summary>
-              <div className="tool-columns">
-                <section><h5>调用参数</h5><pre>{pretty(item.input)}</pre></section>
-                <section><h5>执行结果</h5><pre>{pretty(item.output)}</pre></section>
+            <details key={item.id} className={`activity-card process-card${processHasError ? " error" : ""}`} open={processHasError}>
+              <summary><span className="process-dot" /><strong>{`工作过程${processSteps > 0 ? ` · ${processSteps} 步` : ""}`}</strong>{processTools > 0 ? <em>{processTools} 个工具</em> : null}<time>{formatTime(item.createdAt)}</time></summary>
+              <div className="process-body">
+                {processItems.map((processItem) => processItem.type === "thinking" ? (
+                  <div className="process-thoughts" key={processItem.id}>{processItem.steps.map((step, index) => <p key={`${processItem.id}:${index}`}>{step}</p>)}</div>
+                ) : (
+                  <section className={`process-tool ${processItem.status}`} key={processItem.id}>
+                    <header><span className="tool-status-dot" /><strong>{processItem.tool}</strong><em>{processItem.status === "running" ? "运行中" : processItem.status === "success" ? "已完成" : processItem.status === "error" ? "失败" : "仅有结果"}</em></header>
+                    <div className="tool-columns">
+                      <section><h5>调用参数</h5><pre>{pretty(processItem.input)}</pre></section>
+                      <section><h5>执行结果</h5><pre>{pretty(processItem.output)}</pre></section>
+                    </div>
+                  </section>
+                ))}
               </div>
             </details>
           );

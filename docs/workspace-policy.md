@@ -38,9 +38,11 @@ Implementation:
 | Runtime | Data root |
 |---|---|
 | Environment override | `SHIGUANG_USER_DATA_DIR` or `SHIGUANG_DATA_DIR` |
-| Development build | `<repo>/shiguang-agent-data/` |
-| Local `release/win-unpacked` or `release/linux-unpacked` | `<repo>/shiguang-agent-data/` |
+| Development build on Windows with `G:` | `G:\CodexData\shiguang-agent-data\` |
+| Local `release/win-unpacked` with `G:` | `G:\CodexData\shiguang-agent-data\` |
 | Installed Windows build with `G:` | `G:\CodexData\shiguang-agent-data\` |
+| Development build without a preferred root | `<repo>/shiguang-agent-data/` |
+| Local unpacked build without a preferred root | `<repo>/shiguang-agent-data/` |
 | Installed/portable build without preferred root | folder next to the executable |
 
 ## Paths produced by the policy

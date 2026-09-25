@@ -20,9 +20,9 @@ export const SHIGUANG_LEGACY_RUNTIME_FILES = [
 
 export type WorkspacePolicySource =
   | "env"
+  | "preferred_root"
   | "development_project"
   | "packaged_build_output"
-  | "packaged_preferred_root"
   | "packaged_executable";
 
 export interface WorkspacePolicyInput {
@@ -139,6 +139,13 @@ function resolveUserDataRoot(input: {
     return { path: resolve(normalize(override)), source: "env" };
   }
 
+  if (input.preferredDataRoot?.trim()) {
+    return {
+      path: join(resolve(normalize(input.preferredDataRoot)), SHIGUANG_USER_DATA_DIR_NAME),
+      source: "preferred_root",
+    };
+  }
+
   if (!input.isPackaged) {
     return {
       path: join(resolveProjectRootFromAppPath(input.appPath), SHIGUANG_USER_DATA_DIR_NAME),
@@ -151,13 +158,6 @@ function resolveUserDataRoot(input: {
     return {
       path: join(buildOutputProjectRoot, SHIGUANG_USER_DATA_DIR_NAME),
       source: "packaged_build_output",
-    };
-  }
-
-  if (input.preferredDataRoot?.trim()) {
-    return {
-      path: join(resolve(normalize(input.preferredDataRoot)), SHIGUANG_USER_DATA_DIR_NAME),
-      source: "packaged_preferred_root",
     };
   }
 

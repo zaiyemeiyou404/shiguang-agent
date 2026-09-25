@@ -4,9 +4,8 @@ Shiguang Agent redirects Electron `userData` into an app-owned data directory in
 
 ## Data location
 
-- Development build: `<repo>/shiguang-agent-data/`
-- Local `release/win-unpacked` / `release/linux-unpacked` test build: `<repo>/shiguang-agent-data/`
-- Installed Windows build with `G:` available: `G:\CodexData\shiguang-agent-data\`
+- Development, local `release/win-unpacked`, and installed Windows builds with `G:` available: `G:\CodexData\shiguang-agent-data\`
+- Development/local unpacked builds without a preferred root: `<repo>/shiguang-agent-data/`
 - Installed Windows build without `G:`: a `shiguang-agent-data/` folder next to `拾光 Agent.exe`
 
 The path is resolved by `shiguang.workspace.policy.v1`, so Electron `userData`, desktop config, session cache, state database, memory database, default workspace, and legacy migration all share the same root decision.

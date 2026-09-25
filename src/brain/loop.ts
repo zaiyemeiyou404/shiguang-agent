@@ -3170,9 +3170,24 @@ function summarizeReadOnlyObservation(result: ActionResult, message: string): st
   }
 
   if (toolName === "inspect_project" || toolName === "code_map" || toolName === "list_directory" || toolName === "search_workspace") {
-    return result.metadata?.summary
-      ? `已完成 ${toolName}：${result.metadata.summary}`
-      : `已完成 ${toolName}，但结果较结构化，请补充你要看的具体文件或目标，我会接着分析。`;
+    const summary = result.metadata?.summary?.trim();
+    const readableSummary = summary && !/^[\[{]/.test(summary) ? summary : null;
+    if (toolName === "code_map" && result.output && typeof result.output === "object" && !Array.isArray(result.output)) {
+      const output = result.output as Record<string, unknown>;
+      const stats = output.fileStats && typeof output.fileStats === "object" ? output.fileStats as Record<string, unknown> : {};
+      const files = typeof stats.filesScanned === "number" ? stats.filesScanned : null;
+      const directories = typeof stats.directoriesVisited === "number" ? stats.directoriesVisited : null;
+      const frameworks = Array.isArray(output.frameworks) ? output.frameworks.filter((item): item is string => typeof item === "string").slice(0, 5) : [];
+      const parts = [
+        files !== null ? `扫描了 ${files} 个文件` : null,
+        directories !== null ? `遍历了 ${directories} 个目录` : null,
+        frameworks.length ? `识别出 ${frameworks.join("、")}` : null,
+      ].filter((item): item is string => Boolean(item));
+      return `项目代码地图已生成${parts.length ? `：${parts.join("，")}` : ""}。我会基于这些结构证据继续读取关键文件并给出结论。`;
+    }
+    return readableSummary
+      ? `已完成 ${toolName}：${readableSummary}`
+      : `已完成 ${toolName}。结构化结果保留在工具卡片中，我会继续分析并用自然语言给出结论。`;
   }
 
   if (toolName === "find_files") {

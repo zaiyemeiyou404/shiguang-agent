@@ -1,3 +1,5 @@
+/// <reference types="vite/client" />
+
 import type { ShiguangBridge } from "./bridge";
 
 declare global {

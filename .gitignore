@@ -12,6 +12,7 @@ coverage/
 # Desktop app build
 desktop-build/
 release/
+release-fixed/
 ui/dist/
 
 # Logs
@@ -42,6 +43,9 @@ worktest/
 .codex-*.txt
 .opencode-*.txt
 .superpowers/
+.agents/
+openspec/
+design-qa.md
 
 # Tooling
 .DS_Store

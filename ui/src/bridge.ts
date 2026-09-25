@@ -119,7 +119,8 @@ export interface DesktopMessageEventPayload extends Record<string, unknown> {
 }
 
 export interface DesktopThinkingEventPayload extends Record<string, unknown> {
-  content: string;
+  content?: string;
+  reasoning?: string;
 }
 
 export interface DesktopToolCallEventPayload extends Record<string, unknown> {

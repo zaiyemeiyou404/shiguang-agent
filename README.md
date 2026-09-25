@@ -50,10 +50,10 @@ win-unpacked/拾光 Agent.exe
 
 拾光会把用户数据放在应用目录外，避免重新打包或升级时误删历史。
 
-开发/免安装本地测试版默认目录：
+Windows 开发版、免安装本地测试版和安装版在存在 `G:` 盘时统一使用：
 
 ```text
-shiguang-agent-data/
+G:\CodexData\shiguang-agent-data\
   shiguang-state.sqlite          # 会话、run、事件、审批、产物等状态
   shiguang-store.json            # 会话列表和摘要索引
   shiguang.config.json           # provider、模型、MCP、工作区配置
@@ -61,13 +61,7 @@ shiguang-agent-data/
   workspace/                     # 默认工作区，工具读写和命令执行都在这里
 ```
 
-Windows 安装版默认优先使用：
-
-```text
-G:\CodexData\shiguang-agent-data\
-```
-
-如果没有 `G:` 盘，则回退到安装目录旁边的 `shiguang-agent-data`。本地 `release/win-unpacked` 测试包会优先复用项目根目录的 `shiguang-agent-data`，避免测试包把状态散落到 release 子目录。也可以通过设置页修改工作区，或用环境变量 `SHIGUANG_USER_DATA_DIR` / `SHIGUANG_WORKSPACE_ROOT` 覆盖。
+如果没有 `G:` 盘，开发版和本地 unpacked 测试包才回退到项目根目录的 `shiguang-agent-data`，安装版回退到可执行文件旁边。也可以通过设置页修改工作区，或用环境变量 `SHIGUANG_USER_DATA_DIR` / `SHIGUANG_WORKSPACE_ROOT` 覆盖。
 
 Workspace Policy Registry 会统一决定数据目录、配置文件、状态库、长期记忆库、默认工作区和旧数据迁移来源。Electron 的 `userData`、`shiguang.config.json`、`shiguang-store.json`、`shiguang-state.sqlite`、`memory/shiguang-memory.sqlite` 都从同一个 policy 读取路径，避免“记忆在一个地方、工作区在另一个地方”的散乱问题。
 

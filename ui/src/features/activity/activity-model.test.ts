@@ -98,4 +98,31 @@ describe("buildActivityItems", () => {
     const items = buildActivityItems([], [event("legacy", 1, "error", "legacy failure")]);
     expect(items[0]).toMatchObject({ type: "error", message: "legacy failure" });
   });
+
+  it("groups repeated thinking events into one work-process item", () => {
+    const items = buildActivityItems([], [
+      event("thinking-1", 1, "thinking", { reasoning: "检查入口" }),
+      event("thinking-2", 2, "thinking", { content: "读取配置" }),
+      event("thinking-3", 3, "thinking", { content: "读取配置" }),
+    ]).filter((item) => item.type === "thinking");
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ steps: ["检查入口", "读取配置"] });
+  });
+
+  it("deduplicates repeated persisted responses from the same run", () => {
+    const repeated: DesktopConversationEntry[] = ["turn-1", "turn-2"].map((id) => ({
+      id,
+      sessionId: "session-1",
+      runId: "run-1",
+      source: "turn",
+      kind: "message",
+      role: "user",
+      from: "你",
+      content: "你好",
+      createdAt: "2026-09-17T00:00:01.000Z",
+    }));
+
+    expect(buildActivityItems(repeated, []).filter((item) => item.type === "response")).toHaveLength(1);
+  });
 });

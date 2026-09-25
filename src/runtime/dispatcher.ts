@@ -12,6 +12,32 @@ function summarize(value: unknown, maxLength = 500): string {
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
 }
 
+function summarizeToolOutput(toolName: string, value: unknown, maxLength = 500): string {
+  if (toolName === "code_map" && value && typeof value === "object" && !Array.isArray(value)) {
+    const output = value as Record<string, unknown>;
+    const stats = output.fileStats && typeof output.fileStats === "object"
+      ? output.fileStats as Record<string, unknown>
+      : {};
+    const files = typeof stats.filesScanned === "number" ? stats.filesScanned : null;
+    const directories = typeof stats.directoriesVisited === "number" ? stats.directoriesVisited : null;
+    const frameworks = Array.isArray(output.frameworks)
+      ? output.frameworks.filter((item): item is string => typeof item === "string").slice(0, 5)
+      : [];
+    const entrypoints = Array.isArray(output.entrypoints)
+      ? output.entrypoints.map((item) => typeof item === "string" ? item : item && typeof item === "object" && typeof (item as Record<string, unknown>).path === "string" ? String((item as Record<string, unknown>).path) : null).filter((item): item is string => Boolean(item)).slice(0, 5)
+      : [];
+    const parts = [
+      files !== null ? `扫描 ${files} 个文件` : null,
+      directories !== null ? `遍历 ${directories} 个目录` : null,
+      frameworks.length ? `识别技术栈 ${frameworks.join("、")}` : null,
+      entrypoints.length ? `入口 ${entrypoints.join("、")}` : null,
+      stats.truncated === true ? "结果已按上限截断" : null,
+    ].filter((item): item is string => Boolean(item));
+    return parts.length ? parts.join("；") : "代码地图已生成，可继续读取关键文件并形成结论";
+  }
+  return summarize(value, maxLength);
+}
+
 function errorType(err: unknown): string {
   return err instanceof Error ? err.name : typeof err;
 }
@@ -269,7 +295,7 @@ export class ActionDispatcher {
             output,
             metadata: {
               category: "tool_observation",
-              summary: summarize(output),
+              summary: summarizeToolOutput(action.toolName, output),
               retryable: false,
               toolName: action.toolName,
               toolCallId,

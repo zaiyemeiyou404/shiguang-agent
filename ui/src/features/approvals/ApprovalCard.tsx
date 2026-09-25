@@ -1,7 +1,6 @@
 import { useState } from "react";
 import type { DesktopApproval } from "../../bridge";
 import { normalizeApproval } from "./approval-model";
-import "./approvals.css";
 
 export type ApprovalDecisionState = "approving" | "approved" | "denied";
 

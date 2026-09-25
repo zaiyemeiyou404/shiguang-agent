@@ -16,6 +16,7 @@ export type ResponseActivityItem = ActivityBase & {
 export type ThinkingActivityItem = ActivityBase & {
   type: "thinking";
   content: string;
+  steps: string[];
 };
 
 export type ToolActivityItem = ActivityBase & {
@@ -92,12 +93,7 @@ function hasPersistedResponse(
   role: "user" | "assistant",
   content: string,
 ): boolean {
-  const eventTime = Date.parse(event.createdAt);
-  return conversation.some((entry) => {
-    if (entry.source !== "turn" || entry.role !== role || entry.content.trim() !== content) return false;
-    const turnTime = Date.parse(entry.createdAt);
-    return Number.isFinite(eventTime) && Number.isFinite(turnTime) && Math.abs(turnTime - eventTime) <= 10_000;
-  });
+  return conversation.some((entry) => entry.source === "turn" && entry.role === role && entry.content.trim() === content);
 }
 
 function callIdOf(event: DesktopEvent): string | null {
@@ -110,7 +106,7 @@ function toolNameOf(event: DesktopEvent): string {
 
 function eventMessage(event: DesktopEvent): string {
   const payload = record(event.payload);
-  return stringField(payload, "message", "content", "reason") ?? (text(event.payload) || "暂无详情");
+  return stringField(payload, "message", "content", "reasoning", "reason") ?? (text(event.payload) || "暂无详情");
 }
 
 export function mergeDesktopEvents(history: DesktopEvent[], live: DesktopEvent[]): DesktopEvent[] {
@@ -129,6 +125,7 @@ export function buildActivityItems(
       .filter((entry) => entry.source === "event")
       .flatMap((entry) => [entry.id, entry.id.startsWith("event:") ? entry.id.slice(6) : entry.id]),
   );
+  const seenConversationResponses = new Set<string>();
 
   conversation.forEach((entry, index) => {
     const content = entry.content.trim();
@@ -148,6 +145,9 @@ export function buildActivityItems(
       });
       return;
     }
+    const responseKey = `${entry.runId ?? "no-run"}:${entry.role}:${content}`;
+    if (seenConversationResponses.has(responseKey)) return;
+    seenConversationResponses.add(responseKey);
     ordered.push({
       order: Date.parse(entry.createdAt) || index,
       subOrder: index,
@@ -167,6 +167,7 @@ export function buildActivityItems(
   const toolCalls = new Map<string, DesktopEvent>();
   const toolResults = new Map<string, DesktopEvent>();
   const handledTools = new Set<string>();
+  const thinkingByRun = new Map<string, ThinkingActivityItem>();
 
   for (const event of sortedEvents) {
     if (event.kind !== "tool_call" && event.kind !== "tool_result") continue;
@@ -218,7 +219,18 @@ export function buildActivityItems(
       return;
     }
     if (event.kind === "thinking") {
-      ordered.push({ order: eventOrder, subOrder: index, item: { ...base, type: "thinking", content: eventMessage(event) } });
+      const content = eventMessage(event);
+      const key = event.runId || "unknown-run";
+      const existing = thinkingByRun.get(key);
+      if (existing) {
+        if (!existing.steps.includes(content)) existing.steps.push(content);
+        existing.content = content;
+        existing.createdAt = event.createdAt;
+      } else {
+        const item: ThinkingActivityItem = { ...base, id: `thinking:${key}`, type: "thinking", content, steps: [content] };
+        thinkingByRun.set(key, item);
+        ordered.push({ order: eventOrder, subOrder: index, item });
+      }
       return;
     }
     if (event.kind === "approval_request") {

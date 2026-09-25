@@ -14,8 +14,8 @@
 | 主进程实时订阅释放与通道隔离 | `electron/run-event-subscriptions.test.ts` | 通过 |
 | 快照与直播合并、切换运行清理 | `ui/src/hooks/useRunActivity.test.tsx` | 通过 |
 | 会话快照加载及陈旧请求隔离 | `ui/src/hooks/useSessionWorkspace.test.tsx` | 通过 |
-| 输入框键盘发送和纯附件发送 | `ui/src/features/composer/Composer.test.tsx` | 通过 |
-| 运行恢复和产物操作入口 | `ui/src/features/run/RunInspector.test.tsx` | 通过 |
+| 工作区绑定、输入发送和运行入口 | `ui/src/WorkbenchApp.test.tsx` | 通过 |
+| 工作区、任务和上下文抽屉 | `ui/src/features/workbench/WorkspaceSidebar.test.tsx`、`ui/src/WorkbenchApp.test.tsx` | 通过 |
 | 核心运行时回归 | `npm test` | 121 项通过 |
 
 ## 桌面手工验收

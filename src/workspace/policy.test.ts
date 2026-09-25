@@ -29,7 +29,21 @@ test("workspace policy keeps development data inside the project data directory"
   assert.equal(policy.legacyUserDataSources.length, 2);
 });
 
-test("workspace policy prefers build-output project data for local packaged release folders", () => {
+test("workspace policy keeps development data outside the repo when a preferred root exists", () => {
+  const policy = resolveWorkspacePolicy({
+    env: {},
+    appPath: "G:/repo/desktop-build",
+    execPath: "G:/repo/node_modules/electron/dist/electron.exe",
+    appDataPath: "C:/Users/A/AppData/Roaming",
+    isPackaged: false,
+    preferredDataRoot: "G:/CodexData",
+  });
+
+  assert.equal(policy.userDataRootSource, "preferred_root");
+  assert.match(policy.userDataRoot.replace(/\\/g, "/"), /G:\/CodexData\/shiguang-agent-data$/);
+});
+
+test("workspace policy keeps local packaged release data outside the repo when a preferred root exists", () => {
   const policy = resolveWorkspacePolicy({
     env: {},
     appPath: "G:/repo/release/win-unpacked/resources/app.asar",
@@ -38,8 +52,8 @@ test("workspace policy prefers build-output project data for local packaged rele
     preferredDataRoot: "G:/CodexData",
   });
 
-  assert.equal(policy.userDataRootSource, "packaged_build_output");
-  assert.match(policy.userDataRoot.replace(/\\/g, "/"), /G:\/repo\/shiguang-agent-data$/);
+  assert.equal(policy.userDataRootSource, "preferred_root");
+  assert.match(policy.userDataRoot.replace(/\\/g, "/"), /G:\/CodexData\/shiguang-agent-data$/);
   assert.match(policy.packagedExecutableDataRoot?.replace(/\\/g, "/") ?? "", /G:\/repo\/release\/win-unpacked\/shiguang-agent-data$/);
 });
 
@@ -52,7 +66,7 @@ test("workspace policy uses preferred packaged data root for installed apps", ()
     preferredDataRoot: "G:/CodexData",
   });
 
-  assert.equal(policy.userDataRootSource, "packaged_preferred_root");
+  assert.equal(policy.userDataRootSource, "preferred_root");
   assert.match(policy.userDataRoot.replace(/\\/g, "/"), /G:\/CodexData\/shiguang-agent-data$/);
 });
 
