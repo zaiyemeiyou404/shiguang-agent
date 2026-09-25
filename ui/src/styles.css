@@ -6331,3 +6331,10 @@ body {
     max-width: 94%;
   }
 }
+/* Chat-first workbench shell. Existing layouts can migrate into these regions incrementally. */
+.workbench-shell { display: grid; grid-template-columns: 304px minmax(0, 1fr); min-height: 100vh; background: #0a0b0e; }
+.workbench-sidebar { min-width: 0; border-right: 1px solid rgba(255,255,255,.08); }
+.workbench-main { min-width: 0; position: relative; }
+.workbench-task-trigger { position: absolute; top: 12px; right: 16px; z-index: 1; }
+.workbench-drawer { position: fixed; z-index: 20; inset: 0 0 0 auto; width: min(376px, calc(100vw - 304px)); overflow: auto; background: #121318; border-left: 1px solid rgba(255,255,255,.1); box-shadow: -24px 0 48px rgba(0,0,0,.28); }
+@media (min-width: 1500px) { .workbench-shell.is-drawer-open { grid-template-columns: 304px minmax(0, 1fr) 376px; } .workbench-shell.is-drawer-open .workbench-drawer { position: static; width: auto; } }
