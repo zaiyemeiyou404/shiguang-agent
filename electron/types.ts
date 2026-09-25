@@ -214,7 +214,7 @@ export interface DesktopMemory {
   verifiedAt: string | null;
 }
 
-export interface DesktopMemoryCandidate extends Omit<DesktopMemory, "updatedAt"> {
+export interface DesktopMemoryCandidate extends Omit<DesktopMemory, "updatedAt" | "status" | "verifiedAt"> {
   status: "pending" | "accepted" | "dismissed";
 }
 

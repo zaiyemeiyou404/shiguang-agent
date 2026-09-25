@@ -12,6 +12,7 @@ import { ApprovalPanel } from "./features/workbench/ApprovalPanel";
 import { ArtifactPanel } from "./features/workbench/ArtifactPanel";
 import { ContextDrawer } from "./features/workbench/ContextDrawer";
 import { ToolPanel } from "./features/workbench/ToolPanel";
+import { MemoryPanel } from "./features/workbench/MemoryPanel";
 import { WorkspaceSidebar } from "./features/workbench/WorkspaceSidebar";
 
 type PillVariant = "progress" | "safe" | "auto" | "todo";
@@ -5098,28 +5099,17 @@ function SettingsDrawer({
         </div>
 
         <div className="detail-block settings-section-stack">
-          <div className="section-title">
-            <h3>记忆建议</h3>
-            <div className="toolbar">
-              <span className="tiny">{memoryCandidates.length} 条待确认</span>
-              <ToolBtn onClick={() => { void refreshMemoryCandidates(); }}>刷新</ToolBtn>
-            </div>
-          </div>
-          <p className="muted" style={{ margin: 0 }}>Agent 只能提出建议；确认后才会成为当前工作区可复用的长期记忆。</p>
-          {activeSessionId && memoryCandidates.length === 0 ? <p className="muted">当前没有待确认的记忆建议。</p> : null}
-          {memoryCandidates.map((candidate) => (
-            <div className="settings-diff-item" key={candidate.id}>
-              <div>
-                <span className="tiny">{candidate.kind} · {candidate.sourceType} · 置信度 {Math.round(candidate.confidence * 100)}%</span>
-                <strong>{candidate.summary}</strong>
-                <p className="muted" style={{ margin: "4px 0 0" }}>{candidate.content}</p>
-              </div>
-              <div className="toolbar">
-                <button className="tool-btn" type="button" onClick={() => { void decideMemoryCandidate(candidate.id, "dismiss"); }} disabled={memoryBusy === candidate.id}>忽略</button>
-                <button className="primary-btn" type="button" onClick={() => { void decideMemoryCandidate(candidate.id, "accept"); }} disabled={memoryBusy === candidate.id}>{memoryBusy === candidate.id ? "处理中…" : "保留"}</button>
-              </div>
-            </div>
-          ))}
+          <div className="section-title"><h3>工作区记忆</h3><ToolBtn onClick={() => { void Promise.all([refreshMemoryCandidates(), refreshWorkspaceMemories()]); }}>刷新</ToolBtn></div>
+          <p className="muted" style={{ margin: 0 }}>候选必须确认后才会写入工作区；失效记忆保留审计记录但不会参与后续任务。</p>
+          {memoryError ? <p className="muted">{memoryError}</p> : null}
+          <MemoryPanel
+            candidates={memoryCandidates.map((candidate) => ({ id: candidate.id, summary: candidate.summary }))}
+            memories={workspaceMemories.map((memory) => ({ id: memory.id, summary: memory.summary, status: memory.status }))}
+            onAccept={(id) => { void decideMemoryCandidate(id, "accept"); }}
+            onDismiss={(id) => { void decideMemoryCandidate(id, "dismiss"); }}
+            onMarkStale={(id) => { void markWorkspaceMemoryStale(id); }}
+            onForget={(id) => { void forgetWorkspaceMemory(id); }}
+          />
         </div>
 
         <div className="detail-block settings-section-stack">
@@ -5151,34 +5141,6 @@ function SettingsDrawer({
           ))}
         </div>
 
-        <div className="detail-block settings-section-stack">
-          <div className="section-title">
-            <h3>工作区记忆</h3>
-            <div className="toolbar">
-              <span className="tiny">{workspaceMemories.length} 条</span>
-              <ToolBtn onClick={() => { void refreshWorkspaceMemories(); }}>刷新</ToolBtn>
-            </div>
-          </div>
-          <p className="muted" style={{ margin: 0 }}>仅显示当前工作区会在后续任务中使用的记忆。每条都保留来源、置信度与最后更新时间，可随时删除。</p>
-          {memoryError ? <p className="muted">{memoryError}</p> : null}
-          {!activeSessionId ? <p className="muted">先打开一个工作区中的会话，再查看它的记忆。</p> : null}
-          {activeSessionId && workspaceMemories.length === 0 ? <p className="muted">当前工作区还没有可复用记忆。</p> : null}
-          {workspaceMemories.map((memory) => (
-            <div className="settings-diff-item" key={memory.id}>
-              <div>
-                <span className="tiny">{memory.kind} · {memory.sourceType} · {memory.status === "stale" ? "已失效" : "有效"} · 置信度 {Math.round(memory.confidence * 100)}%</span>
-                <strong>{memory.summary}</strong>
-                <p className="muted" style={{ margin: "4px 0 0" }}>{memory.content}</p>
-              </div>
-              <div className="toolbar">
-                {memory.status !== "stale" ? <button className="tool-btn" type="button" onClick={() => { void markWorkspaceMemoryStale(memory.id); }} disabled={memoryBusy === memory.id}>标记失效</button> : null}
-                <button className="tool-btn" type="button" onClick={() => { void forgetWorkspaceMemory(memory.id); }} disabled={memoryBusy === memory.id}>
-                  {memoryBusy === memory.id ? "删除中…" : "删除"}
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
 
         <div className="detail-block settings-section-stack">
           <div className="section-title"><h3>Provider 注册表</h3><span className="tiny">{activeProvider}</span></div>

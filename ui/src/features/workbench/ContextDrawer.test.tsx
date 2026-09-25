@@ -19,7 +19,7 @@ describe("ContextDrawer", () => {
   });
 });
 
-function Harness({ onDecision }: { onDecision: ReturnType<typeof vi.fn> }) {
+function Harness({ onDecision }: { onDecision: (approvalId: string, decision: "granted" | "denied", scope: "once") => void }) {
   const [activeTab, setActiveTab] = useState("任务");
   return <ContextDrawer
     activeTab={activeTab}
