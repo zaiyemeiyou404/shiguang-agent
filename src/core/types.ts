@@ -205,3 +205,22 @@ export interface Approval {
   decidedAt: Date | null;
   scope?: ApprovalScope;
 }
+
+export type MemoryCandidateStatus = "pending" | "accepted" | "dismissed";
+
+export interface MemoryCandidate {
+  id: string;
+  scope: MemoryScope;
+  workspaceScope: string | null;
+  kind: MemoryKind;
+  summary: string;
+  content: string;
+  salience: number;
+  sourceType: Memory["sourceType"];
+  sourceId: string;
+  confidence: number;
+  status: MemoryCandidateStatus;
+  createdAt: Date;
+  updatedAt: Date;
+  resolvedAt: Date | null;
+}

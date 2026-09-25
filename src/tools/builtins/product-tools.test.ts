@@ -4,9 +4,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import type { Memory } from "../../core/types.js";
-import type { MemoryRepository } from "../../state/repositories.js";
+import type { Memory, MemoryCandidate } from "../../core/types.js";
+import type { MemoryCandidateRepository, MemoryRepository } from "../../state/repositories.js";
 import { MemoryService } from "../../memory/service.js";
+import { MemoryCandidateService } from "../../memory/candidate-service.js";
 import { createCollectDiagnosticsTool } from "./collect-diagnostics.js";
 import { createCodeMapTool, createDependencyGraphTool, createSymbolSearchTool } from "./code-intelligence.js";
 import { parseGitHubRemote } from "./github-repo.js";
@@ -47,6 +48,23 @@ class FakeMemoryRepository implements MemoryRepository {
   }
 }
 
+class FakeMemoryCandidateRepository implements MemoryCandidateRepository {
+  candidates = new Map<string, MemoryCandidate>();
+  async create(candidate: MemoryCandidate): Promise<void> { this.candidates.set(candidate.id, candidate); }
+  async get(id: string): Promise<MemoryCandidate | null> { return this.candidates.get(id) ?? null; }
+  async update(id: string, patch: Partial<MemoryCandidate>): Promise<void> {
+    const current = this.candidates.get(id);
+    if (current) this.candidates.set(id, { ...current, ...patch, updatedAt: new Date() });
+  }
+  async listPendingByWorkspace(workspaceScope: string, limit = 100): Promise<MemoryCandidate[]> {
+    return Array.from(this.candidates.values()).filter((candidate) => candidate.workspaceScope === workspaceScope && candidate.status === "pending").slice(0, limit);
+  }
+}
+
+function memoryCandidateService(memories = new FakeMemoryRepository(), candidates = new FakeMemoryCandidateRepository()) {
+  return new MemoryCandidateService(candidates, new MemoryService(memories));
+}
+
 test("parseGitHubRemote supports HTTPS and SSH remotes", () => {
   assert.deepEqual(parseGitHubRemote("https://github.com/zaiyemeiyou404/shiguang-agent.git"), {
     owner: "zaiyemeiyou404",
@@ -76,34 +94,46 @@ test("collect_diagnostics reports JSON parse errors without shelling out", async
   }
 });
 
-test("memory tools can remember, search, and forget a memory", async () => {
+test("remember_fact creates a confirmation candidate before saving durable memory", async () => {
   const repo = new FakeMemoryRepository();
-  const service = new MemoryService(repo);
-  const remember = createRememberFactTool(service, "G:\\workspace");
-  const search = createSearchMemoryTool(service, "G:\\workspace");
-  const forget = createForgetMemoryTool(service);
+  const remember = createRememberFactTool(memoryCandidateService(repo), "G:\\workspace");
 
-  const saved = await remember.execute({
+  const result = await remember.execute({
     summary: "Preferred workspace",
     content: "User wants Shiguang Agent data and tests on G:.",
     kind: "preference",
-  }) as { memory: { id: string } };
+  }) as { candidate?: { status?: string; summary?: string } };
 
-  const found = await search.execute({ query: "Shiguang", scope: "workspace" }) as {
-    memories: Array<{ id: string; summary: string }>;
-  };
-  assert.equal(found.memories.length, 1);
-  assert.equal(found.memories[0]?.id, saved.memory.id);
+  assert.equal(result.candidate?.status, "pending");
+  assert.equal(result.candidate?.summary, "Preferred workspace");
+  assert.equal(repo.memories.size, 0);
+});
 
-  const deleted = await forget.execute({ id: saved.memory.id }) as { deleted: boolean };
-  assert.equal(deleted.deleted, true);
-  const afterDelete = await search.execute({ query: "Shiguang", scope: "workspace" }) as { memories: unknown[] };
-  assert.equal(afterDelete.memories.length, 0);
+test("accepting a workspace memory candidate is the only step that creates durable memory", async () => {
+  const memories = new FakeMemoryRepository();
+  const candidates = new FakeMemoryCandidateRepository();
+  const service = new MemoryCandidateService(candidates, new MemoryService(memories));
+  const candidate = await service.propose({
+    scope: "workspace",
+    workspaceScope: "G:\\workspace",
+    kind: "decision",
+    summary: "Use G drive",
+    content: "Keep workspace data on G:.",
+    salience: 0.8,
+    sourceType: "task",
+    sourceId: "test",
+    confidence: 0.9,
+  });
+
+  assert.equal(memories.memories.size, 0);
+  const memory = await service.accept(candidate.id, "G:\\workspace");
+  assert.equal(memories.memories.get(memory.id)?.summary, "Use G drive");
+  assert.deepEqual(await service.listPending("G:\\workspace"), []);
 });
 
 test("remember_fact refuses sensitive credentials and secrets", async () => {
   const repo = new FakeMemoryRepository();
-  const remember = createRememberFactTool(new MemoryService(repo), "G:\\workspace");
+  const remember = createRememberFactTool(memoryCandidateService(repo), "G:\\workspace");
 
   await assert.rejects(
     () => remember.execute({
@@ -115,20 +145,11 @@ test("remember_fact refuses sensitive credentials and secrets", async () => {
   assert.equal(repo.memories.size, 0);
 });
 
-test("remember_fact presents long-term memory as an approval candidate", () => {
-  const remember = createRememberFactTool(new MemoryService(new FakeMemoryRepository()), "G:\\workspace");
+test("remember_fact proposes memory without writing it directly", () => {
+  const remember = createRememberFactTool(memoryCandidateService(), "G:\\workspace");
 
-  assert.equal(remember.descriptor.requiresApproval, true);
-  assert.deepEqual(remember.previewApproval?.({
-    summary: "Preferred workspace",
-    content: "Keep project data on G:.",
-    kind: "preference",
-  }), {
-    kind: "summary",
-    title: "Save long-term memory",
-    operation: "write",
-    warnings: ["Preference: Preferred workspace"],
-  });
+  assert.equal(remember.descriptor.requiresApproval, false);
+  assert.equal(remember.descriptor.risk, "read");
 });
 
 test("memory tools keep workspace memories inside the active workspace", async () => {
@@ -136,7 +157,7 @@ test("memory tools keep workspace memories inside the active workspace", async (
   const service = new MemoryService(repo);
   const workspaceA = "G:\\workspace-a";
   const workspaceB = "G:\\workspace-b";
-  const remember = createRememberFactTool(service, workspaceA);
+  const remember = createRememberFactTool(memoryCandidateService(repo), workspaceA);
   const search = createSearchMemoryTool(service, workspaceA);
   const forget = createForgetMemoryTool(service, workspaceA);
 
@@ -144,8 +165,8 @@ test("memory tools keep workspace memories inside the active workspace", async (
     summary: "Workspace boundary",
     content: "This should remain in workspace A.",
     workspaceScope: workspaceB,
-  }) as { memory: { id: string; workspaceScope: string | null } };
-  assert.equal(saved.memory.workspaceScope, workspaceA);
+  }) as { candidate: { workspaceScope: string | null } };
+  assert.equal(saved.candidate.workspaceScope, workspaceA);
 
   const now = new Date();
   await repo.create({
@@ -167,7 +188,7 @@ test("memory tools keep workspace memories inside the active workspace", async (
   const found = await search.execute({ scope: "workspace", workspaceScope: workspaceB }) as {
     memories: Array<{ id: string }>;
   };
-  assert.deepEqual(found.memories.map((memory) => memory.id), [saved.memory.id]);
+  assert.deepEqual(found.memories.map((memory) => memory.id), []);
   await assert.rejects(() => forget.execute({ id: "mem_workspace_b" }), /current workspace/i);
   assert.equal(repo.memories.has("mem_workspace_b"), true);
 });

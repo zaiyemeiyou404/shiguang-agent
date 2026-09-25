@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 export const DEFAULT_PROJECT_ID = "project_default";
 export const DEFAULT_WORKSPACE_ID = "workspace_default";
 
@@ -219,6 +219,27 @@ CREATE TABLE IF NOT EXISTS legacy_runtime_imports (
 );
 `;
 
+export const MIGRATION_008 = `
+CREATE TABLE IF NOT EXISTS memory_candidates (
+  id TEXT PRIMARY KEY,
+  scope TEXT NOT NULL DEFAULT 'workspace',
+  workspace_scope TEXT,
+  kind TEXT NOT NULL DEFAULT 'observation',
+  summary TEXT NOT NULL,
+  content TEXT NOT NULL,
+  salience REAL NOT NULL DEFAULT 0.0,
+  source_type TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  confidence REAL NOT NULL DEFAULT 1.0,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','accepted','dismissed')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  resolved_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_memory_candidates_workspace_status
+ON memory_candidates(workspace_scope, status, updated_at DESC);
+`;
+
 export interface StateMigration {
   version: number;
   name: string;
@@ -234,6 +255,7 @@ export const STATE_MIGRATIONS: readonly StateMigration[] = [
   { version: 5, name: "run-budgets", sql: MIGRATION_005 },
   { version: 6, name: "approval-scopes", sql: MIGRATION_006 },
   { version: 7, name: "legacy-runtime-import-markers", sql: MIGRATION_007 },
+  { version: 8, name: "memory-candidates", sql: MIGRATION_008 },
 ];
 
 /** @deprecated Prefer STATE_MIGRATIONS so version and backup metadata remain explicit. */

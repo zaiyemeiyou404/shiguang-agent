@@ -29,7 +29,7 @@ describe("useDesktopSessions", () => {
       listSessions: async () => sessions,
       listProjects: async () => [defaultProject],
       listWorkspaces: async () => workspaces,
-      getWorkspaceSnapshot: async (sessionId) => ({
+      getWorkspaceSnapshot: async (sessionId: string) => ({
         detail: { session: sessions.find((session) => session.id === sessionId)!, runs: [], turns: [], conversation: [], tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, requests: 0, latestTotalTokens: null } },
         pendingApprovals: [],
         artifacts: [],

@@ -1,7 +1,7 @@
 import { type CSSProperties, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useDesktopSessions, useRunEvents } from "./hooks/useDesktopSessions";
 import { getDesktopBridge, getDesktopBridgeErrorMessage, requireDesktopBridge } from "./bridge";
-import type { DesktopSession, DesktopRun, DesktopConversationEntry, DesktopEvent, DesktopSettings, DesktopApproval, DesktopArtifact, DesktopMemory, DesktopProviderConnectionResult, DesktopAttachment, DesktopTokenUsage, DesktopSessionLlmSettings, DesktopProject, ToolApprovalMode } from "./bridge";
+import type { DesktopSession, DesktopRun, DesktopConversationEntry, DesktopEvent, DesktopSettings, DesktopApproval, DesktopArtifact, DesktopMemory, DesktopMemoryCandidate, DesktopProviderConnectionResult, DesktopAttachment, DesktopTokenUsage, DesktopSessionLlmSettings, DesktopProject, ToolApprovalMode } from "./bridge";
 import { ActivityFeed } from "./features/activity/ActivityFeed";
 import { ApprovalCenter } from "./features/approvals/ApprovalCenter";
 import { RunInspector } from "./features/run/RunInspector";
@@ -4190,6 +4190,7 @@ function SettingsDrawer({
   const [approvalScopeBusy, setApprovalScopeBusy] = useState<string | null>(null);
   const [approvalScopeError, setApprovalScopeError] = useState("");
   const [workspaceMemories, setWorkspaceMemories] = useState<DesktopMemory[]>([]);
+  const [memoryCandidates, setMemoryCandidates] = useState<DesktopMemoryCandidate[]>([]);
   const [memoryBusy, setMemoryBusy] = useState<string | null>(null);
   const [memoryError, setMemoryError] = useState("");
 
@@ -4255,6 +4256,21 @@ function SettingsDrawer({
 
   useEffect(() => { void refreshWorkspaceMemories(); }, [refreshWorkspaceMemories]);
 
+  const refreshMemoryCandidates = useCallback(async () => {
+    if (!open || !activeSessionId) {
+      setMemoryCandidates([]);
+      return;
+    }
+    try {
+      setMemoryError("");
+      setMemoryCandidates(await requireDesktopBridge().listMemoryCandidates(activeSessionId));
+    } catch (error) {
+      setMemoryError(error instanceof Error ? error.message : "无法读取记忆建议。");
+    }
+  }, [activeSessionId, open]);
+
+  useEffect(() => { void refreshMemoryCandidates(); }, [refreshMemoryCandidates]);
+
   const forgetWorkspaceMemory = async (memoryId: string) => {
     if (!activeSessionId) return;
     try {
@@ -4264,6 +4280,21 @@ function SettingsDrawer({
       await refreshWorkspaceMemories();
     } catch (error) {
       setMemoryError(error instanceof Error ? error.message : "删除记忆失败。");
+    } finally {
+      setMemoryBusy(null);
+    }
+  };
+
+  const decideMemoryCandidate = async (candidateId: string, decision: "accept" | "dismiss") => {
+    if (!activeSessionId) return;
+    try {
+      setMemoryBusy(candidateId);
+      setMemoryError("");
+      if (decision === "accept") await requireDesktopBridge().acceptMemoryCandidate(activeSessionId, candidateId);
+      else await requireDesktopBridge().dismissMemoryCandidate(activeSessionId, candidateId);
+      await Promise.all([refreshMemoryCandidates(), refreshWorkspaceMemories()]);
+    } catch (error) {
+      setMemoryError(error instanceof Error ? error.message : "更新记忆建议失败。");
     } finally {
       setMemoryBusy(null);
     }
@@ -5043,6 +5074,31 @@ function SettingsDrawer({
               </p>
             </div>
           </details>
+        </div>
+
+        <div className="detail-block settings-section-stack">
+          <div className="section-title">
+            <h3>记忆建议</h3>
+            <div className="toolbar">
+              <span className="tiny">{memoryCandidates.length} 条待确认</span>
+              <ToolBtn onClick={() => { void refreshMemoryCandidates(); }}>刷新</ToolBtn>
+            </div>
+          </div>
+          <p className="muted" style={{ margin: 0 }}>Agent 只能提出建议；确认后才会成为当前工作区可复用的长期记忆。</p>
+          {activeSessionId && memoryCandidates.length === 0 ? <p className="muted">当前没有待确认的记忆建议。</p> : null}
+          {memoryCandidates.map((candidate) => (
+            <div className="settings-diff-item" key={candidate.id}>
+              <div>
+                <span className="tiny">{candidate.kind} · {candidate.sourceType} · 置信度 {Math.round(candidate.confidence * 100)}%</span>
+                <strong>{candidate.summary}</strong>
+                <p className="muted" style={{ margin: "4px 0 0" }}>{candidate.content}</p>
+              </div>
+              <div className="toolbar">
+                <button className="tool-btn" type="button" onClick={() => { void decideMemoryCandidate(candidate.id, "dismiss"); }} disabled={memoryBusy === candidate.id}>忽略</button>
+                <button className="primary-btn" type="button" onClick={() => { void decideMemoryCandidate(candidate.id, "accept"); }} disabled={memoryBusy === candidate.id}>{memoryBusy === candidate.id ? "处理中…" : "保留"}</button>
+              </div>
+            </div>
+          ))}
         </div>
 
         <div className="detail-block settings-section-stack">

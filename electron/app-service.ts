@@ -11,6 +11,7 @@ import type {
   DesktopSettings,
   DesktopApproval,
   DesktopMemory,
+  DesktopMemoryCandidate,
   DesktopArtifact,
   DesktopProviderConnectionRequest,
   DesktopProviderConnectionResult,
@@ -27,14 +28,16 @@ import type {
 import { normalizeDesktopApprovalRequest, normalizeDesktopEventPayload } from "./event-contracts.js";
 import { Agent } from "../dist/app/agent.js";
 import { RepositoryEventSink } from "../dist/runtime/event-sink.js";
-import type { Approval, Artifact, Memory, Project, Run, RunEvent, Session, Task, TaskCheckpoint, Turn, Workspace } from "../dist/core/types.js";
+import type { Approval, Artifact, Memory, MemoryCandidate, Project, Run, RunEvent, Session, Task, TaskCheckpoint, Turn, Workspace } from "../dist/core/types.js";
 import type { ExecutionGrant } from "../dist/tools/types.js";
 import { MemoryService } from "../dist/memory/service.js";
+import { MemoryCandidateService } from "../dist/memory/candidate-service.js";
 import { openStateDatabase } from "../dist/state/sqlite.js";
 import { importLegacyRuntimeData } from "../dist/state/legacy-runtime-importer.js";
 import { SqliteApprovalRepository } from "../dist/state/sqlite-approval-repository.js";
 import { SqliteArtifactRepository } from "../dist/state/sqlite-artifact-repository.js";
 import { SqliteMemoryRepository } from "../dist/state/sqlite-memory-repository.js";
+import { SqliteMemoryCandidateRepository } from "../dist/state/sqlite-memory-candidate-repository.js";
 import { SqliteRunEventRepository } from "../dist/state/sqlite-run-event-repository.js";
 import { SqliteRunRepository } from "../dist/state/sqlite-run-repository.js";
 import { SqliteSessionRepository } from "../dist/state/sqlite-session-repository.js";
@@ -342,7 +345,9 @@ export class DesktopAppService {
   private approvalRepository: SqliteApprovalRepository;
   private artifactRepository: SqliteArtifactRepository;
   private memoryRepository: SqliteMemoryRepository;
+  private memoryCandidateRepository: SqliteMemoryCandidateRepository;
   private memoryService: MemoryService;
+  private memoryCandidateService: MemoryCandidateService;
   private mcpRuntime: McpStdioToolRuntime | null = null;
   private mcpRuntimeKey = "";
 
@@ -373,6 +378,8 @@ export class DesktopAppService {
     this.artifactRepository = new SqliteArtifactRepository(db);
     this.memoryRepository = new SqliteMemoryRepository(memoryDb);
     this.memoryService = new MemoryService(this.memoryRepository);
+    this.memoryCandidateRepository = new SqliteMemoryCandidateRepository(memoryDb);
+    this.memoryCandidateService = new MemoryCandidateService(this.memoryCandidateRepository, this.memoryService);
   }
 
   async listProjects(): Promise<DesktopProject[]> {
@@ -1180,6 +1187,21 @@ export class DesktopAppService {
     await this.memoryRepository.delete(memoryId);
   }
 
+  async listMemoryCandidates(sessionId: string): Promise<DesktopMemoryCandidate[]> {
+    const workspace = await this.workspaceForSession(sessionId);
+    return (await this.memoryCandidateService.listPending(workspace.rootPath)).map(coreMemoryCandidateToDesktop);
+  }
+
+  async acceptMemoryCandidate(sessionId: string, candidateId: string): Promise<DesktopMemory> {
+    const workspace = await this.workspaceForSession(sessionId);
+    return coreMemoryToDesktop(await this.memoryCandidateService.accept(candidateId, workspace.rootPath));
+  }
+
+  async dismissMemoryCandidate(sessionId: string, candidateId: string): Promise<void> {
+    const workspace = await this.workspaceForSession(sessionId);
+    await this.memoryCandidateService.dismiss(candidateId, workspace.rootPath);
+  }
+
   private async workspaceForSession(sessionId: string): Promise<Workspace> {
     const session = await this.sessionRepository.get(sessionId);
     if (!session) throw new Error(`Session not found: ${sessionId}`);
@@ -1278,7 +1300,7 @@ export class DesktopAppService {
       createSearchWorkspaceTool(workspaceRoot),
       createFindFilesTool(workspaceRoot),
       createSearchMemoryTool(this.memoryService, workspaceRoot),
-      createRememberFactTool(this.memoryService, workspaceRoot),
+      createRememberFactTool(this.memoryCandidateService, workspaceRoot),
       createWriteTextFileTool(workspaceRoot),
       createPatchTextFileTool(workspaceRoot),
       createCopyPathTool(workspaceRoot),
@@ -2466,6 +2488,23 @@ function coreMemoryToDesktop(memory: Memory): DesktopMemory {
     sourceId: memory.sourceId,
     createdAt: memory.createdAt.toISOString(),
     updatedAt: memory.updatedAt.toISOString(),
+  };
+}
+
+function coreMemoryCandidateToDesktop(candidate: MemoryCandidate): DesktopMemoryCandidate {
+  return {
+    id: candidate.id,
+    scope: candidate.scope,
+    workspaceScope: candidate.workspaceScope,
+    kind: candidate.kind,
+    summary: candidate.summary,
+    content: candidate.content,
+    salience: candidate.salience,
+    confidence: candidate.confidence,
+    sourceType: candidate.sourceType,
+    sourceId: candidate.sourceId,
+    status: candidate.status,
+    createdAt: candidate.createdAt.toISOString(),
   };
 }
 

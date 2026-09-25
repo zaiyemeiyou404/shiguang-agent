@@ -7,6 +7,7 @@ import type {
   RunEvent,
   Artifact,
   Memory,
+  MemoryCandidate,
   Approval,
   Project,
   Workspace,
@@ -87,6 +88,13 @@ export interface ApprovalRepository {
   listBySession(sessionId: string): Promise<Approval[]>;
   listReusableBySession(sessionId: string): Promise<Approval[]>;
   findReusable(runId: string, capability: string): Promise<Approval | null>;
+}
+
+export interface MemoryCandidateRepository {
+  create(candidate: MemoryCandidate): Promise<void>;
+  get(id: string): Promise<MemoryCandidate | null>;
+  update(id: string, patch: Partial<MemoryCandidate>): Promise<void>;
+  listPendingByWorkspace(workspaceScope: string, limit?: number): Promise<MemoryCandidate[]>;
 }
 
 export interface Repositories {

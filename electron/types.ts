@@ -212,6 +212,10 @@ export interface DesktopMemory {
   updatedAt: string;
 }
 
+export interface DesktopMemoryCandidate extends Omit<DesktopMemory, "updatedAt"> {
+  status: "pending" | "accepted" | "dismissed";
+}
+
 export interface DesktopArtifact {
   id: string;
   sessionId: string | null;
@@ -395,6 +399,9 @@ export interface ShiguangBridge {
   revokeApprovalScope(approvalId: string): Promise<DesktopApproval>;
   listWorkspaceMemories(sessionId: string): Promise<DesktopMemory[]>;
   forgetWorkspaceMemory(sessionId: string, memoryId: string): Promise<void>;
+  listMemoryCandidates(sessionId: string): Promise<DesktopMemoryCandidate[]>;
+  acceptMemoryCandidate(sessionId: string, candidateId: string): Promise<DesktopMemory>;
+  dismissMemoryCandidate(sessionId: string, candidateId: string): Promise<void>;
   decideApproval(req: ApprovalDecisionRequest): Promise<DesktopApproval>;
   cancelRun(req: RunActionRequest): Promise<DesktopRun>;
   pauseRun(req: RunActionRequest): Promise<DesktopRun>;

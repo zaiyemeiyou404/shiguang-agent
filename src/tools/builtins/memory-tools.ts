@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
 import type { Memory, MemoryKind, MemoryScope } from "../../core/types.js";
+import type { MemoryCandidateService } from "../../memory/candidate-service.js";
 import type { MemoryService } from "../../memory/service.js";
 import type { Tool, ToolApprovalPreview } from "../types.js";
 
@@ -87,11 +87,11 @@ export function createSearchMemoryTool(memoryService: MemoryService, workspaceRo
   };
 }
 
-export function createRememberFactTool(memoryService: MemoryService, workspaceRoot?: string): Tool {
+export function createRememberFactTool(memoryCandidates: MemoryCandidateService, workspaceRoot?: string): Tool {
   return {
     descriptor: {
       name: "remember_fact",
-      description: "Save a durable memory for future runs. Accepts { summary, content, scope?, workspaceScope?, kind?, salience?, confidence? }.",
+      description: "Propose a durable memory for user confirmation. Accepts { summary, content, scope?, workspaceScope?, kind?, salience?, confidence? }.",
       inputSchema: {
         type: "object",
         properties: {
@@ -105,8 +105,8 @@ export function createRememberFactTool(memoryService: MemoryService, workspaceRo
         },
         required: ["summary", "content"],
       },
-      risk: "write",
-      requiresApproval: true,
+      risk: "read",
+      requiresApproval: false,
       capability: "memory.write",
     },
     previewApproval(input: unknown): ToolApprovalPreview {
@@ -134,25 +134,31 @@ export function createRememberFactTool(memoryService: MemoryService, workspaceRo
         throw new Error("remember_fact: content is required");
       }
       assertSafeMemoryText(obj.summary, obj.content);
-      const now = new Date();
       const scope = isScope(obj.scope) ? obj.scope : (workspaceRoot ? "workspace" : "global");
-      const memory: Memory = {
-        id: `mem_${randomUUID()}`,
+      const candidate = await memoryCandidates.propose({
         scope,
         workspaceScope: scope === "workspace" ? (workspaceRoot ?? (typeof obj.workspaceScope === "string" ? obj.workspaceScope : null)) : null,
         kind: isKind(obj.kind) ? obj.kind : "fact",
         summary: obj.summary.trim().slice(0, 240),
         content: obj.content.trim().slice(0, 4_000),
         salience: clamp01(typeof obj.salience === "number" ? obj.salience : 0.65),
-        lastAccessedAt: null,
-        sourceType: "user",
+        sourceType: "task",
         sourceId: "tool:remember_fact",
         confidence: clamp01(typeof obj.confidence === "number" ? obj.confidence : 0.85),
-        createdAt: now,
-        updatedAt: now,
+      });
+      return {
+        candidate: {
+          id: candidate.id,
+          status: candidate.status,
+          scope: candidate.scope,
+          workspaceScope: candidate.workspaceScope,
+          kind: candidate.kind,
+          summary: candidate.summary,
+          content: candidate.content,
+          salience: candidate.salience,
+          confidence: candidate.confidence,
+        },
       };
-      await memoryService.save(memory);
-      return { memory: serializeMemory(memory) };
     },
   };
 }
