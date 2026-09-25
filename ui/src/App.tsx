@@ -8,6 +8,10 @@ import { RunInspector } from "./features/run/RunInspector";
 import { sortSessionsForSidebar } from "./features/session/session-order";
 import { ConversationPane } from "./features/workbench/ConversationPane";
 import { TaskPanel } from "./features/workbench/TaskPanel";
+import { ApprovalPanel } from "./features/workbench/ApprovalPanel";
+import { ArtifactPanel } from "./features/workbench/ArtifactPanel";
+import { ContextDrawer } from "./features/workbench/ContextDrawer";
+import { ToolPanel } from "./features/workbench/ToolPanel";
 import { WorkspaceSidebar } from "./features/workbench/WorkspaceSidebar";
 
 type PillVariant = "progress" | "safe" | "auto" | "todo";
@@ -5373,6 +5377,8 @@ export default function App() {
   const [settings, setSettings] = useState<DesktopSettings | null>(null);
   const [decisionState, setDecisionState] = useState<Record<string, "approving" | "approved" | "denied">>({});
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [contextDrawerOpen, setContextDrawerOpen] = useState(false);
+  const [contextDrawerTab, setContextDrawerTab] = useState("任务");
   const decidingApprovalsRef = useRef(new Set<string>());
   const [runActionState, setRunActionState] = useState<"idle" | "cancelling" | "pausing" | "retrying">("idle");
   const [branchingRunId, setBranchingRunId] = useState<string | null>(null);
@@ -6498,7 +6504,7 @@ export default function App() {
                     <ToolBtn onClick={() => openSessionLifecycle("archive")}>{activeSession.status === "archived" ? "恢复" : "归档"}</ToolBtn>
                   </>
                 ) : null}
-                {showChatView ? <ToolBtn onClick={() => setInspectorOpen((value) => !value)}>{inspectorOpen ? "关闭详情" : "运行详情"}</ToolBtn> : null}
+                {showChatView ? <ToolBtn onClick={() => setContextDrawerOpen((value) => !value)}>{contextDrawerOpen ? "关闭上下文" : "上下文"}</ToolBtn> : null}
                 <ToolBtn onClick={() => { void openSettings(); }}>设置</ToolBtn>
                 <ToolBtn
                   primary
@@ -6532,6 +6538,27 @@ export default function App() {
               onOpenArtifact={(uri) => { void handleOpenArtifact(uri); }}
               onRevealArtifact={(uri) => { void handleRevealArtifact(uri); }}
             />
+
+            {showChatView && contextDrawerOpen ? (
+              <ContextDrawer
+                activeTab={contextDrawerTab}
+                onTabChange={setContextDrawerTab}
+                panels={{
+                  "任务": <TaskPanel
+                    heading="任务"
+                    evidence="本次证据"
+                    steps={runPhase.steps.map((step) => ({ id: step.key, label: step.label, status: step.status === "done" ? "已完成" : step.status === "active" ? "进行中" : "待进入" }))}
+                    controls={<ToolBtn onClick={() => setContextDrawerOpen(false)}>关闭</ToolBtn>}
+                  />,
+                  "审批": <ApprovalPanel
+                    approvals={pendingApprovals.map((approval) => ({ id: approval.id, title: approval.capability || "等待审批" }))}
+                    onDecision={(approvalId, decision, scope) => { void handleApprovalDecision(approvalId, decision, scope); }}
+                  />,
+                  "工具": <ToolPanel events={sortedEvents.filter((event) => event.kind === "tool_call" || event.kind === "tool_result").map((event) => ({ id: event.id, label: toolEventName(event) ?? "工具", detail: event.kind === "tool_result" ? "已返回" : "执行中" }))} />,
+                  "产物": <ArtifactPanel artifacts={visibleArtifacts.map((artifact) => ({ id: artifact.id, title: artifact.title ?? artifact.kind, uri: artifact.uri }))} onOpen={(uri) => { void handleOpenArtifact(uri); }} />,
+                }}
+              />
+            ) : null}
 
             <section className="chat-banner-stack">
               {sessionError ? (

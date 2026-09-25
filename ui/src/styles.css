@@ -5140,6 +5140,26 @@ body,
 .task-panel li small { color: var(--text-dim); }
 .task-panel-controls { margin-top: 12px; }
 
+.context-drawer {
+  margin: 0 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elev);
+  overflow: hidden;
+}
+
+.context-drawer-tabs { display: flex; gap: 4px; padding: 8px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+.context-drawer-tabs button { border: 0; border-radius: 9px; padding: 7px 10px; background: transparent; color: var(--text-dim); cursor: pointer; white-space: nowrap; }
+.context-drawer-tabs button.active { background: var(--accent-soft); color: var(--text); }
+.context-drawer-panel { padding: 12px; max-height: 44vh; overflow: auto; }
+.context-drawer-panel .task-panel { margin: 0; border: 0; padding: 0; }
+.approval-panel h2, .tool-panel h2, .artifact-panel h2 { margin: 0 0 10px; font-size: 14px; }
+.approval-panel-item { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--border); }
+.approval-panel-item > div { display: flex; gap: 6px; }
+.tool-panel ul, .artifact-panel ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.tool-panel li { display: flex; justify-content: space-between; gap: 10px; }
+.tool-panel li small { color: var(--text-dim); }
+
 /* Keep the live run readout visible as a real status card, not a clipped progress sliver. */
 .chat-banner-stack .live-run-readout {
   box-sizing: border-box;
