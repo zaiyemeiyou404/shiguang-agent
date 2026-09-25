@@ -6,6 +6,7 @@ import { ActivityFeed } from "./features/activity/ActivityFeed";
 import { ApprovalCenter } from "./features/approvals/ApprovalCenter";
 import { RunInspector } from "./features/run/RunInspector";
 import { sortSessionsForSidebar } from "./features/session/session-order";
+import { WorkspaceSidebar } from "./features/workbench/WorkspaceSidebar";
 
 type PillVariant = "progress" | "safe" | "auto" | "todo";
 type BannerVariant = "info" | "warn" | "danger" | "success";
@@ -5503,15 +5504,6 @@ export default function App() {
       return true;
     });
   }, [pinnedSessionIds, sessionQuery, sessionView, sortedSessions]);
-  const workspaceGroups = useMemo(() => projects.map((project) => ({
-    project,
-    workspaces: workspaces
-      .filter((workspace) => workspace.projectId === project.id)
-      .map((workspace) => ({
-        workspace,
-        sessions: filteredSessions.filter((session) => session.workspaceId === workspace.id),
-      })),
-  })), [filteredSessions, projects, workspaces]);
   const latestSession = sortedSessions[0] ?? null;
   const pinnedSessions = sortedSessions.filter((session) => pinnedSessionIds.includes(session.id));
   const focusSessions = sortedSessions.filter((session) => session.attention?.hasPendingApproval || session.attention?.hasFailedRun || session.attention?.hasRunningRun);
@@ -6437,46 +6429,39 @@ export default function App() {
               {sessions.length > 0 && filteredSessions.length === 0 ? (
                 <p className="muted" style={{ padding: 16 }}>当前筛选下没有会话，换个关键词或视图试试。</p>
               ) : null}
-              {workspaceGroups.map(({ project, workspaces: projectWorkspaces }) => (
-                <section className="project-group" key={project.id}>
-                  <div className="project-group-title"><span>{project.name}</span><small>{projectWorkspaces.length}</small></div>
-                  {projectWorkspaces.map(({ workspace, sessions: workspaceSessions }) => (
-                    <div className={`workspace-group${workspace.id === activeWorkspaceId ? " active" : ""}`} key={workspace.id}>
-                      <button className="workspace-group-head" type="button" onClick={() => selectWorkspace(workspace.id)}>
-                        <span className="workspace-group-icon">◇</span>
-                        <span className="workspace-group-copy">
-                          <strong>{workspace.name}</strong>
-                          <small>{workspace.available ? workspace.rootPath : "目录不可用"}</small>
-                        </span>
-                        <span className={`workspace-state-dot${workspace.available ? "" : " unavailable"}`} />
-                      </button>
-                      <div className="workspace-session-list">
-                        {workspaceSessions.map((session) => (
-                          <SessionCard
-                            key={session.id}
-                            active={session.id === activeSessionId}
-                            pinned={pinnedSessionIds.includes(session.id)}
-                            session={session}
-                            onClick={() => {
-                              selectSession(session.id);
-                              setSurface("running");
-                            }}
-                            onTogglePin={() => toggleSessionPin(session.id)}
-                          />
-                        ))}
-                        {workspaceSessions.length === 0 && sessionQuery.trim() === "" && sessionView === "all" ? (
-                          <button className="workspace-empty-task" type="button" onClick={() => {
-                            selectWorkspace(workspace.id);
-                            setNewSessionTitle("新会话");
-                            setNewSessionError(null);
-                            setNewSessionOpen(true);
-                          }}>＋ 新建任务</button>
-                        ) : null}
-                      </div>
-                    </div>
-                  ))}
-                </section>
-              ))}
+              <WorkspaceSidebar
+                activeSessionId={activeSessionId}
+                activeWorkspaceId={activeWorkspaceId}
+                onSelectSession={(sessionId) => {
+                  selectSession(sessionId);
+                  setSurface("running");
+                }}
+                onSelectWorkspace={selectWorkspace}
+                projects={projects}
+                sessions={filteredSessions}
+                workspaces={workspaces}
+                renderSession={(session) => (
+                  <SessionCard
+                    key={session.id}
+                    active={session.id === activeSessionId}
+                    pinned={pinnedSessionIds.includes(session.id)}
+                    session={session as DesktopSession}
+                    onClick={() => {
+                      selectSession(session.id);
+                      setSurface("running");
+                    }}
+                    onTogglePin={() => toggleSessionPin(session.id)}
+                  />
+                )}
+                emptyWorkspaceAction={(workspaceId) => sessionQuery.trim() === "" && sessionView === "all" ? (
+                  <button className="workspace-empty-task" type="button" onClick={() => {
+                    selectWorkspace(workspaceId);
+                    setNewSessionTitle("新会话");
+                    setNewSessionError(null);
+                    setNewSessionOpen(true);
+                  }}>＋ 新建任务</button>
+                ) : null}
+              />
             </div>
           </aside>
 
