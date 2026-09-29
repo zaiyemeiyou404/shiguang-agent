@@ -31,12 +31,12 @@
 
 在 GitHub Releases 页面下载 Windows 版本：
 
-- 安装包：`shiguang-agent-setup-0.2.48.exe`
+- 安装包：`shiguang-agent-setup-0.2.52.exe`
 - 免安装版：`win-unpacked.zip`
 
 安装包安装完成后会创建桌面快捷方式和开始菜单快捷方式。桌面上出现的是快捷方式，不是复制出来的独立 `.exe` 文件。
 
-`main` 分支更新后会自动刷新 `latest` 预发布包，适合想直接试用最新构建的用户。GitHub Releases 页面里带版本号的正式安装包不会自动替换旧 tag；需要推送新的 `v*` tag，例如 `v0.2.41`，才会生成新的正式 Release。
+GitHub Releases 页面中的安装包按版本标签发布；推送新的 `v*` 标签（例如 `v0.2.52`）后，发布工作流会构建 Windows 安装包和免安装版并创建对应 Release。
 
 如果使用免安装版，解压后运行：
 
