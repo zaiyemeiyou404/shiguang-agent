@@ -1,6 +1,7 @@
-import { spawn } from "node:child_process";
-import { isAbsolute, relative, resolve } from "node:path";
+import type { ChildProcess } from "node:child_process";
+import { isAbsolute, resolve } from "node:path";
 import type { Tool, ToolExecutionContext } from "../types.js";
+import { parseCommandArguments, pathsOutsideWorkspace, spawnParsedCommand } from "./command-launch.js";
 import { resolveWorkspacePath, toPortablePath } from "./path-format.js";
 
 const DEFAULT_TIMEOUT_MS = 20_000;
@@ -55,53 +56,21 @@ function throwIfAborted(signal?: AbortSignal): void {
   }
 }
 
-function isInsideWorkspace(workspaceRoot: string, candidate: string): boolean {
-  const rel = relative(resolve(workspaceRoot), resolve(candidate));
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel) && !rel.startsWith("/") && !rel.startsWith("\\"));
-}
-
-function resolveTerminalCwd(workspaceRoot: string, cwd: string | undefined, command: string): string {
+function resolveTerminalCwd(workspaceRoot: string, cwd: string | undefined): string {
   if (!cwd) return resolveWorkspacePath(workspaceRoot);
-  const candidate = isAbsolute(cwd) ? resolve(cwd) : resolve(workspaceRoot, cwd);
-  if (isInsideWorkspace(workspaceRoot, candidate)) return resolveWorkspacePath(workspaceRoot, cwd);
-  if (isReadOnlyCommand(command)) return candidate;
-  throw new Error(`run_terminal_command: cwd escapes workspace root for a command that may modify files. Use a workspace path for write/install/build/delete/move commands, or run an obvious read-only command outside the workspace. cwd=${cwd}`);
-}
-
-function isReadOnlyCommand(command: string): boolean {
-  const normalized = command.trim().toLowerCase();
-  if (!normalized) return false;
-  if (/[<>]/.test(normalized) || /\b(out-file|set-content|add-content|tee-object|new-item|remove-item|copy-item|move-item|rename-item)\b/.test(normalized)) {
-    return false;
-  }
-  if (/\b(rm|del|erase|move|mv|copy|cp|mkdir|md|rmdir|rd|touch)\b/.test(normalized)) return false;
-  if (/\b(npm|pnpm|yarn|bun)\s+(install|add|remove|update|run|build|test|exec|dlx|create)\b/.test(normalized)) return false;
-  if (/\b(pip|pipx|poetry|cargo|go|dotnet|mvn|gradle|flutter)\s+(install|add|remove|update|build|test|run|pub|get|upgrade)\b/.test(normalized)) return false;
-  if (/\bgit\s+(add|apply|am|bisect|checkout|clean|commit|fetch|merge|pull|push|rebase|reset|restore|revert|stash|switch|tag)\b/.test(normalized)) return false;
-
-  const segments = normalized
-    .split("|")
-    .map((part) => part.trim())
-    .filter(Boolean);
-  if (segments.length === 0) return false;
-
-  return segments.every((segment) => {
-    const cleaned = segment.replace(/^(cmd\s+\/c|powershell(?:\.exe)?\s+-command)\s+/, "").trim();
-    return /^(\.?\/)?(pwd|cd|dir|ls|tree|type|cat|more|where|where\.exe|which|findstr|grep|rg|select-string|get-childitem|gci|get-content|gc|measure-object|sort-object|format-table|format-list)\b/.test(cleaned)
-      || /^git\s+(status|log|show|diff|branch|remote|rev-parse|ls-files|grep)\b/.test(cleaned);
-  });
+  return isAbsolute(cwd) ? resolve(cwd) : resolve(workspaceRoot, cwd);
 }
 
 export function createRunTerminalCommandTool(workspaceRoot: string): Tool {
   return {
     descriptor: {
       name: "run_terminal_command",
-      description: "Run a shell command. Mutating commands must run inside the workspace; obvious read-only commands may use an external cwd. This is not a filesystem sandbox: absolute paths may affect files outside it, so approval is always required. Accepts { command, cwd?, timeoutMs? } and returns exit code plus stdout/stderr.",
+      description: "Run one executable with arguments. Shell pipes, redirection, chaining, and shell builtins are rejected. The working directory and path arguments must stay inside the workspace unless the full_access preset is active. This is not a filesystem sandbox: an approved program can still use its own code to touch other paths, so approval is always required. Accepts { command, cwd?, timeoutMs? } and returns exit code plus stdout/stderr.",
       inputSchema: {
         type: "object",
         properties: {
-          command: { type: "string", description: "Shell command to run. Write/install/build/delete/move commands must stay inside the workspace." },
-          cwd: { type: "string", description: "Optional cwd. External cwd is allowed only for obvious read-only commands such as dir/ls/Get-Content/rg/git status." },
+          command: { type: "string", description: "Executable and arguments, without pipes or redirection. Example: node --version" },
+          cwd: { type: "string", description: "Optional cwd. A path outside the workspace requires the full_access preset." },
           timeoutMs: { type: "number", description: "Optional timeout in milliseconds" },
         },
         required: ["command"],
@@ -116,18 +85,27 @@ export function createRunTerminalCommandTool(workspaceRoot: string): Tool {
     async execute(input: unknown, context?: ToolExecutionContext): Promise<RunTerminalCommandOutput> {
       throwIfAborted(context?.signal);
       const { command, cwd, timeoutMs } = resolveInput(input);
-      const workingDirectory = resolveTerminalCwd(workspaceRoot, cwd, command);
+      const workingDirectory = resolveTerminalCwd(workspaceRoot, cwd);
+      const parsed = parseCommandArguments(command);
+      const outside = pathsOutsideWorkspace(workspaceRoot, workingDirectory, parsed.args);
+      if (outside.length > 0 && context?.executionGrant?.allowHostExecute !== true) {
+        throw new Error(`run_terminal_command: path leaves the workspace and the current preset does not allow host execution. Use a workspace path, or switch to full_access. path=${outside[0]}`);
+      }
       const timeout = Number.isFinite(timeoutMs) && (timeoutMs ?? 0) > 0
         ? Math.min(Math.trunc(timeoutMs as number), 120_000)
         : DEFAULT_TIMEOUT_MS;
 
       return new Promise((resolvePromise, rejectPromise) => {
-        const child = spawn(command, {
-          cwd: workingDirectory,
-          shell: true,
-          windowsHide: true,
-          stdio: ["ignore", "pipe", "pipe"],
-        });
+        let child: ChildProcess;
+        try {
+          child = spawnParsedCommand(command, {
+            cwd: workingDirectory,
+            allowShellHost: context?.executionGrant?.allowHostExecute === true,
+          });
+        } catch (error) {
+          rejectPromise(error);
+          return;
+        }
 
         let stdout = "";
         let stderr = "";

@@ -1,6 +1,7 @@
 import { safeStorage } from "electron";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, normalize, resolve } from "node:path";
+import { normalizeExecutionPreset as normalizeKnownExecutionPreset } from "../dist/tools/execution-grant.js";
 import {
   resolveConfigPathFromPolicy,
   resolveWorkspaceRootFromPolicy,
@@ -609,9 +610,7 @@ function normalizeToolApprovalMode(value: unknown): ToolApprovalMode {
 }
 
 function normalizeExecutionPreset(value: unknown): ExecutionPreset {
-  return value === "read_only" || value === "workspace_write" || value === "full_access"
-    ? value
-    : DEFAULT_EXECUTION_PRESET;
+  return normalizeKnownExecutionPreset(value);
 }
 
 function normalizeMcpTransport(value: unknown): McpTransportMode {

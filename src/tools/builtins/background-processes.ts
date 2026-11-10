@@ -1,6 +1,7 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { Tool, ToolExecutionContext, ToolApprovalPreview } from "../types.js";
+import { parseCommandArguments, pathsOutsideWorkspace, spawnParsedCommand } from "./command-launch.js";
 import { resolveWorkspacePath } from "./path-format.js";
 
 const MAX_BUFFER = 20_000;
@@ -43,7 +44,7 @@ export function createStartBackgroundProcessTool(workspaceRoot: string): Tool {
   return {
     descriptor: {
       name: "start_background_process",
-      description: "Start a long-running background process inside the workspace, such as a dev server. Accepts { command, cwd?, name? }.",
+      description: "Start a long-running background process inside the workspace, such as a dev server. The command is one executable plus arguments, without a shell. Accepts { command, cwd?, name? }.",
       inputSchema: {
         type: "object",
         properties: {
@@ -75,12 +76,15 @@ export function createStartBackgroundProcessTool(workspaceRoot: string): Tool {
         throw new Error("start_background_process: command must be a non-empty string");
       }
       const cwd = resolveWorkspacePath(workspaceRoot, typeof obj.cwd === "string" ? obj.cwd : undefined);
+      const parsed = parseCommandArguments(obj.command);
+      const outside = pathsOutsideWorkspace(workspaceRoot, cwd, parsed.args);
+      if (outside.length > 0 && context?.executionGrant?.allowHostExecute !== true) {
+        throw new Error(`start_background_process: path leaves the workspace and the current preset does not allow host execution. path=${outside[0]}`);
+      }
       const id = `proc_${randomUUID().slice(0, 8)}`;
-      const child = spawn(obj.command, {
+      const child = spawnParsedCommand(obj.command, {
         cwd,
-        shell: true,
-        windowsHide: true,
-        stdio: ["ignore", "pipe", "pipe"],
+        allowShellHost: context?.executionGrant?.allowHostExecute === true,
       });
       const record: ProcessRecord = {
         id,
@@ -95,8 +99,8 @@ export function createStartBackgroundProcessTool(workspaceRoot: string): Tool {
         endedAt: null,
       };
       processes.set(id, record);
-      child.stdout.on("data", (chunk) => { record.stdout = appendBuffer(record.stdout, chunk); });
-      child.stderr.on("data", (chunk) => { record.stderr = appendBuffer(record.stderr, chunk); });
+      child.stdout?.on("data", (chunk) => { record.stdout = appendBuffer(record.stdout, chunk); });
+      child.stderr?.on("data", (chunk) => { record.stderr = appendBuffer(record.stderr, chunk); });
       child.on("close", (code) => {
         record.exitCode = code ?? 1;
         record.endedAt = new Date();

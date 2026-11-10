@@ -81,6 +81,8 @@ export interface ExecutionGrant {
   allowWrite: boolean;
   allowExecute: boolean;
   allowNetwork: boolean;
+  /** Commands whose cwd or path arguments leave the workspace. */
+  allowHostExecute: boolean;
   approvedDomains?: string[];
 }
 

@@ -35,6 +35,15 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Test core
+        run: npm test
+
+      - name: Test desktop UI
+        run: npm run test:ui
+
+      - name: Test Electron
+        run: npm run test:electron
+
       - name: Typecheck desktop
         run: npm run desktop:typecheck
 

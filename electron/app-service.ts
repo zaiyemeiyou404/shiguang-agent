@@ -32,7 +32,10 @@ import type { Approval, Artifact, Memory, MemoryCandidate, Project, Run, RunEven
 import type { ExecutionGrant } from "../dist/tools/types.js";
 import { MemoryService } from "../dist/memory/service.js";
 import { MemoryCandidateService } from "../dist/memory/candidate-service.js";
+import { executionGrantForPreset } from "../dist/tools/execution-grant.js";
 import { openStateDatabase } from "../dist/state/sqlite.js";
+import { adoptDesktopSessionAuthority } from "../dist/state/session-authority.js";
+import { SessionRecords } from "../dist/state/session-records.js";
 import { importLegacyRuntimeData } from "../dist/state/legacy-runtime-importer.js";
 import { SqliteApprovalRepository } from "../dist/state/sqlite-approval-repository.js";
 import { SqliteArtifactRepository } from "../dist/state/sqlite-artifact-repository.js";
@@ -331,10 +334,10 @@ function escapeSqliteString(value: string): string {
 }
 
 export class DesktopAppService {
-  private store: DesktopStore;
   private listeners: Set<(event: DesktopEvent) => void> = new Set();
   private activeRunControllers: Map<string, AbortController> = new Map();
   private sessionRepository: SqliteSessionRepository;
+  private sessionRecords: SessionRecords;
   private projectRepository: SqliteProjectRepository;
   private workspaceRepository: SqliteWorkspaceRepository;
   private taskRepository: SqliteTaskRepository;
@@ -352,13 +355,14 @@ export class DesktopAppService {
   private mcpRuntimeKey = "";
 
   constructor(store: DesktopStore) {
-    this.store = store;
     const workspacePolicy = getShiguangWorkspacePolicy();
     const stateDbPath = workspacePolicy.stateDbPath;
     const db = openStateDatabase(stateDbPath);
-    importLegacyRuntimeData(db, this.store.getRuntimeSnapshot(), {
-      sourceKey: `desktop-store-v1:${this.store.getFilePath()}`,
+    const legacySnapshot = store.getRuntimeSnapshot();
+    importLegacyRuntimeData(db, legacySnapshot, {
+      sourceKey: `desktop-store-v1:${store.getFilePath()}`,
     });
+    adoptDesktopSessionAuthority(db, legacySnapshot.sessions);
     const memoryDb = openStateDatabase(resolveDedicatedMemoryDatabasePath(workspacePolicy));
     migrateLegacyMemoriesToDedicatedDatabase(stateDbPath, memoryDb);
     const migratedRoot = resolve(normalize(loadDesktopConfig().workspaceRoot));
@@ -369,6 +373,7 @@ export class DesktopAppService {
     this.projectRepository = new SqliteProjectRepository(db);
     this.workspaceRepository = new SqliteWorkspaceRepository(db);
     this.sessionRepository = new SqliteSessionRepository(db);
+    this.sessionRecords = new SessionRecords(db, this.sessionRepository);
     this.taskRepository = new SqliteTaskRepository(db);
     this.taskCheckpointRepository = new SqliteTaskCheckpointRepository(db);
     this.runRepository = new SqliteRunRepository(db);
@@ -420,7 +425,7 @@ export class DesktopAppService {
   }
 
   async listSessions(): Promise<DesktopSession[]> {
-    const sessions = this.store.listSessions();
+    const sessions = await this.sessionRecords.listVisible();
     return Promise.all(sessions.map((session) => this.decorateSession(session)));
   }
 
@@ -459,9 +464,7 @@ export class DesktopAppService {
       summary: null,
       workspaceRoot,
     };
-    const stored = this.store.createSession(session);
-    await this.sessionRepository.create(desktopSessionToCore(stored));
-    return stored;
+    return this.sessionRecords.create({ ...session, workspaceRoot, llm: null });
   }
 
   async branchSessionFromRun(runId: string, title?: string): Promise<DesktopSessionBranchResult> {
@@ -469,7 +472,7 @@ export class DesktopAppService {
     if (!run) {
       throw new Error(`Run not found: ${runId}`);
     }
-    const sourceSession = this.store.getSession(run.sessionId);
+    const sourceSession = await this.sessionRecords.get(run.sessionId);
     if (!sourceSession) {
       throw new Error(`Session not found for run: ${runId}`);
     }
@@ -483,13 +486,11 @@ export class DesktopAppService {
     const branched = await this.createSession({ title: branchTitle, workspaceId: sourceSession.workspaceId });
     const summary = `分支自 ${sourceSession.title} · ${branchStatusLabel(sourceRun.status)}`;
     const updatedAt = new Date().toISOString();
-    const branchSession = this.store.updateSession(branched.id, {
+    const branchSession = await this.sessionRecords.update(branched.id, {
       summary,
       updatedAt,
       ...(sourceSession.llm ? { llm: sourceSession.llm } : {}),
     }) ?? branched;
-    await this.ensureSqliteSession(branchSession);
-    await this.sessionRepository.update(branchSession.id, { summary, updatedAt: new Date(updatedAt) });
 
     const sourceArtifacts = (await this.listArtifacts(sourceSession.id, run.id)).slice(0, 6);
     const latestUserMessage = await this.loadLatestUserMessage(run.sessionId, task);
@@ -509,85 +510,74 @@ export class DesktopAppService {
   }
 
   async renameSession(sessionId: string, title: string): Promise<DesktopSession> {
-    const session = this.store.getSession(sessionId);
+    const session = await this.sessionRecords.get(sessionId);
     if (!session) throw new Error(`Session not found: ${sessionId}`);
     const trimmed = title.trim();
     if (!trimmed) throw new Error("Session title cannot be empty.");
     const updatedAt = new Date().toISOString();
-    const updated = this.store.updateSession(sessionId, { title: trimmed, updatedAt });
+    const updated = await this.sessionRecords.update(sessionId, { title: trimmed, updatedAt });
     if (!updated) throw new Error(`Session not found: ${sessionId}`);
-    await this.ensureSqliteSession(updated);
-    await this.sessionRepository.update(sessionId, { title: trimmed, updatedAt: new Date(updatedAt) });
     return this.decorateSession(updated);
   }
 
   async updateSessionStatus(sessionId: string, status: DesktopSession["status"]): Promise<DesktopSession> {
-    const session = this.store.getSession(sessionId);
+    const session = await this.sessionRecords.get(sessionId);
     if (!session) throw new Error(`Session not found: ${sessionId}`);
     const updatedAt = new Date().toISOString();
-    const updated = this.store.updateSession(sessionId, { status, updatedAt });
+    const updated = await this.sessionRecords.update(sessionId, { status, updatedAt });
     if (!updated) throw new Error(`Session not found: ${sessionId}`);
-    await this.ensureSqliteSession(updated);
-    await this.sessionRepository.update(sessionId, { status, updatedAt: new Date(updatedAt) });
     return this.decorateSession(updated);
   }
 
   async updateSessionWorkspace(sessionId: string, workspaceRoot: string): Promise<DesktopSession> {
-    const session = this.store.getSession(sessionId);
+    const session = await this.sessionRecords.get(sessionId);
     if (!session) throw new Error(`Session not found: ${sessionId}`);
     const trimmed = workspaceRoot.trim();
     if (!trimmed) throw new Error("Workspace root cannot be empty.");
     const resolvedWorkspaceRoot = resolve(normalize(trimmed));
     mkdirSync(resolvedWorkspaceRoot, { recursive: true });
     const updatedAt = new Date().toISOString();
-    const updated = this.store.updateSession(sessionId, {
+    const updated = await this.sessionRecords.update(sessionId, {
       workspaceRoot: resolvedWorkspaceRoot,
       updatedAt,
     });
     if (!updated) throw new Error(`Session not found: ${sessionId}`);
-    await this.ensureSqliteSession(updated);
-    await this.sessionRepository.update(sessionId, { updatedAt: new Date(updatedAt) });
     return this.decorateSession(updated);
   }
 
   async updateSessionLlm(sessionId: string, llm: DesktopSessionLlmSettings | null): Promise<DesktopSession> {
-    const session = this.store.getSession(sessionId);
+    const session = await this.sessionRecords.get(sessionId);
     if (!session) throw new Error(`Session not found: ${sessionId}`);
     const updatedAt = new Date().toISOString();
-    const updated = this.store.updateSession(sessionId, {
+    const updated = await this.sessionRecords.update(sessionId, {
       llm: normalizeSessionLlmSettings(llm),
       updatedAt,
     });
     if (!updated) throw new Error(`Session not found: ${sessionId}`);
-    await this.ensureSqliteSession(updated);
-    await this.sessionRepository.update(sessionId, { updatedAt: new Date(updatedAt) });
     return this.decorateSession(updated);
   }
 
   async deleteSession(sessionId: string): Promise<{ sessionId: string }> {
-    const session = this.store.getSession(sessionId);
+    const session = await this.sessionRecords.get(sessionId);
     if (!session) throw new Error(`Session not found: ${sessionId}`);
     const runs = await this.runRepository.listBySession(sessionId);
     const hasLiveRun = runs.some((run) => run.status === "pending" || run.status === "running" || run.status === "verifying" || run.status === "needs_approval" || run.status === "waiting_user");
     if (hasLiveRun) {
       throw new Error("Session still has a live run. Cancel or finish it before deleting.");
     }
-    await this.ensureSqliteSession(session);
-    await this.sessionRepository.update(sessionId, { status: "archived", updatedAt: new Date() });
-    const deleted = this.store.deleteSession(sessionId);
+    const deleted = await this.sessionRecords.removeFromList(sessionId);
     if (!deleted) throw new Error(`Session not found: ${sessionId}`);
     return { sessionId };
   }
 
   async getSessionDetail(sessionId: string): Promise<DesktopSessionDetail> {
-    let session = this.store.getSession(sessionId);
-    if (!session) {
+    const loaded = await this.sessionRecords.get(sessionId);
+    if (!loaded) {
       throw new Error(`Session not found: ${sessionId}`);
     }
-    session = this.ensureSessionWorkspace(session);
-    await this.ensureSqliteSession(session);
+    const prepared = await this.ensureSessionWorkspace(loaded);
     await this.refreshSessionSummary(sessionId);
-    const refreshedSession = this.store.getSession(sessionId) ?? session;
+    const refreshedSession = await this.sessionRecords.get(sessionId) ?? prepared;
     const [runs, turns, tokenUsage] = await Promise.all([
       this.runRepository.listBySession(sessionId),
       this.turnRepository.listBySession(sessionId, 200),
@@ -656,14 +646,12 @@ export class DesktopAppService {
   }
 
   async sendUserMessage(sessionId: string, message: string, attachments: DesktopAttachment[] = []): Promise<DesktopRun> {
-    let session = this.store.getSession(sessionId);
-    if (!session) {
-      session = await this.createSession({ title: "Auto-created session", workspaceId: DEFAULT_WORKSPACE_ID });
-      sessionId = session.id;
-    }
-    session = this.ensureSessionWorkspace(session);
-    await this.ensureSqliteSession(session);
-    session = await this.maybeAutoTitleSession(session, message, attachments);
+    const loaded = await this.sessionRecords.get(sessionId);
+    const created = loaded ?? await this.createSession({ title: "Auto-created session", workspaceId: DEFAULT_WORKSPACE_ID });
+    sessionId = created.id;
+    const prepared = await this.ensureSessionWorkspace(created);
+    await this.ensureSqliteSession(prepared);
+    const session = await this.maybeAutoTitleSession(prepared, message, attachments);
     const workspace = await this.requireWorkspace(session.workspaceId);
 
     const runId = nextId("run");
@@ -873,7 +861,7 @@ export class DesktopAppService {
           updatedAt: new Date(),
         });
         void sink.record(runId, "error", { message: reason });
-        this.store.updateSession(sessionId, {
+        void this.sessionRecords.update(sessionId, {
           updatedAt: new Date().toISOString(),
           summary: "Last run failed before completion",
         });
@@ -1093,7 +1081,7 @@ export class DesktopAppService {
     });
   }
 
-  private ensureSessionWorkspace(session: DesktopSession): DesktopSession {
+  private async ensureSessionWorkspace(session: DesktopSession): Promise<DesktopSession> {
     const desktopConfig = loadDesktopConfig();
     const workspaceRoot = resolveSessionWorkspaceRoot({
       baseWorkspaceRoot: desktopConfig.workspaceRoot,
@@ -1103,7 +1091,7 @@ export class DesktopAppService {
     });
     mkdirSync(workspaceRoot, { recursive: true });
     if (session.workspaceRoot === workspaceRoot) return session;
-    return this.store.updateSession(session.id, { workspaceRoot }) ?? { ...session, workspaceRoot };
+    return await this.sessionRecords.update(session.id, { workspaceRoot }) ?? { ...session, workspaceRoot };
   }
 
   private async maybeAutoTitleSession(session: DesktopSession, message: string, attachments: DesktopAttachment[]): Promise<DesktopSession> {
@@ -1119,11 +1107,7 @@ export class DesktopAppService {
     if (!title || title === session.title) return session;
 
     const updatedAt = new Date().toISOString();
-    const updated = this.store.updateSession(session.id, { title, updatedAt });
-    await this.sessionRepository.update(session.id, {
-      title,
-      updatedAt: new Date(updatedAt),
-    });
+    const updated = await this.sessionRecords.update(session.id, { title, updatedAt });
     return updated ?? { ...session, title, updatedAt };
   }
 
@@ -1220,7 +1204,7 @@ export class DesktopAppService {
   }
 
   private async decorateSession(session: DesktopSession): Promise<DesktopSession> {
-    session = this.ensureSessionWorkspace(session);
+    session = await this.ensureSessionWorkspace(session);
     await this.syncApprovalsForSession(session.id);
     const runs = (await this.runRepository.listBySession(session.id)).map(coreRunToDesktop);
     const latestRun = runs[0] ?? null;
@@ -1391,7 +1375,7 @@ export class DesktopAppService {
       assertUsableWorkspaceRoot(workspaceRoot);
 
       const completedAt = new Date();
-      const updatedSession = this.store.updateSession(input.sessionId, {
+      const updatedSession = await this.sessionRecords.update(input.sessionId, {
         workspaceRoot,
         updatedAt: completedAt.toISOString(),
       });
@@ -1516,10 +1500,10 @@ export class DesktopAppService {
     }
 
     const sink = this.createRunEventSink();
-    const session = this.store.getSession(run.sessionId);
+    const session = await this.sessionRecords.get(run.sessionId);
     if (!session) return;
     const workspace = await this.requireWorkspace(session.workspaceId);
-    const sessionWithWorkspace = this.ensureSessionWorkspace(session);
+    const sessionWithWorkspace = await this.ensureSessionWorkspace(session);
     const { agent, label, workspaceRoot, executionGrant } = await this.createAgentRuntime(sink, workspace.rootPath, sessionWithWorkspace.llm);
     const userMessage = await this.loadLatestUserMessage(run.sessionId, task);
     const controller = new AbortController();
@@ -1673,12 +1657,8 @@ export class DesktopAppService {
       updatedAt = existing?.updatedAt ?? new Date();
     }
 
-    this.store.updateSession(sessionId, {
+    await this.sessionRecords.update(sessionId, {
       updatedAt: updatedAt.toISOString(),
-      summary,
-    });
-    await this.sessionRepository.update(sessionId, {
-      updatedAt,
       summary,
     });
   }
@@ -1903,13 +1883,6 @@ function buildFailedMemoryContent(input: { task: Task; reason: string }): string
     "Outcome: failed",
     `Failure reason: ${input.reason}`,
   ].join("\n");
-}
-
-function executionGrantForPreset(preset: ExecutionGrant["preset"], workspaceRoot: string): ExecutionGrant {
-  if (preset === "read_only") return { preset, workspaceRoot, allowRead: true, allowWrite: false, allowExecute: false, allowNetwork: false };
-  if (preset === "workspace_write") return { preset, workspaceRoot, allowRead: true, allowWrite: true, allowExecute: true, allowNetwork: false };
-  if (preset === "full_access") return { preset, workspaceRoot, allowRead: true, allowWrite: true, allowExecute: true, allowNetwork: true };
-  return { preset, workspaceRoot, allowRead: true, allowWrite: true, allowExecute: true, allowNetwork: true };
 }
 
 function deriveRunStatus(state: { stopReason: string | null; lastDecision: { action: { kind: string } } | null }): Run["status"] {

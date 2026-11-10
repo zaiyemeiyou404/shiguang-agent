@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { checkToolPermission } from "./execution-policy.js";
 
-const grant = { preset: "read_only" as const, allowRead: true, allowWrite: false, allowExecute: false, allowNetwork: false };
+const grant = { preset: "read_only" as const, allowRead: true, allowWrite: false, allowExecute: false, allowNetwork: false, allowHostExecute: false };
 
 test("execution grant permits reads but blocks writes, terminal commands, and network tools", () => {
   assert.equal(checkToolPermission({ name: "read_text_file", description: "", inputSchema: {}, capability: "fs.read" }, { executionGrant: grant }).allowed, true);

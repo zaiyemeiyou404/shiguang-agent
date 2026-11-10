@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 export const DEFAULT_PROJECT_ID = "project_default";
 export const DEFAULT_WORKSPACE_ID = "workspace_default";
 
@@ -246,6 +246,15 @@ ALTER TABLE memories ADD COLUMN verified_at TEXT;
 CREATE INDEX IF NOT EXISTS idx_memories_workspace_status ON memories(workspace_scope, status, updated_at DESC);
 `;
 
+export const MIGRATION_010 = `
+CREATE TABLE IF NOT EXISTS session_desktop_state (
+  session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+  workspace_root TEXT,
+  llm_json TEXT,
+  listed INTEGER NOT NULL DEFAULT 1 CHECK(listed IN (0, 1))
+);
+`;
+
 export interface StateMigration {
   version: number;
   name: string;
@@ -263,6 +272,7 @@ export const STATE_MIGRATIONS: readonly StateMigration[] = [
   { version: 7, name: "legacy-runtime-import-markers", sql: MIGRATION_007 },
   { version: 8, name: "memory-candidates", sql: MIGRATION_008 },
   { version: 9, name: "memory-verification-status", sql: MIGRATION_009 },
+  { version: 10, name: "session-desktop-state", sql: MIGRATION_010 },
 ];
 
 /** @deprecated Prefer STATE_MIGRATIONS so version and backup metadata remain explicit. */

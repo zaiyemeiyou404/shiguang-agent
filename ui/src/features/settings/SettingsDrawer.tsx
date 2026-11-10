@@ -900,10 +900,11 @@ export function SettingsDrawer({
               <label className="tiny">执行权限</label>
               <select className="settings-input" value={executionPreset} onChange={(e) => setExecutionPreset(e.target.value as DesktopSettings["executionPreset"])}>
                 <option value="read_only">只读</option>
-                <option value="workspace_write">工作区修改（禁网）</option>
+                <option value="workspace_write">工作区修改（可运行命令，禁网）</option>
                 <option value="workspace_write_network">工作区修改 + 联网</option>
-                <option value="full_access">完整访问</option>
+                <option value="full_access">完整访问（含工作区外命令）</option>
               </select>
+              <p className="muted">只有完整访问可以在工作区外启动命令。前三档的命令都留在当前工作区，并且不会经过 shell。</p>
             </div>
             <div>
               <label className="tiny">当前 Provider</label>

@@ -8,6 +8,8 @@ export * from "./sqlite-memory-repository.js";
 export * from "./sqlite-run-event-repository.js";
 export * from "./sqlite-run-repository.js";
 export * from "./sqlite-session-repository.js";
+export * from "./session-records.js";
+export * from "./session-authority.js";
 export * from "./sqlite-project-repository.js";
 export * from "./sqlite-workspace-repository.js";
 export * from "./sqlite-task-repository.js";
