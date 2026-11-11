@@ -20,6 +20,7 @@
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build",
     "test": "npm run build && node --test \"dist/**/*.test.js\"",
+    "xdyou-mcp": "node dist/plugins/xdyou-mcp.js",
     "test:ui": "vitest run --config ui/vitest.config.ts",
     "test:electron": "vitest run --config electron/vitest.config.ts",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",

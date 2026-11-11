@@ -1,0 +1,19 @@
+{
+  "name": "xdyou-dsh-card",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Shows the shared XDYou HTML card inside a DeepSeek Harness tool row.",
+  "main": "./host.js",
+  "exports": {
+    ".": "./host.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "inject": ["@deepseek-ai/dsh-client-ui-tool"],
+      "platform": "web"
+    }
+  }
+}

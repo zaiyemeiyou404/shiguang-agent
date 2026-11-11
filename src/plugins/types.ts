@@ -22,6 +22,7 @@ export interface PluginCallRequest {
   pluginId: string;
   capability: string;
   input: unknown;
+  signal?: AbortSignal;
 }
 
 export interface PluginCallResult {

@@ -4,6 +4,50 @@
 
 当前版本：`0.2.52`
 
+## XDYou campus MCP
+
+西电校园数据是本仓库里的同一个 MCP 服务。在这个目录里构建，然后让每个宿主运行同一份 `dist/plugins/xdyou-mcp.js`。不要把插件复制出去。
+
+```text
+npm run build
+node dist/plugins/xdyou-mcp.js
+```
+
+`D:\node.js\node.exe` 只是一台机器上的 Node 路径示例。可移植命令是 `node` 加上构建产物 `dist/plugins/xdyou-mcp.js`。
+
+Cursor 的 `mcp.json`、Codex `config.toml` 的 `mcp_servers`、DeepSeek Harness 的 cordis，都启动这同一个服务。拾光也指向这份构建产物。Harness 不绘制 MCP App，它的卡片模块留在本仓库 `dsh/xdyou-dsh-card`，由 cordis 加载，并在工具行里打开同一张卡片。
+
+每次调用返回一张卡片：正文文本，加上 MCP App `ui://xdyou/card.html`。
+
+用 `XDYOU_SYNC_DIR` 选择缓存目录。未设置时，服务使用 `G:\CodexData\shiguang-agent-data\xdyou`。
+
+Cursor `mcp.json`：
+
+```json
+{
+  "mcpServers": {
+    "xdyou": {
+      "command": "node",
+      "args": ["<本仓库>/dist/plugins/xdyou-mcp.js"],
+      "env": { "XDYOU_SYNC_DIR": "<你的缓存目录>" }
+    }
+  }
+}
+```
+
+Codex `config.toml`：
+
+```toml
+[mcp_servers.xdyou]
+command = "node"
+args = ["<本仓库>/dist/plugins/xdyou-mcp.js"]
+
+[mcp_servers.xdyou.env]
+XDYOU_SYNC_DIR = "<你的缓存目录>"
+```
+
+DeepSeek Harness cordis 使用同一个 `node` 与 `dist/plugins/xdyou-mcp.js`，卡片客户端使用本仓库的 `dsh/xdyou-dsh-card`。
+
 ## 0.2.48 更新
 
 - 新增可治理的 Git 工具：`git_commit` 只在本地创建提交；`git_push` 必须逐次确认后才会推送远程。
