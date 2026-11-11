@@ -6,7 +6,7 @@
 
 ## XDYou campus MCP
 
-西电校园数据是本仓库里的同一个 MCP 服务。在这个目录里构建，然后让每个宿主运行同一份 `dist/plugins/xdyou-mcp.js`。不要把插件复制出去。
+给别人安装的插件仓库是 [xdyou-mcp](https://github.com/zaiyemeiyou404/xdyou-mcp)。拾光桌面端仍使用本仓库里的同一套实现，构建后入口是 `dist/plugins/xdyou-mcp.js`。
 
 ```text
 npm run build
