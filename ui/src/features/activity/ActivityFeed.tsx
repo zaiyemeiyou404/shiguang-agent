@@ -3,11 +3,28 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { DesktopApproval, DesktopConversationEntry, DesktopEvent } from "../../bridge";
 import { ApprovalCard, type ApprovalDecisionState } from "../approvals/ApprovalCard";
 import { MarkdownMessage } from "../markdown/MarkdownMessage";
-import { buildActivityItems } from "./activity-model";
+import { buildActivityItems, campusCardUrl } from "./activity-model";
 
 function formatTime(value: string): string {
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? "" : parsed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function CampusCardFrame({ url }: { url: string }) {
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const [height, setHeight] = useState(360);
+  useEffect(() => {
+    function onMessage(event: MessageEvent) {
+      if (!frameRef.current || event.source !== frameRef.current.contentWindow) return;
+      const data = event.data as { jsonrpc?: string; method?: string; params?: { height?: number } } | null;
+      if (!data || data.jsonrpc !== "2.0" || data.method !== "ui/notifications/size-changed") return;
+      const next = Number(data.params?.height);
+      if (Number.isFinite(next) && next > 40 && next < 4000) setHeight(Math.ceil(next + 8));
+    }
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [url]);
+  return <iframe ref={frameRef} className="campus-card-frame" title="校园卡片" src={url} style={{ height }} />;
 }
 
 function pretty(value: unknown): string {
@@ -21,12 +38,14 @@ export function ActivityFeed({
   events,
   approvals = [],
   decisionState = {},
+  running = false,
   onApprovalDecision,
 }: {
   entries: DesktopConversationEntry[];
   events: DesktopEvent[];
   approvals?: DesktopApproval[];
   decisionState?: Record<string, ApprovalDecisionState>;
+  running?: boolean;
   onApprovalDecision?: (approvalId: string, decision: "granted" | "denied", scope?: "once" | "task" | "workspace") => void;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -37,6 +56,12 @@ export function ActivityFeed({
   const processSteps = processItems.reduce((count, item) => count + (item.type === "thinking" ? item.steps.length : 0), 0);
   const processTools = processItems.filter((item) => item.type === "tool").length;
   const processHasError = processItems.some((item) => item.type === "tool" && (item.status === "error" || item.status === "orphan-result"));
+  const campusCardUrls = processItems.flatMap((item) => {
+    if (item.type !== "tool") return [];
+    const url = campusCardUrl(item.output);
+    return url ? [url] : [];
+  });
+  const activeCardUrl = campusCardUrls[campusCardUrls.length - 1] ?? null;
   const referencedApprovalIds = new Set(items.filter((item) => item.type === "approval").map((item) => item.approvalId).filter(Boolean));
   const unmatchedApprovals = approvals.filter((approval) => !referencedApprovalIds.has(approval.id));
 
@@ -52,6 +77,7 @@ export function ActivityFeed({
 
   const decide = onApprovalDecision ?? (() => {});
   return (
+    <div className={`activity-layout${activeCardUrl ? " has-card" : ""}`}>
     <div
       className="activity-feed"
       ref={hostRef}
@@ -75,8 +101,8 @@ export function ActivityFeed({
         if (item.type === "thinking" || item.type === "tool") {
           if (item.id !== firstProcessId) return null;
           return (
-            <details key={item.id} className={`activity-card process-card${processHasError ? " error" : ""}`} open={processHasError}>
-              <summary><span className="process-dot" /><strong>{`工作过程${processSteps > 0 ? ` · ${processSteps} 步` : ""}`}</strong>{processTools > 0 ? <em>{processTools} 个工具</em> : null}<time>{formatTime(item.createdAt)}</time></summary>
+            <details key={item.id} className={`activity-card process-card${processHasError ? " error" : ""}${running ? " running" : ""}`} open={processHasError || Boolean(activeCardUrl) || running}>
+              <summary><span className="process-dot" /><strong>{running ? "运行中" : `工作过程${processSteps > 0 ? ` · ${processSteps} 步` : ""}`}</strong>{running ? <em>正在处理，回复会显示在下方</em> : processTools > 0 ? <em>{processTools} 个工具</em> : null}<time>{formatTime(item.createdAt)}</time></summary>
               <div className="process-body">
                 {processItems.map((processItem) => processItem.type === "thinking" ? (
                   <div className="process-thoughts" key={processItem.id}>{processItem.steps.map((step, index) => <p key={`${processItem.id}:${index}`}>{step}</p>)}</div>
@@ -85,7 +111,7 @@ export function ActivityFeed({
                     <header><span className="tool-status-dot" /><strong>{processItem.tool}</strong><em>{processItem.status === "running" ? "运行中" : processItem.status === "success" ? "已完成" : processItem.status === "error" ? "失败" : "仅有结果"}</em></header>
                     <div className="tool-columns">
                       <section><h5>调用参数</h5><pre>{pretty(processItem.input)}</pre></section>
-                      <section><h5>执行结果</h5><pre>{pretty(processItem.output)}</pre></section>
+                      <section><h5>执行结果</h5>{campusCardUrl(processItem.output) ? <p className="muted">卡片已在右侧展开。</p> : <pre>{pretty(processItem.output)}</pre>}</section>
                     </div>
                   </section>
                 ))}
@@ -108,6 +134,8 @@ export function ActivityFeed({
         );
       })}
       {!following ? <button className="jump-latest" type="button" onClick={() => { setFollowing(true); hostRef.current?.scrollTo({ top: hostRef.current.scrollHeight, behavior: "smooth" }); }}>回到最新</button> : null}
+    </div>
+    {activeCardUrl ? <aside className="campus-card-pane"><CampusCardFrame url={activeCardUrl} /></aside> : null}
     </div>
   );
 }

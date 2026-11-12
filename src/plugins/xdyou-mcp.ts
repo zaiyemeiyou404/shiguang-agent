@@ -79,7 +79,7 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
       protocolVersion: PROTOCOL_VERSION,
       capabilities: { tools: { listChanged: false }, resources: { listChanged: false } },
       serverInfo: { name: "xdyou", version: xdyouPlugin.manifest.version },
-      instructions: "XDYou campus data for 西电. Call login when the user wants to 登录 or 同步. Do not ask for or store the password. Each tool returns one generic card. The text ends with a local card link, structuredContent.card is the same card, and ui://xdyou/card.html is the MCP App. Hosts that support MCP Apps or an OpenAI output template draw that HTML. Do not expect a Shiguang-specific panel.",
+      instructions: "XDYou campus data for 西电. Call login when the user wants to 登录 or 同步. Do not ask for or store the password. Each tool returns one generic card. The text ends with a local card link, structuredContent.card is the same card, and ui://xdyou/card.html is the MCP App. Hosts that support MCP Apps or an OpenAI output template draw that HTML. DeepSeek Harness embeds the same link. When the user asks to 画图 or 画课表, call the tool again and stop. Do not write a script or generate a PNG. Do not expect a Shiguang-specific panel.",
     };
   }
   if (method === "ping") return {};

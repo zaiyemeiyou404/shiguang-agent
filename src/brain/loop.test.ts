@@ -141,6 +141,66 @@ test("runLoop initializes task-loop from parsed user command objective", async (
   assert.deepEqual(state.workingMemory.taskLoop?.userCommand?.commandContract?.directives.skills, ["web_article_reader"]);
 });
 
+test("a chat question keeps its own task after a directory listing", async () => {
+  let calls = 0;
+  const state = await runLoop({
+    context: makeContext("我周一应该准备什么"),
+    runId: "run_chat_memory",
+    priorTurns: [],
+    history: [],
+    availableTools: [{ name: "list_directory", description: "list", inputSchema: { type: "object" } }],
+  }, {
+    planner: {
+      async decide(): Promise<BrainDecision> {
+        calls += 1;
+        if (calls === 1) {
+          return {
+            action: { kind: "tool_call", toolName: "list_directory", toolInput: { path: "G:\\CodexData\\shiguang-agent-data\\xdyou" } },
+            reasoning: "看看课表目录",
+          };
+        }
+        return { action: { kind: "respond", content: "周一先对照课表准备上课的内容。" }, reasoning: "直接回答" };
+      },
+    },
+    policy: {
+      async check(next: BrainDecision): Promise<BrainDecision> {
+        return next;
+      },
+    },
+    dispatcher: {
+      async dispatch(next: BrainDecision): Promise<ActionResult> {
+        if (next.action.kind === "tool_call") {
+          return {
+            action: next.action,
+            ok: true,
+            output: { entries: ["ClassTable.json"] },
+            metadata: { category: "tool_observation", summary: "listed xdyou", retryable: false, toolName: "list_directory" },
+          };
+        }
+        return {
+          action: next.action,
+          ok: true,
+          output: next.action.kind === "respond" ? next.action.content ?? "" : "",
+          metadata: { category: "assistant_response", summary: next.action.kind === "respond" ? next.action.content ?? "" : "", retryable: false },
+        };
+      },
+    },
+    evaluator: {
+      async evaluate(decision: BrainDecision) {
+        if (decision.action.kind === "respond") return { kind: "stop", reason: "respond", summary: "answered" } as const;
+        return { kind: "continue" } as const;
+      },
+    },
+  }, 4);
+
+  assert.equal(state.workingMemory.taskLoop?.mode, "chat");
+  assert.equal(state.workingMemory.taskLoop?.taskKind, "chat");
+  assert.equal(state.lastDecision?.action.kind, "respond");
+  if (state.lastDecision?.action.kind === "respond") {
+    assert.equal(state.lastDecision.action.content, "周一先对照课表准备上课的内容。");
+  }
+});
+
 test("runLoop initializes fine-grained task kinds and task-specific plans", async () => {
   const noopDeps = {
     planner: {

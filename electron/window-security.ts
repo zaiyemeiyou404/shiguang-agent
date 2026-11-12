@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url";
 import type { BrowserWindow, Event, HandlerDetails, WebContents } from "electron";
 
 export const DEVELOPMENT_RENDERER_URL = "http://localhost:5173";
+export const CAMPUS_CARD_ORIGIN = "http://127.0.0.1:47321";
 
 export interface WindowResources {
   preloadPath: string;
@@ -57,17 +58,30 @@ export function contentSecurityPolicy(isDev: boolean): string {
   const connectSources = isDev
     ? "'self' http://localhost:5173 ws://localhost:5173 https:"
     : "'self'";
+  // Vite's React refresh preamble is an inline module script. Allow it only
+  // while the development server is serving the renderer.
+  const scriptSources = isDev ? "'self' 'unsafe-inline'" : "'self'";
   return [
     "default-src 'self'",
-    "script-src 'self'",
+    `script-src ${scriptSources}`,
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob:",
     "font-src 'self' data:",
     `connect-src ${connectSources}`,
     "object-src 'none'",
     "base-uri 'self'",
+    `frame-src ${CAMPUS_CARD_ORIGIN}`,
     "frame-ancestors 'none'",
   ].join("; ");
+}
+
+export function retainsOwnContentSecurityPolicy(url: string | undefined): boolean {
+  if (!url) return false;
+  try {
+    return new URL(url).origin === CAMPUS_CARD_ORIGIN;
+  } catch {
+    return false;
+  }
 }
 
 export function installWindowSecurity(
@@ -92,6 +106,10 @@ export function installWindowSecurity(
 
 function installContentSecurityPolicy(webContents: WebContents, policy: string): void {
   webContents.session.webRequest.onHeadersReceived((details, callback) => {
+    if (retainsOwnContentSecurityPolicy(details.url)) {
+      callback({ responseHeaders: details.responseHeaders });
+      return;
+    }
     callback({
       responseHeaders: {
         ...details.responseHeaders,

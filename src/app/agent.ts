@@ -109,9 +109,11 @@ export class Agent {
     await this.persistCurrentTurns(input, priorTurns);
 
     try {
+      const agentMemory = await this.loadSessionAgentMemory(sessionId);
       const { bundle, diagnostics } = await this.contextService.buildAndRender({
         userTurn: input.userMessage,
         ...input.contextInput,
+        memories: [...input.contextInput.memories, ...agentMemory],
         systemInstructions: this.mergedSystemInstructions(input.contextInput.systemInstructions, input, priorTurns),
       });
       await this.emitContextCompactionEvent(input.runId, diagnostics);
@@ -132,6 +134,7 @@ export class Agent {
 
       await this.emitSyntheticFinalFeedback(input.runId, state);
       await this.persistAssistantTurn(sessionId, summarizeAssistantTurn(state));
+      await this.rememberSessionAgentMemory(sessionId, state);
       return { state };
     } catch (error) {
       await this.persistAssistantTurn(sessionId, summarizeFailureTurn(error));
@@ -144,9 +147,11 @@ export class Agent {
     const priorTurns = await this.loadPriorTurns(sessionId);
 
     try {
+      const agentMemory = await this.loadSessionAgentMemory(sessionId);
       const { bundle, diagnostics } = await this.contextService.buildAndRender({
         userTurn: input.userMessage,
         ...input.contextInput,
+        memories: [...input.contextInput.memories, ...agentMemory],
         systemInstructions: this.mergedSystemInstructions(input.contextInput.systemInstructions, {
           runId: input.runId,
           userMessage: input.userMessage,
@@ -214,6 +219,7 @@ export class Agent {
 
       await this.emitSyntheticFinalFeedback(input.runId, state);
       await this.persistAssistantTurn(sessionId, summarizeAssistantTurn(state));
+      await this.rememberSessionAgentMemory(sessionId, state);
       return { state };
     } catch (error) {
       await this.persistAssistantTurn(sessionId, summarizeFailureTurn(error));
@@ -224,6 +230,44 @@ export class Agent {
   private async loadPriorTurns(sessionId: string): Promise<Turn[]> {
     if (!this.options.turnRepository) return [];
     return this.options.turnRepository.listBySession(sessionId, this.options.recentTurnLimit ?? 20);
+  }
+
+  private async loadSessionAgentMemory(sessionId: string): Promise<ContextBuilderInput["memories"]> {
+    const memory = await this.options.memoryService?.get(sessionAgentMemoryId(sessionId));
+    if (!memory || memory.status === "stale" || !memory.content.trim()) return [];
+    return [{
+      id: memory.id,
+      content: memory.content,
+      summary: memory.summary,
+      confidence: memory.confidence,
+    }];
+  }
+
+  private async rememberSessionAgentMemory(sessionId: string, state: LoopState): Promise<void> {
+    const content = formatSessionAgentMemory(state);
+    const memoryService = this.options.memoryService;
+    if (!content || !memoryService) return;
+    const now = new Date();
+    try {
+      await memoryService.upsert({
+        id: sessionAgentMemoryId(sessionId),
+        scope: "session",
+        workspaceScope: sessionId,
+        kind: "observation",
+        summary: "本会话已经做过的事",
+        content,
+        salience: 0.9,
+        lastAccessedAt: null,
+        sourceType: "session",
+        sourceId: sessionId,
+        confidence: 0.8,
+        createdAt: now,
+        updatedAt: now,
+        status: "active",
+      });
+    } catch {
+      // A memory write must not hide the answer that was already produced.
+    }
   }
 
   private availableToolDescriptors() {
@@ -564,6 +608,25 @@ function shouldEmitContextCompactionEvent(
   const savedRatio = compression.originalBudget > 0 ? savedBudget / compression.originalBudget : 0;
   const budgetPressure = compression.budgetPressure ?? 0;
   return budgetPressure >= 0.95 && (savedBudget >= 1024 || savedRatio >= 0.2);
+}
+
+function sessionAgentMemoryId(sessionId: string): string {
+  return `mem_agent_${sessionId}`;
+}
+
+function formatSessionAgentMemory(state: LoopState): string | null {
+  const loop = state.workingMemory.taskLoop;
+  const objective = loop?.objective?.trim();
+  if (!objective) return null;
+  const evidence = (loop?.evidenceLog ?? []).slice(-6).map((entry) => {
+    const target = entry.target ? ` ${entry.target}` : "";
+    return `- ${entry.toolName}${target}: ${entry.summary}`.replace(/\s+/g, " ").trim();
+  });
+  const lines = [`上一轮任务：${objective}`];
+  if (loop?.lastProgressSummary?.trim()) lines.push(`进展：${loop.lastProgressSummary.trim()}`);
+  if (evidence.length > 0) lines.push(...evidence);
+  const text = lines.join("\n").slice(0, 1200).trim();
+  return text.length >= 12 ? text : null;
 }
 
 function makeTurn(sessionId: string, role: Turn["role"], content: string): Turn {

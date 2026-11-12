@@ -93,7 +93,11 @@ function hasPersistedResponse(
   role: "user" | "assistant",
   content: string,
 ): boolean {
-  return conversation.some((entry) => entry.source === "turn" && entry.role === role && entry.content.trim() === content);
+  return conversation.some((entry) => {
+    if (entry.source !== "turn" || entry.role !== role || entry.content.trim() !== content) return false;
+    if (entry.runId && event.runId) return entry.runId === event.runId;
+    return true;
+  });
 }
 
 function callIdOf(event: DesktopEvent): string | null {
@@ -145,7 +149,7 @@ export function buildActivityItems(
       });
       return;
     }
-    const responseKey = `${entry.runId ?? "no-run"}:${entry.role}:${content}`;
+    const responseKey = entry.runId ? `${entry.runId}:${entry.role}:${content}` : entry.id;
     if (seenConversationResponses.has(responseKey)) return;
     seenConversationResponses.add(responseKey);
     ordered.push({
@@ -266,4 +270,12 @@ export function buildActivityItems(
   return ordered
     .sort((a, b) => a.order - b.order || a.subOrder - b.subOrder)
     .map(({ item }) => item);
+}
+
+const CAMPUS_CARD_URL = /^http:\/\/127\.0\.0\.1:47321\/c\/[a-f0-9]{12}$/;
+
+export function campusCardUrl(output: unknown): string | null {
+  if (!output || typeof output !== "object" || Array.isArray(output)) return null;
+  const url = (output as { cardUrl?: unknown }).cardUrl;
+  return typeof url === "string" && CAMPUS_CARD_URL.test(url) ? url : null;
 }

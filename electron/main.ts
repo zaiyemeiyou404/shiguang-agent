@@ -35,7 +35,6 @@ function createWindow() {
 
   if (isDev) {
     win.loadURL(resources.rendererUrl);
-    win.webContents.openDevTools({ mode: "detach" });
   } else {
     win.loadFile(resources.uiEntry);
   }

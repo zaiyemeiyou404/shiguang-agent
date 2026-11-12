@@ -463,6 +463,33 @@ test("selectToolsForPlanner keeps explicit URL intent ahead of stale workspace e
   assert.ok(!selected.includes("list_directory"), `selected tools: ${selected.join(", ")}`);
 });
 
+test("selectToolsForPlanner keeps XDYou query available for campus questions", () => {
+  const tools = [
+    makeTool("inspect_project"),
+    makeTool("list_directory"),
+    makeTool("read_text_file"),
+    makeTool("search_workspace"),
+    makeTool("write_text_file"),
+    makeTool("patch_text_file"),
+    makeTool("run_validation"),
+    makeTool("run_terminal_command"),
+    makeTool("git_status"),
+    makeTool("web_search", "Search web pages"),
+    makeTool("web_fetch", "Fetch a web page"),
+    makeTool("web_extract_links", "Extract links"),
+    makeTool("xdyou_schedule", "XDYou 课表"),
+    makeTool("xdyou_scores", "XDYou 成绩"),
+    makeTool("xdyou_exams", "XDYou 考试"),
+    makeTool("search_memory"),
+    makeTool("github_repo"),
+  ];
+
+  const selected = selectToolsForPlanner(makeInput("今天有什么课", tools), 8).selected.map((tool) => tool.name);
+
+  assert.ok(selected.includes("xdyou_schedule"), `selected tools: ${selected.join(", ")}`);
+  assert.ok(!selected.includes("web_search"), `selected tools: ${selected.join(", ")}`);
+});
+
 test("selectToolsForPlanner exposes link extraction after weak fetched HTML", () => {
   const tools = [
     makeTool("read_text_file"),

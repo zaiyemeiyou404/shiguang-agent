@@ -69,6 +69,7 @@ import { createGitCommitTool } from "../dist/tools/builtins/git-commit.js";
 import { createGitPushTool } from "../dist/tools/builtins/git-push.js";
 import { createInspectProjectTool } from "../dist/tools/builtins/inspect-project.js";
 import { createGitHubRepoTool } from "../dist/tools/builtins/github-repo.js";
+import { createBundledPluginTools } from "../dist/plugins/bundled.js";
 import { createWebFetchTool } from "../dist/tools/builtins/web-fetch.js";
 import { createWebSearchTool } from "../dist/tools/builtins/web-search.js";
 import { createWebExtractLinksTool } from "../dist/tools/builtins/web-extract-links.js";
@@ -1279,6 +1280,7 @@ export class DesktopAppService {
       createGitCommitTool(workspaceRoot),
       createGitPushTool(workspaceRoot),
       createGitHubRepoTool(workspaceRoot),
+      ...createBundledPluginTools(),
       createWebFetchTool(),
       createWebSearchTool(),
       createWebExtractLinksTool(),

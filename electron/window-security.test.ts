@@ -4,8 +4,10 @@ import type { BrowserWindow } from "electron";
 
 import {
   DEVELOPMENT_RENDERER_URL,
+  CAMPUS_CARD_ORIGIN,
   contentSecurityPolicy,
   createSecureWebPreferences,
+  retainsOwnContentSecurityPolicy,
   installWindowSecurity,
   isTrustedRendererUrl,
   resolveWindowResources,
@@ -36,7 +38,7 @@ describe("desktop window security and loading contract", () => {
   it("blocks unexpected navigation and windows while opening safe external URLs out of process", async () => {
     let openHandler: ((details: { url: string }) => { action: "deny" }) | undefined;
     let navigateHandler: ((event: { preventDefault(): void }, url: string) => void) | undefined;
-    let headersHandler: ((details: { responseHeaders?: Record<string, string[]> }, callback: (result: { responseHeaders?: Record<string, string[]> }) => void) => void) | undefined;
+    let headersHandler: ((details: { url?: string; responseHeaders?: Record<string, string[]> }, callback: (result: { responseHeaders?: Record<string, string[]> }) => void) => void) | undefined;
     const openExternal = vi.fn(async () => {});
     const resources = resolveWindowResources(join("G:", "repo", "desktop-build"), true);
     const win = {
@@ -65,7 +67,16 @@ describe("desktop window security and loading contract", () => {
     let responseHeaders: Record<string, string[]> | undefined;
     headersHandler?.({ responseHeaders: { Existing: ["value"] } }, (result) => { responseHeaders = result.responseHeaders; });
     expect(responseHeaders?.["Content-Security-Policy"]?.[0]).toBe(contentSecurityPolicy(true));
+    expect(contentSecurityPolicy(true)).toContain("script-src 'self' 'unsafe-inline'");
+    expect(contentSecurityPolicy(true)).toContain(`frame-src ${CAMPUS_CARD_ORIGIN}`);
     expect(contentSecurityPolicy(false)).toContain("script-src 'self'");
+    expect(contentSecurityPolicy(false)).toContain(`frame-src ${CAMPUS_CARD_ORIGIN}`);
     expect(contentSecurityPolicy(false)).not.toContain("script-src 'self' 'unsafe-inline'");
+
+    let cardHeaders: Record<string, string[]> | undefined;
+    headersHandler?.({ url: `${CAMPUS_CARD_ORIGIN}/c/abc123abc123`, responseHeaders: { Existing: ["card"] } }, (result) => { cardHeaders = result.responseHeaders; });
+    expect(cardHeaders).toEqual({ Existing: ["card"] });
+    expect(retainsOwnContentSecurityPolicy(`${CAMPUS_CARD_ORIGIN}/c/abc123abc123`)).toBe(true);
+    expect(retainsOwnContentSecurityPolicy(`${DEVELOPMENT_RENDERER_URL}/`)).toBe(false);
   });
 });

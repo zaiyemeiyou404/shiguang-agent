@@ -33,8 +33,8 @@ import {
 import { ActivityFeed } from "./features/activity/ActivityFeed";
 import type { ApprovalDecisionState } from "./features/approvals/ApprovalCard";
 import { SettingsDrawer, type SettingsDrawerMode } from "./features/settings/SettingsDrawer";
-import { ArtifactPanel } from "./features/workbench/ArtifactPanel";
 import { ApprovalPanel } from "./features/workbench/ApprovalPanel";
+import { ArtifactPanel } from "./features/workbench/ArtifactPanel";
 import { TaskPanel } from "./features/workbench/TaskPanel";
 import { ToolPanel } from "./features/workbench/ToolPanel";
 import { WorkspaceSidebar } from "./features/workbench/WorkspaceSidebar";
@@ -162,7 +162,7 @@ export default function WorkbenchApp() {
   useEffect(() => {
     if (!activeSessionId || events.length === 0) return;
     const latest = events[events.length - 1];
-    if (!latest || !["message", "error", "approval_request", "approval_granted", "approval_denied", "tool_result", "system"].includes(latest.kind)) return;
+    if (!latest || !["message", "error", "approval_request", "approval_granted", "approval_denied", "tool_result", "tool_pipeline", "system"].includes(latest.kind)) return;
     const timer = window.setTimeout(() => { void refreshDetail(); void refreshSessions(); }, 180);
     return () => window.clearTimeout(timer);
   }, [activeSessionId, events, refreshDetail, refreshSessions]);
@@ -355,7 +355,7 @@ export default function WorkbenchApp() {
           </div>
         </header>
 
-        {activeRun && (live || activeRun.status === "failed" || activeRun.status === "blocked") ? <section className={`wb-live-strip ${activeRun.status}`}><span>{activeRun.reason || activeRun.summary || runLabel(activeRun.status)}</span>{pendingApprovals.length > 0 ? <button type="button" onClick={() => { setDrawerTab("审批"); setDrawerOpen(true); }}>{pendingApprovals.length} 个操作待确认</button> : null}</section> : null}
+        {activeRun && (live || activeRun.status === "failed" || activeRun.status === "blocked") ? <section className={`wb-live-strip ${activeRun.status}`}><span>{live ? runLabel(activeRun.status) : (activeRun.reason || activeRun.summary || runLabel(activeRun.status))}</span>{pendingApprovals.length > 0 ? <button type="button" onClick={() => { setDrawerTab("审批"); setDrawerOpen(true); }}>{pendingApprovals.length} 个操作待确认</button> : null}</section> : null}
 
         {(sessionError || detailError || eventsError || actionError) ? <div className="wb-error-banner"><strong>需要处理</strong><span>{actionError || eventsError || detailError || sessionError}</span><button type="button" aria-label="关闭错误" onClick={() => setActionError(null)}><X size={14} /></button></div> : null}
 
@@ -370,7 +370,7 @@ export default function WorkbenchApp() {
         ) : (
           <>
             <section className="wb-conversation">
-              <ActivityFeed entries={detail?.conversation ?? []} events={events} approvals={pendingApprovals} decisionState={decisionState} onApprovalDecision={decideApproval} />
+              <ActivityFeed entries={detail?.conversation ?? []} events={events} approvals={pendingApprovals} decisionState={decisionState} running={live} onApprovalDecision={decideApproval} />
             </section>
             <section className="wb-composer-wrap">
               <div className="wb-composer">

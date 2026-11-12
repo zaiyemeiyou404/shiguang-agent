@@ -39,7 +39,7 @@ export const xdyouManifest: PluginManifest = {
   description: "XDYou campus data for 西电. Reads the local cache and opens login windows for 课表, 成绩, 考试, 校园卡, 借阅, 考勤, 水电, 宿舍水机, 校园网账号, 体测, 体育课, and 睿思. Each result includes a generic card that MCP App hosts can draw. Air-conditioner status is read-only. Does not store passwords.",
   capabilities: [
     capability("status", "List which XDYou cache files exist: 课表 考试 成绩 电费 实验 空调."),
-    capability("schedule", "Read the XDYou 课表 for a date. Use for 今天有什么课, 上课, 课程表."),
+    capability("schedule", "Read the XDYou 课表 and return the drawn week card. Use for 今天有什么课, 上课, 课程表, 画课表, 画个图. Call it again when the user asks for a picture. Do not write a script or generate a PNG."),
     capability("exams", "Read cached XDYou 考试 arrangements."),
     capability("scores", "Read cached XDYou 成绩, 学分, and a numeric weighted average."),
     capability("electricity", "Read cached XDYou 电费, 用电, dorm electricity and recent history."),

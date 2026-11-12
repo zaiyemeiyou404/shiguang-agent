@@ -89,10 +89,12 @@ export function buildContext(input: ContextBuilderInput): ContextBundle {
   }
 
   for (const mem of input.memories.slice(0, 8)) {
-    const label = mem.summary ?? mem.content.slice(0, 80);
+    const summary = mem.summary ?? mem.content.slice(0, 80);
+    const body = mem.content.trim() && mem.content.trim() !== summary.trim() ? mem.content.trim().slice(0, 900) : "";
+    const text = body ? `${summary}\n${body}` : summary;
     volatile.push(
       makeItem("memory", "volatile", `memory:${mem.id}`,
-        label, mem.confidence, "query"),
+        text, mem.confidence, "query"),
     );
   }
 

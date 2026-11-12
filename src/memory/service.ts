@@ -92,6 +92,27 @@ export class MemoryService implements MemoryStore {
     this.index.remove(id);
   }
 
+  async upsert(memory: Memory): Promise<void> {
+    const existing = await this.repo.get(memory.id);
+    if (!existing) {
+      await this.save(memory);
+      return;
+    }
+    await this.repo.update(memory.id, {
+      scope: memory.scope,
+      workspaceScope: memory.workspaceScope,
+      kind: memory.kind,
+      summary: memory.summary,
+      content: memory.content,
+      salience: memory.salience,
+      sourceType: memory.sourceType,
+      sourceId: memory.sourceId,
+      confidence: memory.confidence,
+      status: memory.status ?? "active",
+    });
+    this.index.add({ ...existing, ...memory, updatedAt: new Date() });
+  }
+
   searchLocal(text: string, limit = 10): Memory[] {
     return this.index.search(text, limit);
   }

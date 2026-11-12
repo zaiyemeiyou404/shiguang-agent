@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { DesktopConversationEntry, DesktopEvent, DesktopEventPayload } from "../../bridge";
-import { buildActivityItems, mergeDesktopEvents } from "./activity-model";
+import { buildActivityItems, campusCardUrl, mergeDesktopEvents } from "./activity-model";
 
 function event(id: string, seq: number, kind: DesktopEvent["kind"], payload: unknown): DesktopEvent {
   return { id, runId: "run-1", seq, kind, payload: payload as DesktopEventPayload, createdAt: `2026-09-17T00:00:0${seq}.000Z` };
@@ -51,6 +51,25 @@ describe("buildActivityItems", () => {
     const items = buildActivityItems(conversation, [event("evt-2", 2, "message", { role: "assistant", content: "完成" })]);
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({ id: "turn:assistant-1", type: "response", content: "完成" });
+  });
+
+  it("keeps a later run's reply when it repeats an earlier answer", () => {
+    const conversation: DesktopConversationEntry[] = [{
+      id: "turn:assistant-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      source: "turn",
+      kind: "message",
+      role: "assistant",
+      from: "拾光 Agent",
+      content: "完成",
+      createdAt: "2026-09-17T00:00:02.000Z",
+    }];
+    const later = { ...event("evt-9", 9, "message", { role: "assistant", content: "完成" }), runId: "run-2", createdAt: "2026-09-17T00:00:09.000Z" };
+
+    const items = buildActivityItems(conversation, [later]).filter((item) => item.type === "response");
+    expect(items).toHaveLength(2);
+    expect(items.map((item) => item.id)).toEqual(["turn:assistant-1", "event:evt-9"]);
   });
 
   it("does not render persisted internal instructions as conversation cards", () => {
@@ -124,5 +143,30 @@ describe("buildActivityItems", () => {
     }));
 
     expect(buildActivityItems(repeated, []).filter((item) => item.type === "response")).toHaveLength(1);
+  });
+
+  it("shows repeated answers when persisted turns are not tied to a run", () => {
+    const repeated: DesktopConversationEntry[] = ["turn-1", "turn-2"].map((id, index) => ({
+      id,
+      sessionId: "session-1",
+      runId: null,
+      source: "turn",
+      kind: "message",
+      role: "assistant",
+      from: "拾光 Agent",
+      content: "完成",
+      createdAt: `2026-09-17T00:00:0${index + 1}.000Z`,
+    }));
+
+    const items = buildActivityItems(repeated, []);
+    expect(items.filter((item) => item.type === "response")).toHaveLength(2);
+  });
+});
+
+describe("campusCardUrl", () => {
+  it("accepts only a local campus card link", () => {
+    expect(campusCardUrl({ cardUrl: "http://127.0.0.1:47321/c/abc123abc123" })).toBe("http://127.0.0.1:47321/c/abc123abc123");
+    expect(campusCardUrl({ cardUrl: "https://example.com/c/abc123abc123" })).toBeNull();
+    expect(campusCardUrl("http://127.0.0.1:47321/c/abc123abc123")).toBeNull();
   });
 });

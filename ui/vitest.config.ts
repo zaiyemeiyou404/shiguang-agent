@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 export default defineConfig({
   root: resolve(__dirname),
   plugins: [react()],
+  server: { fs: { allow: [resolve(__dirname, "..")] } },
   test: {
     environment: "jsdom",
     setupFiles: [resolve(__dirname, "src/test/setup.ts")],

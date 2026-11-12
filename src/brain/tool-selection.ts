@@ -122,6 +122,7 @@ export function selectToolsForPlanner(
 type ToolRoute = "web" | "workspace" | "open";
 
 function classifyToolRoute(text: string, taskMode?: string, taskKind?: string): ToolRoute {
+  if (isCampusText(text) && !isExplicitUrlText(text)) return "open";
   if (taskKind === "web_search" || taskKind === "web_article") return "web";
   if (
     taskKind === "file_transform"
@@ -166,7 +167,7 @@ function narrowToolsForDominantIntent(
   input: BrainInput,
 ): ToolDescriptor[] {
   const taskMode = input.workingMemory?.taskLoop?.mode;
-  if (taskMode === "web" || (intent.web && isExplicitUrlText(text))) {
+  if (!intent.campus && (taskMode === "web" || (intent.web && isExplicitUrlText(text)))) {
     const webTools = selected.filter((tool) => isWebToolForTask(tool));
     return webTools.length > 0 ? webTools : selected;
   }
@@ -208,15 +209,18 @@ interface IntentFlags {
   git: boolean;
   mcp: boolean;
   execute: boolean;
+  campus: boolean;
   adaptive?: boolean;
 }
 
 function classifyIntent(text: string, history: ActionResult[]): IntentFlags {
   const hadMutation = history.some((result) => result.metadata?.workspaceMutation === true);
-  const readableIntent = classifyReadableChineseIntent(text, hadMutation);
+  const campus = isCampusText(text) && !isExplicitUrlText(text);
+  const readableIntent = classifyReadableChineseIntent(text, hadMutation, campus);
   if (readableIntent) {
     return {
       ...readableIntent,
+      campus,
       adaptive: inferAdaptiveLearningIntent(text),
     };
   }
@@ -227,7 +231,8 @@ function classifyIntent(text: string, history: ActionResult[]): IntentFlags {
     inspect: /看|查看|分析|理解|梳理|检查|inspect|read|search|find|analy[sz]e|explain|map/.test(text),
     edit: /改|修|写|创建|生成|删除|移动|重命名|保存|fix|edit|write|create|delete|move|rename|patch|implement/.test(text),
     validate: hadMutation || /运行|测试|验证|打包|构建|报错|run|test|typecheck|build|validate|package|error/.test(text),
-    web: explicitWebIntent || (searchIntent && freshnessIntent),
+    web: (explicitWebIntent || (searchIntent && freshnessIntent)) && !campus,
+    campus,
     memory: /记忆|记住|忘记|偏好|memory|remember|forget|preference/.test(text),
     git: /git|提交|差异|diff|status|commit|github|release|仓库/.test(text),
     mcp: /mcp|数据源|database|api|connector|server|tool/.test(text),
@@ -239,7 +244,36 @@ function inferAdaptiveLearningIntent(text: string): boolean {
   return /错|不对|为什么|啥意思|不是|应该|质疑|反思|总结|保存|记住|规则|学一下|学习|降智|混乱|重复|没用|没有|wrong|incorrect|why|reflect|learn|rule|memory|remember|hermes/.test(text);
 }
 
-function classifyReadableChineseIntent(text: string, hadMutation: boolean): IntentFlags | null {
+function campusPluginToolNames(text: string): string[] {
+  const names: string[] = [];
+  if (/考试/.test(text)) names.push("xdyou_exams");
+  if (/成绩|学分|绩点/.test(text)) names.push("xdyou_scores");
+  if (/空调/.test(text)) names.push("xdyou_aircon", "xdyou_airconlive");
+  if (/水电|水费/.test(text)) names.push("xdyou_meters");
+  if (/水机|宿舍水/.test(text)) names.push("xdyou_water");
+  if (/电费|用电|电量/.test(text)) names.push("xdyou_electricity");
+  if (/实验/.test(text)) names.push("xdyou_experiments");
+  if (/图书馆|借书|查书|书名|书库/.test(text)) names.push("xdyou_library");
+  if (/借阅|还书|我借/.test(text)) names.push("xdyou_loans");
+  if (/校园卡|一卡通|饭卡/.test(text)) names.push("xdyou_card");
+  if (/校园网账号|上网账号|在线设备/.test(text)) names.push("xdyou_schoolnet");
+  if (/校园网|网费|流量/.test(text)) names.push("xdyou_network");
+  if (/体测/.test(text)) names.push("xdyou_sport");
+  if (/体育课|体育打卡/.test(text)) names.push("xdyou_sportclass");
+  if (/考勤|签到|旷课|到课/.test(text)) names.push("xdyou_attendance");
+  if (/睿思|论坛/.test(text)) names.push("xdyou_forum");
+  if (/课表|课程表|什么课|上课|有课/.test(text)) names.push("xdyou_schedule");
+  if (/空闲教室|空教室/.test(text)) names.push("xdyou_classrooms");
+  if (/登录|同步/.test(text)) names.push("xdyou_login");
+  if (names.length === 0) names.push("xdyou_schedule", "xdyou_status");
+  return names;
+}
+
+function isCampusText(text: string): boolean {
+  return /课表|课程表|今天有什么课|有什么课|什么课|上课|考试|成绩|学分|绩点|电费|水电|水费|空闲教室|空教室|图书馆|借书|借阅|还书|查书|书库|校园网|网费|体测|体育课|体育打卡|考勤|签到|旷课|到课|物理实验|西电|校园卡|一卡通|饭卡|睿思|论坛|水机|宿舍水|空调|xdyou|traintime|xidian/i.test(text);
+}
+
+function classifyReadableChineseIntent(text: string, hadMutation: boolean, campus: boolean): IntentFlags | null {
   if (!/[\u4e00-\u9fff]/.test(text)) return null;
   const searchIntent = /搜索|搜一下|搜搜|查一下|查询|查找|检索|找一下|找找/.test(text);
   const localWorkspaceIntent = /工作区|本地|目录|文件|项目|代码|仓库|工程/.test(text);
@@ -252,7 +286,7 @@ function classifyReadableChineseIntent(text: string, hadMutation: boolean): Inte
   const gitIntent = /提交|差异|仓库/.test(text);
   const mcpIntent = /数据源|工具协议|连接器/.test(text);
   const executeIntent = /命令|终端|脚本|执行|启动/.test(text);
-  if (!(searchIntent || localWorkspaceIntent || explicitWebIntent || inspectIntent || editIntent || validateIntent || memoryIntent || gitIntent || mcpIntent || executeIntent)) {
+  if (!(campus || searchIntent || localWorkspaceIntent || explicitWebIntent || inspectIntent || editIntent || validateIntent || memoryIntent || gitIntent || mcpIntent || executeIntent)) {
     return null;
   }
 
@@ -260,7 +294,8 @@ function classifyReadableChineseIntent(text: string, hadMutation: boolean): Inte
     inspect: inspectIntent || searchIntent,
     edit: editIntent,
     validate: hadMutation || validateIntent,
-    web: explicitWebIntent || (searchIntent && !localWorkspaceIntent),
+    web: (explicitWebIntent || (searchIntent && !localWorkspaceIntent)) && !campus,
+    campus,
     memory: memoryIntent,
     git: gitIntent,
     mcp: mcpIntent,
@@ -270,6 +305,7 @@ function classifyReadableChineseIntent(text: string, hadMutation: boolean): Inte
 
 function pinnedToolsForIntent(intent: IntentFlags, text: string): string[] {
   const pinned: string[] = [];
+  if (intent.campus) pinned.push(...campusPluginToolNames(text));
   if (intent.web) pinned.push("web_search", "web_fetch");
   if (intent.web && /正文|文章|全文|链接|网页|抓取|article|body|link|html/i.test(text)) pinned.push("web_extract_links");
   if (intent.adaptive || intent.memory || inferAdaptiveLearningIntent(text)) {
@@ -359,6 +395,8 @@ function scoreTool(
   if (recentFailedToolNames.has(name)) score -= 18;
   if (tool.requiresApproval === true && !intent.edit && !intent.execute) score -= 8;
 
+  if (intent.campus && name.startsWith("xdyou_")) score += campusPluginToolNames(text).includes(name) ? 80 : -12;
+  if (intent.campus && (name === "web_search" || name === "web_fetch" || name === "web_extract_links")) score -= 30;
   if (intent.web && (contract.category === "web" || contract.category === "github" || haystack.includes("fetch"))) score += 24;
   if (intent.web && name === "web_search") score += 36;
   if (intent.web && name === "web_fetch" && /url|http|https|网页|网址|链接|文章|正文|抓取|fetch/.test(text)) score += 54;

@@ -384,7 +384,7 @@ function updateTaskLoop(
   const completionGateCount = toolName === "completion_check"
     ? current.completionGateCount + 1
     : current.completionGateCount;
-  const nextMode = inferTaskLoopModeFromResult(current.mode, result, toolName);
+  const nextMode = inferTaskLoopModeFromResult(current.mode, result, toolName, current.taskKind ?? current.userCommand?.taskKind);
   const taskKind = current.taskKind ?? current.userCommand?.taskKind ?? taskKindFromMode(nextMode);
   const basePlan = nextMode === current.mode
     ? current.plan ?? createTaskLoopPlan(nextMode, taskKind)
@@ -663,13 +663,15 @@ function inferTaskLoopModeFromResult(
   currentMode: NonNullable<WorkingMemorySnapshot["taskLoop"]>["mode"],
   result: ActionResult,
   toolName: string | undefined,
+  taskKind?: TaskIntentKind,
 ): NonNullable<WorkingMemorySnapshot["taskLoop"]>["mode"] {
   if (result.metadata?.workspaceMutation === true) return "edit";
   if (toolName === "run_validation") return "validation";
   if (toolName === "web_search" || toolName === "web_fetch" || toolName === "web_extract_links") return "web";
   if (toolName === "read_text_file" || toolName === "read_many_files" || toolName === "find_files" || toolName === "list_directory" || toolName === "inspect_project" || toolName === "search_workspace") {
-    if (currentMode === "edit" || currentMode === "validation") return currentMode;
-    return currentMode === "web" ? "web" : "workspace";
+    if (currentMode === "edit" || currentMode === "validation" || currentMode === "web") return currentMode;
+    if (currentMode === "chat" && (taskKind ?? "chat") === "chat") return "chat";
+    return "workspace";
   }
   return currentMode;
 }
