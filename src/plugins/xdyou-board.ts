@@ -84,6 +84,7 @@ export function campusCardFromOutput(id: string, dataset: string, output: Record
   if (dataset === "attendance") return attendanceCard(id, title, output);
   if (dataset === "card") return cardBoard(id, title, output);
   if (dataset === "loans") return loansCard(id, title, output);
+  if (dataset === "classrooms") return classroomsCard(id, title, output);
   return genericCard(id, title, output);
 }
 
@@ -484,6 +485,45 @@ function genericCard(id: string, title: string, output: Record<string, unknown>)
     return [{ title: headingText, meta: text(row.place) || text(row.rate) || text(row.time) || text(row.classroom) || "" }];
   }) : [];
   return { id, title, subtitle: text(output.note) || "", kind: items.length > 0 ? "list" : stats.length > 0 ? "stats" : "note", stats, items, days: [] };
+}
+
+function classroomsCard(id: string, title: string, output: Record<string, unknown>): CampusCard {
+  const rooms = asRecords(output.rooms);
+  return {
+    id,
+    title,
+    subtitle: [text(output.date), text(output.building)].filter(Boolean).join(" · ") || "空闲教室",
+    kind: "list",
+    stats: [{ label: "空闲教室", value: text(output.count) || String(rooms.length) }],
+    items: rooms.slice(0, 12).map((room) => ({
+      title: text(room.name) || "教室",
+      meta: text(room.building),
+      aside: freePeriods(asRecords(room.free)),
+    })),
+    days: [],
+    empty: rooms.length === 0 ? "这个时间没有空教室" : undefined,
+  };
+}
+
+function freePeriods(slots: Record<string, unknown>[]): string {
+  const groups: string[] = [];
+  let start = "";
+  let end = "";
+  let previous = 0;
+  for (const slot of slots) {
+    const period = finite(slot.period);
+    const slotStart = text(slot.start);
+    const slotEnd = text(slot.end);
+    if (period === null || !slotStart || !slotEnd) continue;
+    if (!start || period !== previous + 1) {
+      if (start && end) groups.push(start === end ? start : `${start}–${end}`);
+      start = slotStart;
+    }
+    end = slotEnd;
+    previous = period;
+  }
+  if (start && end) groups.push(start === end ? start : `${start}–${end}`);
+  return groups.slice(0, 3).join("、");
 }
 
 function loansCard(id: string, title: string, output: Record<string, unknown>): CampusCard {

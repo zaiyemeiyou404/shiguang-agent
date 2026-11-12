@@ -20,30 +20,38 @@ const PERIODS: Array<[number, string, string]> = [
   [11, "20:40", "21:25"],
 ];
 
+const GENERIC_CLASSROOM_QUERY = /空闲教室|空教室|教学楼|教室|今天|明天|后天|现在|查询|查一下|有哪些|哪些|全部|所有|一下/g;
+
+export function classroomBuildingQuery(raw: string): string {
+  return raw.replace(GENERIC_CLASSROOM_QUERY, " ").replace(/\s+/g, " ").trim();
+}
+
 export async function fetchEmptyClassrooms(
   client: EhallClient,
   input: { building: string; date: string; semesterCode: string; limit: number },
 ): Promise<Record<string, unknown>> {
   const buildings = projectBuildings(await client.post(BUILDING_URL, { "*order": "+XXXQDM,+PX,+JXLDM" }));
-  const query = input.building.trim();
-  if (!query) {
-    return { ok: true, dataset: "classrooms", date: input.date, buildings, count: buildings.length };
-  }
-  const matches = buildings.filter((item) => item.name.includes(query) || item.code === query).slice(0, 3);
-  if (matches.length === 0) {
-    return { ok: false, dataset: "classrooms", error: `没有找到教学楼「${query}」。`, buildings };
+  const query = classroomBuildingQuery(input.building);
+  const matches = query
+    ? buildings.filter((item) => item.name.includes(query) || item.code === query).slice(0, 3)
+    : buildings;
+  if (query && matches.length === 0) {
+    const names = buildings.map((item) => item.name).slice(0, 12).join("、");
+    return { ok: false, dataset: "classrooms", error: names ? `没有找到教学楼「${query}」。可选：${names}` : `没有找到教学楼「${query}」。` };
   }
   if (!input.semesterCode) return { ok: false, dataset: "classrooms", error: "还没有学期信息。先登录并同步课表。" };
   const parts = input.semesterCode.split("-");
   const year = parts.length >= 2 ? `${parts[0]}-${parts[1]}` : input.semesterCode;
   const term = parts[2] ?? "1";
+  const converted = await client.post(DATE_URL, { RQ: input.date, XN: year, XQ: term });
+  const root = nested(converted, ["datas", "rqzhzcjc"]);
+  const week = text(record(root)?.ZC);
+  const weekday = text(record(root)?.XQJ);
+  if (!week || !weekday) throw new Error("没有换算出周次。");
   const rooms = [];
+  const searched: string[] = [];
   for (const building of matches) {
-    const converted = await client.post(DATE_URL, { RQ: input.date, XN: year, XQ: term });
-    const root = nested(converted, ["datas", "rqzhzcjc"]);
-    const week = text(record(root)?.ZC);
-    const weekday = text(record(root)?.XQJ);
-    if (!week || !weekday) throw new Error(`${building.name} 没有换算出周次。`);
+    if (rooms.length >= input.limit) break;
     const payload = await client.post(ROOM_URL, {
       XNXQDM: input.semesterCode,
       ZC: week,
@@ -59,16 +67,17 @@ export async function fetchEmptyClassrooms(
       pageNumber: "1",
     });
     rooms.push(...projectRooms(payload, building.name));
+    searched.push(building.name);
   }
   return {
     ok: true,
     dataset: "classrooms",
     date: input.date,
     semesterCode: input.semesterCode,
-    building: matches.map((item) => item.name).join("、"),
+    building: (query ? matches.map((item) => item.name) : searched).join("、"),
     rooms: rooms.slice(0, input.limit),
     count: rooms.length,
-    truncated: rooms.length > input.limit,
+    truncated: rooms.length > input.limit || searched.length < matches.length,
   };
 }
 

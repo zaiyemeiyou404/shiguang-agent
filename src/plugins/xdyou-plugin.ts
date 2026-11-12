@@ -48,8 +48,16 @@ export const xdyouManifest: PluginManifest = {
     capability("library", "Search the Xidian library catalog. Use for 图书馆, 查书, 借书, ISBN, 书名."),
     capability("network", "Read the current Xidian campus-network session usage. Use for 校园网, 网费, 流量."),
     {
-      ...capability("classrooms", "Query empty Xidian classrooms for a building and date. Use for 空教室, 空闲教室. Requires the XDYou login session."),
+      ...capability("classrooms", "Query empty Xidian classrooms and their free periods. Use for 空教室, 空闲教室. Requires the XDYou login session. query or building is an optional building name such as B楼. Leave both empty to query empty classrooms. Do not pass 空教室 or 教学楼 as the building name."),
       timeoutMs: 180_000,
+      inputSchema: {
+        ...queryInputSchema,
+        properties: {
+          ...queryInputSchema.properties,
+          query: { type: "string", description: "Optional teaching-building name, such as B楼. Leave empty to query empty classrooms. Do not pass 空教室 or 教学楼." },
+          building: { type: "string", description: "Optional teaching-building name. Same role as query." },
+        },
+      },
     },
     sessionCapability("card", "Read the campus-card balance and recent transactions. Use for 校园卡, 一卡通, 饭卡. Opens the login window if the unified sign-in has expired. Does not return the payment QR code."),
     sessionCapability("loans", "Read current personal library loans. Use for 个人借阅, 还书, 我借了什么. Opens the login window if needed."),

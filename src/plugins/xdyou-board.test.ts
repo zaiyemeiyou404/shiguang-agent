@@ -56,6 +56,19 @@ test("scores card keeps the summary and only unfinished courses", () => {
   assert.match(renderCampusBoardHtml(card), /55\.1/);
 });
 
+test("empty classroom cards list rooms and free periods", () => {
+  const card = campusCardFromOutput("id", "classrooms", {
+    ok: true,
+    date: "2026-11-12",
+    building: "B楼",
+    count: 1,
+    rooms: [{ name: "B-101", building: "B楼", free: [{ period: 1, start: "08:30", end: "09:15" }, { period: 2, start: "09:20", end: "10:05" }] }],
+  });
+  assert.deepEqual(card.items.map((item) => item.title), ["B-101"]);
+  assert.equal(card.items[0]?.aside, "08:30–10:05");
+  assert.equal(card.items.some((item) => item.title.includes("教学楼")), false);
+});
+
 test("card text carries the shared card link and every tool has a DSH frame", () => {
   const card = campusCardFromOutput("id", "exams", { ok: true, date: "2026-11-11", upcoming: [], earlierCount: 2 });
   const url = "http://127.0.0.1:47321/c/abc123abc123";

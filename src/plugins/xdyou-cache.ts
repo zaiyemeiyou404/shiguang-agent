@@ -84,7 +84,7 @@ export async function queryXdyou(input: unknown, context?: ToolExecutionContext)
     case "login":
       return openXdyouLogin(context?.signal);
     case "classrooms":
-      return openXdyouClassrooms(request.query ?? "", formatDate(date), semesterCode(dataDir), context?.signal);
+      return openXdyouClassrooms([request.building, request.query].filter(Boolean).join(" "), formatDate(date), semesterCode(dataDir), context?.signal);
     case "card":
     case "loans":
     case "schoolnet":
@@ -107,6 +107,7 @@ interface XdyouRequest {
   weekOffset: number;
   semester?: string;
   query?: string;
+  building?: string;
   limit: number;
   dataDir?: string;
 }
@@ -129,6 +130,9 @@ function normalizeRequest(input: unknown): XdyouRequest {
     ...(typeof obj.semester === "string" && obj.semester.trim() ? { semester: obj.semester.trim() } : {}),
     ...(typeof obj.query === "string" && obj.query.trim()
       ? { query: dataset === "classrooms" ? obj.query.trim() : obj.query.trim().toLowerCase() }
+      : {}),
+    ...(dataset === "classrooms" && typeof obj.building === "string" && obj.building.trim()
+      ? { building: obj.building.trim() }
       : {}),
     limit: clamp(finiteInteger(obj.limit) ?? 40, 1, 80),
     ...(typeof obj.dataDir === "string" && obj.dataDir.trim() ? { dataDir: obj.dataDir.trim() } : {}),
